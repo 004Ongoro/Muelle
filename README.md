@@ -28,6 +28,27 @@ The Genie effect is **off by default**. When enabled, Muelle temporarily
 disables Windows window transitions for tracked windows so its minimize
 animation can run; those transitions are restored when Muelle exits.
 
+## Install
+
+**[Download Muelle-Setup.exe](https://github.com/crafter-station/Muelle/releases/latest/download/Muelle-Setup.exe)**
+(Windows 11, 64-bit) or pick a version from
+[Releases](https://github.com/crafter-station/Muelle/releases).
+
+1. Run `Muelle-Setup.exe`. It installs for your user only: no administrator
+   rights, no wizard, about two seconds.
+2. The installer is not code-signed yet, so Windows SmartScreen may say it
+   protected your PC. Choose **More info → Run anyway**.
+3. The dock appears and the Windows taskbar hides. Muelle starts with Windows
+   from then on; turn that off in Settings → System.
+
+Open **Muelle** from the Start menu (or right-click the dock → *Muelle
+Settings…*) to change the dock. Settings also checks for updates and installs
+them for you.
+
+**Get the taskbar back:** right-click the dock and choose *Quit Muelle*. To
+remove it completely, go to Windows Settings → Apps → Installed apps → Muelle →
+Uninstall; the taskbar comes back and nothing is left running.
+
 ## Try it on Windows
 
 ### Prerequisites

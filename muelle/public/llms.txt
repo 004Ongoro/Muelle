@@ -1,0 +1,33 @@
+# Muelle
+
+> Muelle is a free, MIT-licensed dock for Windows 11 written in Rust. It hides the Windows taskbar and replaces it with a macOS-style dock: icons that grow under the cursor, minimized windows as live thumbnails, drag and drop onto apps, and an optional top menu bar. A small guardian process gives the taskbar back if the dock quits or crashes.
+
+Muelle is not an Electron or Tauri app: the dock is a native Win32 process that draws through the Windows composition engine, which is why it idles at about 17 MB of private memory with no timers and no idle CPU. The Tauri part is only the Settings window and the installer.
+
+## Pages
+
+- [Home](https://muellee.vercel.app/): what Muelle is, how the dock behaves, features and screenshots.
+- [How it works](https://muellee.vercel.app/#how): the dock's behaviour step by step.
+- [Features](https://muellee.vercel.app/#features): glass material, magnification, live thumbnails, menu bar, safety.
+- [Install](https://muellee.vercel.app/#install): one-step installer, building from source, and how to get the taskbar back.
+
+## Download
+
+- [Muelle-Setup.exe](https://github.com/crafter-station/Muelle/releases/latest/download/Muelle-Setup.exe): Windows 11, 64-bit, per user, no administrator rights.
+- [All releases](https://github.com/crafter-station/Muelle/releases): version history and notes.
+
+The installer is not code-signed yet, so Windows SmartScreen may ask for confirmation (More info → Run anyway).
+
+## Source
+
+- [Repository](https://github.com/crafter-station/Muelle): Rust workspace. The dock is `apps/dock`, the settings window is `apps/settings` (Tauri 2 + React).
+- [License](https://github.com/crafter-station/Muelle/blob/main/LICENSE): MIT.
+- [Issues](https://github.com/crafter-station/Muelle/issues): bug reports and feature requests.
+
+## Facts
+
+- Platform: Windows 11 (single monitor is the supported case).
+- Idle cost: about 17 MB of private memory, 0% CPU, no periodic timers.
+- Installer: about 2.4 MB, one step, no wizard and no admin rights.
+- Uninstall or quit: the Windows taskbar comes back, and uninstalling leaves Windows as it was.
+- Not affiliated with Apple or Microsoft; the visual language is inspired by macOS, the icons and code are original.
