@@ -251,13 +251,14 @@ export function initDock(root: HTMLElement, reduceMotion: boolean) {
   });
 
   // While a window is flying to the dock the demo stands still: the sweep magnifies
-  // icons and would drag the slot away from where the window is heading.
+  // icons and would drag the slot away from where the window is heading. Once it has
+  // landed the dock is live again, hover included.
   window.addEventListener("muelle:genie", (event) => {
-    const { flying, minimized } = (event as CustomEvent<{
+    const { flying } = (event as CustomEvent<{
       flying: boolean;
       minimized: boolean;
     }>).detail;
-    geniePaused = flying || minimized;
+    geniePaused = flying;
     auto = !geniePaused;
     nextClick = 0;
     if (geniePaused) {
