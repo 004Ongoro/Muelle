@@ -20,5 +20,13 @@
   "languageAuto": "Automático",
   "close": "Cerrar",
   "minimize": "Minimizar",
-  "saveError": "No se pudieron guardar los ajustes."
+  "saveError": "No se pudieron guardar los ajustes.",
+  "updates": "Actualizaciones",
+  "updatesChecking": "Buscando actualizaciones…",
+  "updatesCurrent": "Muelle {version} está al día.",
+  "updatesAvailable": "Muelle {version} está disponible.",
+  "updatesInstalling": "Descargando e instalando…",
+  "updatesError": "No se pudo comprobar. Revisa la conexión.",
+  "updatesCheck": "Buscar",
+  "updatesInstall": "Actualizar"
 }

@@ -12,6 +12,13 @@ pub const DOCK_WINDOW_CLASS: PCWSTR = w!("MuelleWindow");
 /// Name of the registered window message meaning "the configuration file changed".
 pub const CONFIG_CHANGED: PCWSTR = w!("Muelle.ConfigChanged");
 
+/// `true` if a dock is running in this session.
+#[must_use]
+pub fn is_running() -> bool {
+    // SAFETY: Read-only window lookup.
+    unsafe { FindWindowW(DOCK_WINDOW_CLASS, None).is_ok() }
+}
+
 /// Tells the dock, if it is running, to reload its configuration. A window
 /// message instead of a file watcher: the dock spends nothing while idle.
 pub fn notify_config_changed() {

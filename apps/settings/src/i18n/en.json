@@ -20,5 +20,13 @@
   "languageAuto": "Automatic",
   "close": "Close",
   "minimize": "Minimize",
-  "saveError": "The settings could not be saved."
+  "saveError": "The settings could not be saved.",
+  "updates": "Updates",
+  "updatesChecking": "Checking for updates…",
+  "updatesCurrent": "Muelle {version} is up to date.",
+  "updatesAvailable": "Muelle {version} is available.",
+  "updatesInstalling": "Downloading and installing…",
+  "updatesError": "Could not check. Check your connection.",
+  "updatesCheck": "Check",
+  "updatesInstall": "Update"
 }

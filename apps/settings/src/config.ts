@@ -24,3 +24,6 @@ export const loadConfig = () => invoke<Config>("get_config");
 export const saveConfig = (config: Config) => invoke<Config>("set_config", { config });
 export const getAutostart = () => invoke<boolean>("get_autostart");
 export const setAutostart = (enabled: boolean) => invoke<void>("set_autostart", { enabled });
+/** Resolves to the newer version available, or null when up to date. */
+export const checkUpdate = () => invoke<string | null>("check_update");
+export const installUpdate = () => invoke<void>("install_update");

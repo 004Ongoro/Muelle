@@ -15,6 +15,9 @@ muelle-config.workspace = true
 muelle-shell.workspace = true
 serde.workspace = true
 tauri = { version = "2", features = [] }
+tauri-plugin-updater = "2"
+# `generate_context!` emits serde_json values for plugin settings.
+serde_json = "1"
 
 [features]
 # Serve the bundled front end instead of the Vite dev server. On by default so

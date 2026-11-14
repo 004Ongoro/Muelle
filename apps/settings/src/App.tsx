@@ -1,3 +1,4 @@
+import { getVersion } from "@tauri-apps/api/app";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
@@ -5,7 +6,9 @@ import {
   type Language,
   ICON_SIZE,
   MAX_MAGNIFIED_SIZE,
+  checkUpdate,
   getAutostart,
+  installUpdate,
   loadConfig,
   saveConfig,
   setAutostart,
@@ -15,6 +18,15 @@ import en from "./i18n/en.json";
 import es from "./i18n/es.json";
 
 type Section = "dock" | "system";
+type UpdateState =
+  | { kind: "checking" }
+  | { kind: "current" }
+  | { kind: "available"; version: string }
+  | { kind: "installing" }
+  | { kind: "error" };
+
+const toUpdateState = (found: string | null): UpdateState =>
+  found ? { kind: "available", version: found } : { kind: "current" };
 type Texts = typeof es;
 
 /** Dragging a slider saves at most this often; the dock redraws on each save. */
@@ -31,6 +43,8 @@ export function App() {
   const [autostart, setAutostartState] = useState(false);
   const [section, setSection] = useState<Section>("dock");
   const [failed, setFailed] = useState(false);
+  const [version, setVersion] = useState("");
+  const [updateState, setUpdateState] = useState<UpdateState>({ kind: "checking" });
   const pending = useRef<Config | null>(null);
   const timer = useRef<number | undefined>(undefined);
 
@@ -44,6 +58,12 @@ export function App() {
         }
       })
       .catch(() => alive && setFailed(true));
+    getVersion()
+      .then((current) => alive && setVersion(current))
+      .catch(() => {});
+    checkUpdate()
+      .then((found) => alive && setUpdateState(toUpdateState(found)))
+      .catch(() => alive && setUpdateState({ kind: "error" }));
     return () => {
       alive = false;
       window.clearTimeout(timer.current);
@@ -78,6 +98,19 @@ export function App() {
       setAutostartState(!enabled);
       setFailed(true);
     });
+  }, []);
+
+  const recheck = useCallback(() => {
+    setUpdateState({ kind: "checking" });
+    checkUpdate()
+      .then((found) => setUpdateState(toUpdateState(found)))
+      .catch(() => setUpdateState({ kind: "error" }));
+  }, []);
+
+  const install = useCallback(() => {
+    setUpdateState({ kind: "installing" });
+    // On success the installer replaces this app and this process exits.
+    installUpdate().catch(() => setUpdateState({ kind: "error" }));
   }, []);
 
   if (!config) return <div className="window" />;
@@ -185,6 +218,7 @@ export function App() {
               </Card>
             </>
           ) : (
+            <>
             <Card>
               <Row label={t.autostart}>
                 <Toggle label={t.autostart} checked={autostart} onChange={changeAutostart} />
@@ -202,6 +236,25 @@ export function App() {
                 />
               </Row>
             </Card>
+            <Card>
+              <Row label={t.updates} hint={updateHint(t, updateState, version)}>
+                {updateState.kind === "available" ? (
+                  <button type="button" className="push push-primary" onClick={install}>
+                    {t.updatesInstall}
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    className="push"
+                    disabled={updateState.kind === "checking" || updateState.kind === "installing"}
+                    onClick={recheck}
+                  >
+                    {t.updatesCheck}
+                  </button>
+                )}
+              </Row>
+            </Card>
+            </>
           )}
           {failed ? (
             <p className="error" role="alert">
@@ -212,6 +265,21 @@ export function App() {
       </main>
     </div>
   );
+}
+
+function updateHint(t: Texts, state: UpdateState, version: string): string {
+  switch (state.kind) {
+    case "checking":
+      return t.updatesChecking;
+    case "current":
+      return t.updatesCurrent.replace("{version}", version);
+    case "available":
+      return t.updatesAvailable.replace("{version}", state.version);
+    case "installing":
+      return t.updatesInstalling;
+    case "error":
+      return t.updatesError;
+  }
 }
 
 interface NavItemProps {
