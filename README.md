@@ -1,7 +1,7 @@
 <div align="center">
-  <img src="assets/brand/muelle-1024.png" alt="Muelle app icon" width="128" />
+  
+<img width="1972" height="506" alt="169e658d-4f67-4932-8e9b-480dd2536d90 (1)" src="https://github.com/user-attachments/assets/72a84b9a-7a47-4ca7-acc8-580c3ed350d7" />
 
-  # Muelle
 
   **A lightweight, macOS-inspired dock for Windows 11.**
 
