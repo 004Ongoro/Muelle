@@ -20,10 +20,11 @@ use windows::{
         UI::{
             Shell::PropertiesSystem::{IPropertyStore, SHGetPropertyStoreForWindow},
             WindowsAndMessaging::{
-                EnumWindows, GW_OWNER, GWL_EXSTYLE, GetClassNameW, GetForegroundWindow, GetWindow,
-                GetWindowLongW, GetWindowPlacement, GetWindowRect, GetWindowTextLengthW,
+                EnumWindows, GW_OWNER, GWL_EXSTYLE, GWL_STYLE, GetClassNameW, GetForegroundWindow,
+                GetWindow, GetWindowLongW, GetWindowPlacement, GetWindowRect, GetWindowTextLengthW,
                 GetWindowTextW, GetWindowThreadProcessId, IsIconic, IsWindowVisible,
-                WINDOWPLACEMENT, WS_EX_APPWINDOW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+                WINDOWPLACEMENT, WS_EX_APPWINDOW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_MAXIMIZE,
+                WS_THICKFRAME,
             },
         },
     },
@@ -147,7 +148,10 @@ pub fn foreground_window() -> isize {
 }
 
 /// Returns `true` if the foreground window covers the entire `screen`
-/// (for example, video, presentation, or game). The desktop does not count.
+/// (for example, video, presentation, or game). The desktop does not count,
+/// and neither does a maximized window: when nothing reserves screen space
+/// (auto-hide), it covers the screen too, but it still has its sizing frame,
+/// which apps drop when they go full screen.
 #[must_use]
 pub fn foreground_is_fullscreen(screen: RECT) -> bool {
     // SAFETY: Read-only queries on the foreground window.
@@ -159,6 +163,11 @@ pub fn foreground_is_fullscreen(screen: RECT) -> bool {
         let mut pid = 0u32;
         GetWindowThreadProcessId(hwnd, Some(&mut pid));
         if pid == GetCurrentProcessId() {
+            return false;
+        }
+        let style = GetWindowLongW(hwnd, GWL_STYLE) as u32;
+        let maximized = WS_MAXIMIZE.0 | WS_THICKFRAME.0;
+        if style & maximized == maximized {
             return false;
         }
         let mut rect = RECT::default();
