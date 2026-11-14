@@ -62,13 +62,13 @@ def draw_icon() -> Image.Image:
     canvas = Image.new("RGBA", (S, S), (0, 0, 0, 0))
     mask = squircle_mask(S, inset=S * 0.085)
 
-    # Sea at dusk: warm horizon over deep blue water.
+    # macOS Ventura's yellow-to-orange sky over blue water.
     sky = vertical_gradient(
         S,
         [
-            (0.0, (88, 86, 214)),
-            (0.42, (255, 122, 140)),
-            (0.60, (255, 184, 108)),
+            (0.0, (255, 208, 84)),
+            (0.34, (255, 149, 0)),
+            (0.60, (232, 84, 28)),
             (0.61, (0x1D, 0x6D, 0xF1)),
             (1.0, (0x1A, 0xD1, 0xFD)),
         ],
