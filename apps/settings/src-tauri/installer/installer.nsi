@@ -508,10 +508,9 @@ LangString choowHowToInstall 0 ""
 {{/each}}
 
 Function .onInit
-  ${GetOptions} $CMDLINE "/P" $PassiveMode
-  ${IfNot} ${Errors}
-    StrCpy $PassiveMode 1
-  ${EndIf}
+  ; Muelle: always passive. Installing is a single double-click: no wizard
+  ; pages, only a progress window.
+  StrCpy $PassiveMode 1
 
   ${GetOptions} $CMDLINE "/NS" $NoShortcutMode
   ${IfNot} ${Errors}
@@ -544,7 +543,9 @@ Function .onInit
         StrCpy $INSTDIR "$PROGRAMFILES\${PRODUCTNAME}"
       ${EndIf}
     !else if "${INSTALLMODE}" == "currentUser"
-      StrCpy $INSTDIR "$LOCALAPPDATA\${PRODUCTNAME}"
+      ; Muelle: the conventional per-user location; $LOCALAPPDATA\Muelle holds
+      ; the dock's icon cache.
+      StrCpy $INSTDIR "$LOCALAPPDATA\Programs\${PRODUCTNAME}"
     !endif
 
     Call RestorePreviousInstallLocation
@@ -768,12 +769,7 @@ Section Install
     Call CreateOrUpdateStartMenuShortcut
   !insertmacro MUI_STARTMENU_WRITE_END
 
-  ; Create desktop shortcut for silent and passive installers
-  ; because finish page will be skipped
-  ${If} $PassiveMode = 1
-  ${OrIf} ${Silent}
-    Call CreateOrUpdateDesktopShortcut
-  ${EndIf}
+  ; Muelle: no desktop shortcut; the app lives in the Start menu and the dock.
 
   !ifmacrodef NSIS_HOOK_POSTINSTALL
     !insertmacro NSIS_HOOK_POSTINSTALL

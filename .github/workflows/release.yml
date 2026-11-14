@@ -1,0 +1,82 @@
+name: Release
+
+# Push a tag matching the workspace version (for example v0.1.0) to build the
+# signed installer and attach it to a draft release. Review the draft on GitHub
+# and publish it by hand: only published releases reach the website download
+# link and the in-app updater.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  installer:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: apps/settings/pnpm-lock.yaml
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Check the tag matches the version
+        shell: pwsh
+        run: |
+          $version = (cargo metadata --format-version 1 --no-deps | ConvertFrom-Json).packages |
+            Where-Object name -eq 'muelle' | Select-Object -ExpandProperty version
+          if ("v$version" -ne $env:GITHUB_REF_NAME) {
+            throw "Tag $env:GITHUB_REF_NAME does not match the workspace version $version"
+          }
+          "VERSION=$version" >> $env:GITHUB_ENV
+
+      - name: Install settings dependencies
+        working-directory: apps/settings
+        run: pnpm install --frozen-lockfile
+
+      - name: Build installer
+        shell: pwsh
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: ./scripts/build-installer.ps1
+
+      # latest.json is what the in-app updater reads; Muelle-Setup.exe is a
+      # stable name for the website's "latest" download link.
+      - name: Prepare release files
+        shell: pwsh
+        run: |
+          $nsis = 'target/release/bundle/nsis'
+          $setup = "Muelle_${env:VERSION}_x64-setup.exe"
+          $signature = Get-Content "$nsis/$setup.sig" -Raw
+          $repo = "https://github.com/$env:GITHUB_REPOSITORY"
+          $manifest = [ordered]@{
+            version   = $env:VERSION
+            notes     = "$repo/releases/tag/$env:GITHUB_REF_NAME"
+            pub_date  = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+            platforms = [ordered]@{
+              'windows-x86_64' = [ordered]@{
+                signature = $signature.Trim()
+                url       = "$repo/releases/download/$env:GITHUB_REF_NAME/$setup"
+              }
+            }
+          }
+          New-Item -ItemType Directory -Force upload | Out-Null
+          $manifest | ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8NoBOM upload/latest.json
+          Copy-Item "$nsis/$setup" upload/
+          Copy-Item "$nsis/$setup.sig" upload/
+          Copy-Item "$nsis/$setup" upload/Muelle-Setup.exe
+
+      - name: Create draft release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create $env:GITHUB_REF_NAME (Get-ChildItem upload).FullName `
+            --draft --generate-notes --title "Muelle $env:GITHUB_REF_NAME"

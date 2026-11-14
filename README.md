@@ -93,7 +93,30 @@ pnpm build
 | `crates/muelle-config` | Shared settings and persistence |
 | `plan.md` | Development plan and implementation notes (Spanish) |
 
+## Build the installer
+
+```powershell
+cd apps\settings
+pnpm install
+cd ..\..
+.\scripts\build-installer.ps1
+```
+
+The script builds both apps and produces `Muelle_<version>_x64-setup.exe` in
+`target\release\bundle\nsis`. The installer runs per user, needs no
+administrator rights and shows no wizard: it installs to
+`%LOCALAPPDATA%\Programs\Muelle`, turns on start with Windows and opens the dock.
+Uninstalling (Settings → Apps) quits the dock and gives the Windows taskbar back.
+
+Pushing a tag that matches the version (for example `v0.1.0`) builds the
+installer on GitHub Actions and attaches it to a draft release, together with
+`Muelle-Setup.exe` (the website's download link) and `latest.json` (read by the
+updater in Settings). The repository needs the secrets
+`TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. Publish the
+draft to make it the download and the update.
+
 ## Current status
 
-The dock and Settings app can be run from source. Some features and interactions
-are still being verified, and a packaged installer is not available yet. See
+The dock, Settings app and installer work on Windows 11. Some features and
+interactions are still being verified. The installer is not code-signed yet, so
+Windows SmartScreen warns before running it (More info → Run anyway).
