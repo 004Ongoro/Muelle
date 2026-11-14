@@ -5,10 +5,13 @@
 
 import { gsap } from "@/lib/motion";
 
-const SLICE = 2;
+const SLICE = 1;
 const MAX_DPR = 2;
 const FLIGHT_SECONDS = 0.9;
+const SCROLL_SCRUB_SECONDS = 0.6;
 const THUMB_SIZE = 52;
+/** Resting width of a dock item, needed to measure the slot without the magnification. */
+const DOCK_REST = 52;
 /** Rows near the bottom of the window start moving first. */
 const STAGGER = 0.42;
 const TRAVEL = 0.58;
@@ -34,12 +37,23 @@ export function initGenie(root: HTMLElement, reduceMotion: boolean) {
   const canvas = root.querySelector<HTMLCanvasElement>("[data-genie]");
   const note = root.querySelector<HTMLElement>("[data-note]");
   const thumb = document.querySelector<HTMLCanvasElement>("[data-dock-thumb] canvas");
+  const slot = document.querySelector<HTMLElement>("[data-dock-thumb]");
+  const restore = slot?.querySelector<HTMLButtonElement>("[data-dock-restore]");
   const context = canvas?.getContext("2d");
-  if (!canvas || !note || !thumb || !context) return;
+  if (!canvas || !note || !thumb || !slot || !context) return;
 
-  const dpr = Math.min(window.devicePixelRatio || 1, MAX_DPR);
+  let dpr = Math.min(window.devicePixelRatio || 1, MAX_DPR);
   const state = { progress: 0 };
   let scene: Scene | null = null;
+  let scrollProgress = 0;
+  let scrollTarget: number | null = null;
+  let manualTarget: number | null = null;
+  let manualDirection = 0;
+  let manualFlight = false;
+  /** Last value written to the dock slot, so the layout is only touched when it changes. */
+  let slotValue = -1;
+  let flyingBefore = false;
+  let minimizedBefore = false;
 
   const paint = (progress: number) => {
     if (!scene) return;
@@ -47,9 +61,34 @@ export function initGenie(root: HTMLElement, reduceMotion: boolean) {
     const { x, y, width, height, targetX, targetY, targetWidth, source, slice } = scene;
     context.setTransform(dpr, 0, 0, dpr, 0, 0);
     context.clearRect(0, 0, canvas.width / dpr, canvas.height / dpr);
-    note.style.visibility = progress > 0.02 ? "hidden" : "";
+    // Both hand over on the same threshold: for a few pixels of scroll the DOM window and
+    // its canvas copy were painted at once, which read as a ghost of the text.
+    const hidden = progress > 0.02;
+    const minimized = progress >= 0.995;
+    const flying = hidden && !minimized;
+    canvas.classList.toggle("hidden", !flying);
+    note.style.visibility = hidden ? "hidden" : "";
 
-    if (progress <= 0.001 || progress >= 0.995) return;
+    // The dock's demo pauses while a window is in the air: a sweeping, magnified row
+    // would move the slot away from the point the flight is aiming at.
+    if (flying !== flyingBefore || minimized !== minimizedBefore) {
+      flyingBefore = flying;
+      minimizedBefore = minimized;
+      window.dispatchEvent(new CustomEvent("muelle:genie", { detail: { flying, minimized } }));
+    }
+
+    // The dock opens its slot as the window arrives, so the thumbnail is not already
+    // sitting there when nothing is minimized.
+    const open = clamp01((progress - 0.72) / 0.28);
+    if (open !== slotValue) {
+      slotValue = open;
+      slot.style.setProperty("--slot", String(open));
+      slot.toggleAttribute("inert", open < 0.5);
+      // Only the ends of the travel reflow the row; the dock asks for nothing per frame.
+      if (open === 0 || open === 1) window.dispatchEvent(new CustomEvent("muelle:slot"));
+    }
+
+    if (!flying) return;
 
     const rows = Math.round(height / SLICE);
     const restCenter = x + width / 2;
@@ -83,20 +122,34 @@ export function initGenie(root: HTMLElement, reduceMotion: boolean) {
     }
   };
 
-  // The flight is measured from the document, not from where the window happens to sit on
-  // load: with a tall viewport it is already above the start line, and the flight would
-  // begin before anyone scrolls.
-  let originTop = 0;
   let frame = 0;
 
-  const measureOrigin = () => {
-    originTop = note.getBoundingClientRect().top + window.scrollY;
-  };
-
   const build = () => {
+    dpr = Math.min(window.devicePixelRatio || 1, MAX_DPR);
     const rootRect = root.getBoundingClientRect();
     const noteRect = note.getBoundingClientRect();
-    const thumbRect = thumb.getBoundingClientRect();
+
+    // Aim at the slot at rest: the dock's autoplay magnifies its icons, which moves the
+    // whole row, so measuring now would fly the window to a place the slot has left.
+    // The slot is opened for the measurement too, because that is where it will land.
+    const dockItems = [...root.querySelectorAll<HTMLElement>(".dock-item")];
+    const savedSize = dockItems.map((item) => [item.style.width, item.style.height]);
+    dockItems.forEach((item) => {
+      item.style.width = `${DOCK_REST}px`;
+      item.style.height = `${DOCK_REST}px`;
+    });
+
+    const previousSlot = slot.style.getPropertyValue("--slot");
+    slot.style.setProperty("--slot", "1");
+    const thumbRect = slot.getBoundingClientRect();
+    if (previousSlot) slot.style.setProperty("--slot", previousSlot);
+    else slot.style.removeProperty("--slot");
+
+    dockItems.forEach((item, index) => {
+      const [width, height] = savedSize[index];
+      item.style.width = width;
+      item.style.height = height;
+    });
 
     canvas.width = Math.round(rootRect.width * dpr);
     canvas.height = Math.round(rootRect.height * dpr);
@@ -115,21 +168,53 @@ export function initGenie(root: HTMLElement, reduceMotion: boolean) {
     };
 
     renderThumbnail(thumb, source, dpr);
-    measureOrigin();
     paint(state.progress);
   };
 
   build();
 
-  if (reduceMotion) return;
+  // The dock is wider than a phone and scrolls sideways, so the minimized slot sits off
+  // screen: the flight would leave the mockup clipped at its right edge. Below 900 px the
+  // window simply stays where it is.
+  const wideEnough = window.matchMedia("(min-width: 900px)");
+  if (reduceMotion || !wideEnough.matches) return;
+
+  const readScrollProgress = () => {
+    const top = note.getBoundingClientRect().top + window.scrollY;
+    const start = Math.max(0, top - window.innerHeight * START_RATIO);
+    return clamp01((window.scrollY - start) / window.innerHeight);
+  };
+
+  const syncScrollProgress = () => {
+    const progress = readScrollProgress();
+    scrollProgress = progress;
+
+    // Let a manual flight finish, then let scroll take over once it catches the target.
+    if (manualTarget !== null) {
+      if (manualFlight || (progress - manualTarget) * manualDirection > 0) return;
+      manualTarget = null;
+    }
+
+    if (progress === state.progress) {
+      scrollTarget = progress;
+      gsap.killTweensOf(state);
+      return;
+    }
+
+    if (progress === scrollTarget) return;
+    scrollTarget = progress;
+    gsap.killTweensOf(state);
+    gsap.to(state, {
+      progress,
+      duration: SCROLL_SCRUB_SECONDS,
+      ease: "none",
+      onUpdate: () => paint(state.progress),
+    });
+  };
 
   const followScroll = () => {
     frame = 0;
-    const start = Math.max(0, originTop - window.innerHeight * START_RATIO);
-    const progress = clamp01((window.scrollY - start) / window.innerHeight);
-    if (progress === state.progress) return;
-    state.progress = progress;
-    paint(progress);
+    syncScrollProgress();
   };
 
   window.addEventListener(
@@ -140,19 +225,39 @@ export function initGenie(root: HTMLElement, reduceMotion: boolean) {
     { passive: true },
   );
 
-  root.querySelector<HTMLButtonElement>("[data-minimize]")?.addEventListener("click", () => {
+  const flyTo = (progress: number) => {
+    scrollProgress = readScrollProgress();
+    manualTarget = progress;
+    manualDirection = Math.sign(scrollProgress - progress);
+    scrollTarget = null;
+    gsap.killTweensOf(state);
+    manualFlight = true;
     gsap.to(state, {
-      progress: state.progress > 0.5 ? 0 : 1,
+      progress,
       duration: FLIGHT_SECONDS,
       ease: "power2.inOut",
       onUpdate: () => paint(state.progress),
+      onComplete: () => {
+        manualFlight = false;
+        syncScrollProgress();
+      },
     });
+  };
+
+  root.querySelector<HTMLButtonElement>("[data-minimize]")?.addEventListener("click", () => {
+    flyTo(state.progress > 0.5 ? 0 : 1);
   });
 
-  window.addEventListener("resize", build, { passive: true });
-  // Fonts and icons change the layout the geometry was measured from.
-  document.fonts.ready.then(build);
-  window.addEventListener("load", build);
+  restore?.addEventListener("click", () => flyTo(0));
+
+  const refresh = () => {
+    build();
+    syncScrollProgress();
+  };
+  window.addEventListener("resize", refresh, { passive: true });
+  document.fonts.ready.then(refresh);
+  window.addEventListener("load", refresh);
+  syncScrollProgress();
 }
 
 /** Draws the window at rest, mirroring the DOM mock so the flight can start from it. */
@@ -175,38 +280,40 @@ function renderWindow(width: number, height: number, dpr: number) {
   context.fillStyle = "rgba(255, 253, 247, 0.97)";
   context.fillRect(0, 0, width, height);
 
+  // These offsets mirror the CSS in `NotesWindow.astro`; the two must line up or the
+  // handover from the DOM window to this copy shows as a jump.
   const sidebar = width >= 440 ? 158 : 0;
   if (sidebar) drawSidebar(context, sidebar, height);
 
   const left = sidebar + 20;
   const center = (left + width - 20) / 2;
 
-  drawTrafficLights(context, 18, 18);
+  drawTrafficLights(context, 22, 20);
 
   context.textAlign = "center";
   context.fillStyle = "#1d1d1f";
   context.font = '700 13px "Plus Jakarta Sans", system-ui, sans-serif';
-  context.fillText("Notes", center, 14);
+  context.fillText("Notes", center, 22);
 
   context.fillStyle = "rgba(0, 0, 0, 0.38)";
   context.font = '500 11px "Plus Jakarta Sans", system-ui, sans-serif';
-  context.fillText("Friday, November 14, 2026 at 9:41 AM", center, 36);
+  context.fillText("Friday, November 14, 2026 at 9:41 AM", center, 44);
 
   context.textAlign = "left";
   context.fillStyle = "#1d1d1f";
   context.font = '800 26px "Plus Jakarta Sans", system-ui, sans-serif';
-  context.fillText("Ship the Dock.", left, 74);
+  context.fillText("Ship the Dock.", left, 81);
 
   const tasks = [
     ["Magnification, smooth curve", true],
-    ["Genie minimize in 0.5 s", true],
-    ["Taskbar back in under 2 s", true],
+    ["Live thumbnails when minimized", true],
+    ["Taskbar always comes back", true],
     ["0% CPU when idle", true],
     ["Publish v0.1", false],
   ] as const;
 
   tasks.forEach(([label, done], index) => {
-    const y = 104 + index * 30;
+    const y = 117 + index * 29;
     drawCheck(context, left + 8, y, done);
     context.fillStyle = done ? "rgba(0, 0, 0, 0.4)" : "#1d1d1f";
     context.font = '500 14px "Plus Jakarta Sans", system-ui, sans-serif';
@@ -231,7 +338,7 @@ function drawSidebar(
 
   context.fillStyle = "rgba(0, 0, 0, 0.45)";
   context.font = '700 11px "Plus Jakarta Sans", system-ui, sans-serif';
-  context.fillText("Folders", 12, 70);
+  context.fillText("Folders", 12, 60);
 
   const folders = [
     ["All Notes", 12, false],
@@ -241,7 +348,7 @@ function drawSidebar(
   ] as const;
 
   folders.forEach(([name, count, active], index) => {
-    const y = 94 + index * 30;
+    const y = 90 + index * 29.7;
 
     if (active) {
       context.fillStyle = "#0a84ff";

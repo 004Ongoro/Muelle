@@ -31,8 +31,8 @@ const BOUNCE_REPEATS = 3;
 /** Below this distance the width snaps to its target and the frame loop can stop. */
 const SETTLE = 0.05;
 
-/** An item that is not an app (the minimized-window thumbnail): never resized or pressed. */
-const isSlot = (item: HTMLElement) => item.querySelector("[data-dock-thumb]") !== null;
+/** An item that is not an app (the minimized-window slot): never resized or pressed. */
+const isSlot = (item: HTMLElement) => item.hasAttribute("data-dock-thumb");
 
 export function initDock(root: HTMLElement, reduceMotion: boolean) {
   const dock = root.querySelector<HTMLElement>(".dock");
@@ -53,10 +53,13 @@ export function initDock(root: HTMLElement, reduceMotion: boolean) {
   let visible = true;
   /** The sweep owns the pointer whenever the real one is away from the dock. */
   let auto = true;
+  let geniePaused = false;
   let nextClick = 0;
 
   const rest = () => {
     items.forEach((item, index) => {
+      // The minimized-window slot sizes itself from `--slot`; an inline width would pin it open.
+      if (isSlot(item)) return;
       widths[index] = REST_SIZE;
       item.style.width = `${REST_SIZE}px`;
       item.style.height = `${REST_SIZE}px`;
@@ -200,7 +203,7 @@ export function initDock(root: HTMLElement, reduceMotion: boolean) {
   root.addEventListener(
     "pointermove",
     (event: PointerEvent) => {
-      if (event.pointerType !== "mouse") return;
+      if (geniePaused || event.pointerType !== "mouse") return;
 
       const dockRect = dock.getBoundingClientRect();
       const near =
@@ -216,6 +219,7 @@ export function initDock(root: HTMLElement, reduceMotion: boolean) {
   );
 
   root.addEventListener("pointerleave", () => {
+    if (geniePaused) return;
     auto = true;
     nextClick = 0;
     if (cursor) cursor.style.opacity = "1";
@@ -230,6 +234,40 @@ export function initDock(root: HTMLElement, reduceMotion: boolean) {
 
   // A narrow window scrolls the row, which moves every centre.
   dock.parentElement?.addEventListener("scroll", measure, { passive: true });
+
+  // The page scroll moves the dock under a parked pointer, and no pointermove fires then.
+  window.addEventListener(
+    "scroll",
+    () => {
+      if (pointer !== null) measure();
+    },
+    { passive: true },
+  );
+
+  // The genie opens and closes the minimized-window slot, which reflows the row.
+  window.addEventListener("muelle:slot", () => {
+    measure();
+    start();
+  });
+
+  // While a window is flying to the dock the demo stands still: the sweep magnifies
+  // icons and would drag the slot away from where the window is heading.
+  window.addEventListener("muelle:genie", (event) => {
+    const { flying, minimized } = (event as CustomEvent<{
+      flying: boolean;
+      minimized: boolean;
+    }>).detail;
+    geniePaused = flying || minimized;
+    auto = !geniePaused;
+    nextClick = 0;
+    if (geniePaused) {
+      pointer = null;
+      rest();
+      measure();
+    }
+    if (cursor) cursor.style.opacity = geniePaused ? "0" : "1";
+    if (!geniePaused) start();
+  });
 
   window.addEventListener(
     "resize",

@@ -87,6 +87,10 @@
   box-shadow: 0 30px 60px rgb(0 0 0 / 0.38);
 }
 
+.genie-canvas {
+  filter: drop-shadow(0 22px 30px rgb(0 0 0 / 0.42));
+}
+
 .traffic {
   display: flex;
   gap: 8px;
@@ -187,6 +191,39 @@
 
 .dock-item img {
   filter: drop-shadow(0 2px 4px rgb(0 0 0 / 0.4));
+}
+
+/* Minimized-window slot: `--slot` goes from 0 to 1 as the genie lands, so the dock
+   makes room for it exactly when the window arrives. */
+.dock-item[data-dock-thumb] {
+  width: calc(52px * var(--slot, 0));
+  height: calc(52px * var(--slot, 0));
+  margin-inline: calc(3px * var(--slot, 0));
+  opacity: var(--slot, 0);
+}
+
+.dock-thumb {
+  display: block;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+}
+
+.dock-thumb canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 1px solid rgb(255 255 255 / 0.6);
+  border-radius: 12%;
+  box-shadow: 0 3px 8px rgb(0 0 0 / 0.4);
+}
+
+.dock-thumb:focus-visible {
+  outline: 2px solid var(--color-acid);
+  outline-offset: 4px;
 }
 
 .dock-tip {
