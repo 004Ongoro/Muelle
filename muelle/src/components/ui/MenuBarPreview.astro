@@ -1,0 +1,21 @@
+---
+import Icon from "@/components/ui/Icon.astro";
+
+interface Props {
+  app: string;
+  time: string;
+}
+
+const { app, time } = Astro.props;
+---
+
+<div class="mbar" aria-hidden="true">
+  <span class="flex items-center gap-2">
+    <Icon name="anchor" size={16} />
+    <b>{app}</b>
+  </span>
+  <span class="flex items-center gap-2">
+    <Icon name="battery" size={18} />
+    <span class="tabular-nums">{time}</span>
+  </span>
+</div>

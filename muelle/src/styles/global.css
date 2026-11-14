@@ -1,0 +1,71 @@
+@import "tailwindcss";
+
+@theme inline {
+  --font-sans: var(--font-jakarta), system-ui, sans-serif;
+  --font-mono: var(--font-jetbrains), ui-monospace, monospace;
+}
+
+@theme {
+  --color-bg: #f5f3ec;
+  --color-card: #fbfaf6;
+  --color-fg: #14110f;
+  --color-mute: #6b675e;
+  --color-line: #dcd8cc;
+  --color-dim: rgb(20 17 15 / 0.38);
+  --color-acid: #2fd8ff;
+  --color-ink: #06161c;
+  --color-signal: #0a7a99;
+  --color-amber: #ffb547;
+}
+
+/* Theme variables live in Tailwind's `theme` layer, so an unlayered override wins without `!important`. */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-bg: #0c0e0f;
+    --color-card: #141719;
+    --color-fg: #f2f1ec;
+    --color-mute: #9a978d;
+    --color-line: #26292b;
+    --color-dim: rgb(242 241 236 / 0.38);
+    --color-signal: #5ee1ff;
+  }
+}
+
+@layer base {
+  html {
+    scroll-behavior: smooth;
+    scroll-padding-top: 5rem;
+  }
+
+  body {
+    font-family: var(--font-sans);
+    background-color: var(--color-bg);
+    color: var(--color-fg);
+    -webkit-font-smoothing: antialiased;
+    overflow-x: hidden;
+  }
+
+  h1,
+  h2,
+  h3 {
+    font-weight: 800;
+    letter-spacing: -0.05em;
+    line-height: 0.96;
+    text-wrap: balance;
+  }
+
+  p {
+    text-wrap: pretty;
+  }
+
+  ::selection {
+    background-color: var(--color-acid);
+    color: var(--color-ink);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    html {
+      scroll-behavior: auto;
+    }
+  }
+}

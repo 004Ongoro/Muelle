@@ -1,0 +1,63 @@
+---
+import Section from "@/components/layout/Section.astro";
+import CodeCard from "@/components/ui/CodeCard.astro";
+import FeatureCard from "@/components/ui/FeatureCard.astro";
+import GlassSlab from "@/components/ui/GlassSlab.astro";
+import MagnifyDemo from "@/components/ui/MagnifyDemo.astro";
+import MenuBarPreview from "@/components/ui/MenuBarPreview.astro";
+import Timeline from "@/components/ui/Timeline.astro";
+import { features, material, menuBar, motion, safety, source } from "@/data/features";
+import "@/styles/features.css";
+---
+
+<Section id="features">
+  <header
+    class="flex flex-col items-start gap-6 border-t border-line pt-3.5 pb-10 min-[900px]:flex-row min-[900px]:items-end min-[900px]:justify-between"
+    data-r
+  >
+    <h2 class="text-[clamp(2.125rem,4.6vw,3.75rem)]">
+      {features.heading}
+      <span class="block text-dim">{features.headingAccent}</span>
+    </h2>
+    <span class="font-mono text-[11px] leading-[1.4] tracking-[0.08em] text-mute uppercase">
+      {features.eyebrow}
+    </span>
+  </header>
+
+  <div class="bento">
+    <FeatureCard label={safety.label} title={safety.title} body={safety.body} wide>
+      <Timeline steps={safety.steps} />
+    </FeatureCard>
+
+    <FeatureCard label={material.label} title={material.title} body={material.body} tilt>
+      <GlassSlab icons={material.icons} />
+    </FeatureCard>
+
+    <FeatureCard label={motion.label} title={motion.title} body={motion.body}>
+      <MagnifyDemo icons={motion.icons} range={motion.range} />
+    </FeatureCard>
+
+    <FeatureCard label={menuBar.label} title={menuBar.title} body={menuBar.body}>
+      <MenuBarPreview app={menuBar.app} time={menuBar.time} />
+    </FeatureCard>
+
+    <FeatureCard label={source.label} title={source.title} body={source.body}>
+      <CodeCard commands={source.commands} />
+    </FeatureCard>
+  </div>
+</Section>
+
+<script>
+  import { initMagnifyDemo } from "@/scripts/magnify-demo";
+  import { initReveal } from "@/scripts/reveal";
+  import { initSpotlight } from "@/scripts/spotlight";
+  import { initTilt } from "@/scripts/tilt";
+
+  const section = document.querySelector<HTMLElement>("#features");
+  if (section) {
+    initReveal(section);
+    initSpotlight(section);
+    initTilt(section);
+    initMagnifyDemo(section);
+  }
+</script>

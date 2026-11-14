@@ -1,0 +1,23 @@
+---
+import type { TimelineStep } from "@/data/features";
+
+interface Props {
+  steps: TimelineStep[];
+}
+
+const { steps } = Astro.props;
+---
+
+<ol class="tl">
+  {
+    steps.map((step) => (
+      <li class:list={[step.state === "live" && "is-live", step.state === "warn" && "is-warn"]}>
+        <span class="font-mono text-[11px] leading-[1.4] tracking-[0.08em] text-mute uppercase">
+          {step.time}
+        </span>
+        <b class="text-[15px]">{step.title}</b>
+        <small class="text-[12px] text-mute">{step.detail}</small>
+      </li>
+    ))
+  }
+</ol>

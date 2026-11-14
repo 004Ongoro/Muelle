@@ -1,0 +1,35 @@
+---
+interface Props {
+  href: string;
+  variant?: "primary" | "secondary";
+  size?: "md" | "sm";
+  class?: string;
+}
+
+const { href, variant = "primary", size = "md", class: className } = Astro.props;
+
+const base = [
+  "inline-flex items-center gap-2.5 rounded-full border-[1.5px]",
+  "font-bold tracking-[-0.01em] transition-transform duration-[180ms]",
+  "ease-[cubic-bezier(.34,1.56,.64,1)] hover:-translate-y-0.5 hover:-rotate-1",
+  "focus-visible:outline-2 focus-visible:outline-offset-[3px] focus-visible:outline-acid",
+];
+
+const sizes = {
+  md: "h-[52px] px-[22px]",
+  sm: "h-10 px-4 text-[14px]",
+};
+
+const variants = {
+  primary: [
+    "border-ink bg-acid text-ink shadow-[0_4px_0_var(--color-ink)]",
+    "hover:shadow-[0_6px_0_var(--color-ink)]",
+    "active:translate-y-[3px] active:scale-[.98] active:shadow-[0_1px_0_var(--color-ink)]",
+  ],
+  secondary: ["border-fg text-fg", "active:translate-y-px active:scale-[.98]"],
+};
+---
+
+<a href={href} class:list={[base, sizes[size], variants[variant], className]}>
+  <slot />
+</a>

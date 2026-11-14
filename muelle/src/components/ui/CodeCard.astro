@@ -1,0 +1,17 @@
+---
+interface Props {
+  commands: string[];
+}
+
+const { commands } = Astro.props;
+---
+
+<div class="code">
+  {
+    commands.map((command) => (
+      <div>
+        <span>$</span> {command}
+      </div>
+    ))
+  }
+</div>

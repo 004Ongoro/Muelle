@@ -1,0 +1,16 @@
+---
+import type { ImageMetadata } from "astro";
+import { Image } from "astro:assets";
+
+interface Props {
+  icons: ImageMetadata[];
+}
+
+const { icons } = Astro.props;
+---
+
+<div class="stage" aria-hidden="true">
+  <div class="slab">
+    {icons.map((icon) => <Image src={icon} alt="" width={44} height={44} />)}
+  </div>
+</div>

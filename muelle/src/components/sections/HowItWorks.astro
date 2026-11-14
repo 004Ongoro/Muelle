@@ -1,0 +1,28 @@
+---
+import Section from "@/components/layout/Section.astro";
+import Pipeline from "@/components/ui/Pipeline.astro";
+import { core, howItWorks, inputs, outputs } from "@/data/pipeline";
+---
+
+<Section id="how">
+  <header
+    class="flex flex-col items-start gap-6 border-t border-line pt-3.5 pb-10 min-[900px]:flex-row min-[900px]:items-end min-[900px]:justify-between"
+  >
+    <h2 class="text-[clamp(2.125rem,4.6vw,3.75rem)]">
+      {howItWorks.heading}
+      <span class="block text-dim">{howItWorks.headingAccent}</span>
+    </h2>
+    <span class="font-mono text-[11px] leading-[1.4] tracking-[0.08em] text-mute uppercase">
+      {howItWorks.eyebrow}
+    </span>
+  </header>
+
+  <Pipeline inputs={inputs} outputs={outputs} core={core} />
+</Section>
+
+<script>
+  import { initReveal } from "@/scripts/reveal";
+
+  const section = document.querySelector<HTMLElement>("#how");
+  if (section) initReveal(section);
+</script>

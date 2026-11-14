@@ -1,0 +1,27 @@
+---
+import { stats } from "@/data/stats";
+
+interface Props {
+  class?: string;
+}
+
+const { class: className } = Astro.props;
+---
+
+<div
+  class:list={[
+    "grid grid-cols-2 gap-px overflow-hidden rounded-[14px] border border-line bg-line sm:grid-cols-4",
+    className,
+  ]}
+>
+  {
+    stats.map(({ value, unit, label }) => (
+      <div class="bg-bg px-5 py-[22px] text-left">
+        <b class="block text-4xl font-extrabold tracking-[-0.05em]">
+          {value} {unit}
+        </b>
+        <span class="font-mono text-[10px] tracking-[0.08em] text-mute uppercase">{label}</span>
+      </div>
+    ))
+  }
+</div>

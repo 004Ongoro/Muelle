@@ -1,0 +1,59 @@
+---
+import type { PipelineStep } from "@/data/pipeline";
+
+interface Props {
+  step: PipelineStep;
+  /** Which way the dashed connector points: into the core, or out of it. */
+  direction: "in" | "out";
+}
+
+const { step, direction } = Astro.props;
+---
+
+<div class:list={["node", direction]} data-r>
+  <span class="font-mono text-[11px] leading-[1.4] tracking-[0.08em] text-mute uppercase">
+    {step.label}
+  </span>
+  <b>{step.title}</b>
+  <small class="text-mute">{step.detail}</small>
+</div>
+
+<style>
+  .node {
+    display: flex;
+    position: relative;
+    flex-direction: column;
+    gap: 2px;
+    padding: 14px;
+    border: 1px solid var(--color-line);
+    border-radius: 12px;
+    background: var(--color-bg);
+  }
+
+  /* Dashed connector across the 48px gap towards the core card. */
+  .node::after {
+    content: "";
+    position: absolute;
+    top: 50%;
+    width: 48px;
+    border-top: 1px dashed var(--color-dim);
+    transform: scaleX(var(--w, 1));
+    transform-origin: left;
+  }
+
+  .node.in::after {
+    left: 100%;
+  }
+
+  .node.out::after {
+    right: 100%;
+    transform-origin: right;
+  }
+
+  /* Stacked columns have no gap to cross; the connectors would only add noise. */
+  @media (max-width: 899px) {
+    .node::after {
+      display: none;
+    }
+  }
+</style>

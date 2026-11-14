@@ -1,0 +1,106 @@
+---
+import { Image } from "astro:assets";
+import type { PipelineCore } from "@/data/pipeline";
+
+interface Props {
+  core: PipelineCore;
+}
+
+const { core } = Astro.props;
+
+const memory = `${core.memory.value} ${core.memory.unit}`;
+---
+
+<div class="core flex flex-col gap-3 rounded-[18px] p-[18px]" data-r>
+  <span class="label flex justify-between font-mono text-[11px] leading-[1.4] tracking-[0.08em] uppercase">
+    <span>{core.name}</span>
+    <span>{memory}</span>
+  </span>
+
+  <div class="mini flex justify-center gap-2.5 rounded-xl px-3 py-6">
+    {
+      core.icons.map((icon) => (
+        <Image
+          src={icon}
+          alt=""
+          width={46}
+          height={46}
+          aria-hidden="true"
+          class="drop-shadow-[0_3px_4px_rgba(0,0,0,0.35)]"
+        />
+      ))
+    }
+  </div>
+
+  <span class="track h-1 overflow-hidden rounded" aria-hidden="true">
+    <i class="progress"></i>
+  </span>
+
+  <span class="label flex items-center font-mono text-[11px] leading-[1.4] tracking-[0.08em] uppercase">
+    <i class="alive" aria-hidden="true"></i>{core.status}
+  </span>
+</div>
+
+<style>
+  /* The app's own surface: light cream in both themes, as in the product. */
+  .core {
+    background: #efebe2;
+    color: #14110f;
+  }
+
+  .core .label {
+    color: #6a6960;
+  }
+
+  .mini {
+    background: linear-gradient(180deg, #143a55, #1c6a8a);
+  }
+
+  .track {
+    background: #d9d5ca;
+  }
+
+  .progress {
+    display: block;
+    height: 100%;
+    background: #14110f;
+    animation: fill 3.2s ease-in-out infinite;
+  }
+
+  .alive {
+    width: 6px;
+    height: 6px;
+    margin-right: 8px;
+    border-radius: 50%;
+    background: #1a9d6b;
+    animation: breathe 4s ease-in-out infinite;
+  }
+
+  @keyframes fill {
+    0% {
+      width: 4%;
+    }
+    70%,
+    100% {
+      width: 100%;
+    }
+  }
+
+  @keyframes breathe {
+    50% {
+      opacity: 0.25;
+      scale: 0.7;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .progress {
+      width: 100%;
+      animation: none;
+    }
+
+    .alive {
+      animation: none;
+    }
+  }
+</style>

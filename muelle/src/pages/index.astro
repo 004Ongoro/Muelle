@@ -1,0 +1,21 @@
+---
+import SiteFooter from "@/components/layout/SiteFooter.astro";
+import SiteHeader from "@/components/layout/SiteHeader.astro";
+import Features from "@/components/sections/Features.astro";
+import Hero from "@/components/sections/Hero.astro";
+import HowItWorks from "@/components/sections/HowItWorks.astro";
+import { site } from "@/data/site";
+import BaseLayout from "@/layouts/BaseLayout.astro";
+---
+
+<BaseLayout title={`${site.name} — ${site.tagline}`} description={site.description}>
+  <SiteHeader />
+
+  <main>
+    <Hero />
+    <HowItWorks />
+    <Features />
+  </main>
+
+  <SiteFooter />
+</BaseLayout>
