@@ -1,0 +1,2179 @@
+//! Dock windows and lifecycle.
+//!
+//! There are two windows:
+//! - the **visual** window draws everything and passes through clicks; it is
+//!   larger than the dock to fit the shadow, magnified icons, and labels;
+//! - the invisible **input** window covers only the area where the dock receives
+//!   mouse input. It expands while the cursor is over the dock (hysteresis).
+//!
+//! While the dock is running, the Windows taskbar is hidden and the dock is
+//! registered as an AppBar, reserving a strip along the bottom of the screen.
+
+use std::{
+    cell::RefCell,
+    collections::HashMap,
+    env,
+    sync::{
+        OnceLock,
+        atomic::{AtomicIsize, Ordering},
+    },
+    thread,
+    time::Instant,
+};
+
+use anyhow::{Context, Result};
+use muelle_config::Config;
+use muelle_core::{
+    bounce,
+    layout::{ItemKind, Layout, Metrics, layout},
+    magnify::{Magnifier, magnify},
+    roster::Roster,
+    spring::Spring,
+};
+use muelle_shell::{
+    appbar::{ABN_FULLSCREENAPP, AppBar},
+    files,
+    icon_cache::IconCache,
+    launcher,
+    names::display_name,
+    pins::{link_target, taskbar_pins},
+    power,
+    recycle_bin::{self, BinWatch},
+    system::{
+        animations_enabled, downloads_folder, primary_monitor, set_window_transitions,
+        uses_light_theme,
+    },
+    taskbar,
+    tracker::{self, TrackedWindow, WindowTracker, normalize_id},
+};
+use windows::{
+    UI::Composition::{CompositionSurfaceBrush, Desktop::DesktopWindowTarget},
+    Win32::{
+        Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM},
+        Graphics::Dwm::{DWMWA_USE_HOSTBACKDROPBRUSH, DwmFlush, DwmSetWindowAttribute},
+        System::{
+            Com::{COINIT_APARTMENTTHREADED, CoInitializeEx, CoUninitialize},
+            Console::{CTRL_C_EVENT, SetConsoleCtrlHandler},
+            LibraryLoader::GetModuleHandleW,
+            Ole::{
+                DROPEFFECT, DROPEFFECT_COPY, DROPEFFECT_LINK, DROPEFFECT_MOVE, DROPEFFECT_NONE,
+                IDropTarget, OleInitialize, OleUninitialize, RegisterDragDrop, RevokeDragDrop,
+            },
+            WinRT::Composition::ICompositorDesktopInterop,
+        },
+        UI::{
+            Accessibility::{HWINEVENTHOOK, SetWinEventHook, UnhookWinEvent},
+            Input::KeyboardAndMouse::{
+                ReleaseCapture, SetCapture, TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent,
+            },
+            WindowsAndMessaging::{
+                CreateWindowExW, DefWindowProcW, DispatchMessageW, EVENT_SYSTEM_MINIMIZESTART,
+                FindWindowW, GetCursorPos, GetMessageW, GetSystemMetrics, HWND_TOPMOST, IDC_ARROW,
+                KillTimer, LoadCursorW, MSG, OBJID_WINDOW, PM_REMOVE, PeekMessageW, PostMessageW,
+                PostQuitMessage, RegisterClassW, RegisterShellHookWindow, RegisterWindowMessageW,
+                SM_CXDRAG, SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_SHOWWINDOW, SetTimer, SetWindowPos,
+                WINDOW_EX_STYLE, WINEVENT_OUTOFCONTEXT, WINEVENT_SKIPOWNPROCESS, WM_APP,
+                WM_CAPTURECHANGED, WM_CLOSE, WM_DESTROY, WM_DISPLAYCHANGE, WM_DPICHANGED,
+                WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_QUIT, WM_RBUTTONUP,
+                WM_SETTINGCHANGE, WM_TIMER, WNDCLASSW, WS_EX_LAYERED, WS_EX_NOACTIVATE,
+                WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT,
+                WS_POPUP,
+            },
+        },
+    },
+    core::{BOOL, Interface, PCWSTR, w},
+};
+
+use crate::{
+    drop::DropTarget,
+    flight::Flight,
+    gfx::{Gfx, LabelBrush},
+    menu::{self, MenuItem},
+    scene::{Drag, Frame, Scene, SceneInput, SlotContent, Theme},
+    strings::{self, text},
+    thumbnails::Thumbnails,
+};
+
+/// These constants are not named in the `windows` crate.
+const WM_MOUSELEAVE: u32 = 0x02A3;
+const HSHELL_WINDOWACTIVATED: usize = 4;
+const HSHELL_RUDEAPPACTIVATED: usize = 0x8004;
+const HSHELL_FLASH: usize = 0x8006;
+/// `wParam` of WM_SETTINGCHANGE when the work area changes. The dock's own
+/// reservation causes this, so handling it would create a loop.
+const SPI_SETWORKAREA: usize = 0x002F;
+const WM_POWERBROADCAST: u32 = 0x0218;
+const PBT_APMRESUMEAUTOMATIC: usize = 0x0012;
+
+const WINDOW_CLASS: PCWSTR = muelle_shell::dock_link::DOCK_WINDOW_CLASS;
+const APPBAR_CALLBACK: u32 = WM_APP + 1;
+const TASKBAR_TAKEN: u32 = WM_APP + 2;
+const BIN_CHANGED: u32 = WM_APP + 3;
+/// Result of checking the recycle bin in the background (`wParam` = 1 if non-empty).
+const BIN_STATE: u32 = WM_APP + 4;
+/// Posted (not sent) when mouse capture is lost, so it is handled outside the
+/// call that released it.
+const DRAG_CANCELLED: u32 = WM_APP + 5;
+/// Runs a file drop after OLE's `Drop` returns, so the drag source is not
+/// blocked while files are copied or an app starts.
+const DROP_RUN: u32 = WM_APP + 6;
+
+const ICON_SOURCE_SIZE: u32 = 256;
+/// Magnification range, in icons on either side of the cursor.
+const RANGE_IN_ICONS: f32 = 3.0;
+/// Speed of magnification entry and exit (about 200 ms).
+const HOVER_OMEGA: f32 = 28.0;
+/// Bounce height as a fraction of the icon size.
+const BOUNCE_HEIGHT: f32 = 0.5;
+const LAUNCH_BOUNCE_LIMIT: f32 = 10.0;
+const ATTENTION_HOPS: f32 = 3.0;
+
+// Dimensions are in logical pixels and are multiplied by the display scale.
+/// Gap between the dock and the bottom screen edge, and between the dock and
+/// maximized windows.
+const FLOAT_MARGIN: f32 = 8.0;
+const SHADOW_ROOM: f32 = 44.0;
+const LABEL_ROOM: f32 = 60.0;
+/// Hysteresis distances: the effect starts at the first distance and ends at the second.
+const ENTER_HALO: f32 = 5.0;
+const LEAVE_HALO: f32 = 15.0;
+
+/// Windows sends settings changes in bursts; coalesce them into one recomposition.
+const REFRESH_TIMER: usize = 1;
+const REFRESH_DELAY_MS: u32 = 120;
+/// Window notifications also arrive in bursts when an app opens.
+const SYNC_TIMER: usize = 2;
+const SYNC_DELAY_MS: u32 = 40;
+/// After Explorer restarts or the system resumes, the new taskbar needs time
+/// to apply its initial state before it can be taken over again.
+const TASKBAR_TIMER: usize = 3;
+const TASKBAR_DELAY_MS: u32 = 600;
+const TRIM_TIMER: usize = 4;
+const TRIM_DELAY_MS: u32 = 3000;
+const BIN_TIMER: usize = 5;
+const BIN_DELAY_MS: u32 = 300;
+const HIDE_TIMER: usize = 6;
+const HIDE_DELAY_MS: u32 = 300;
+
+/// Auto-hide slide speed (about 250 ms).
+const SLIDE_OMEGA: f32 = 24.0;
+/// Screen-edge strip that reveals a hidden dock, in physical pixels.
+const REVEAL_STRIP: i32 = 2;
+/// An icon released this far above the magnified dock, in icon heights, leaves it.
+const REMOVE_DISTANCE: f32 = 0.8;
+
+const START_ID: &str = "muelle:start";
+const WINDOW_ID_PREFIX: &str = "muelle:window:";
+const WINDOW_TITLE_CHARS: usize = 40;
+/// Fraction of a thumbnail slot covered by the app badge (see `scene`).
+const BADGE_CORNER: f32 = crate::scene::BADGE_SIZE * crate::scene::BADGE_INSIDE;
+const CMD_CLOSE_WINDOW: u32 = 8;
+const CMD_SETTINGS: u32 = 9;
+
+/// Context menu commands. Window commands start at `CMD_WINDOW`.
+const CMD_OPEN: u32 = 1;
+const CMD_TOGGLE_PIN: u32 = 2;
+const CMD_REVEAL: u32 = 3;
+const CMD_QUIT_APP: u32 = 4;
+const CMD_EMPTY_BIN: u32 = 5;
+const CMD_QUIT_DOCK: u32 = 6;
+const CMD_TOGGLE_HIDING: u32 = 7;
+const CMD_WINDOW: u32 = 100;
+const MENU_WINDOWS: usize = 12;
+const MENU_TITLE_CHARS: usize = 60;
+
+static SHELL_HOOK: OnceLock<u32> = OnceLock::new();
+static TASKBAR_CREATED: OnceLock<u32> = OnceLock::new();
+/// Broadcast by the settings app after it saves the configuration.
+static CONFIG_CHANGED: OnceLock<u32> = OnceLock::new();
+/// Dock visual window, used to close it from the Ctrl+C handler running on
+/// another thread.
+static MAIN_WINDOW: AtomicIsize = AtomicIsize::new(0);
+static DROP_WINDOW: AtomicIsize = AtomicIsize::new(0);
+static MINIMIZE_HOOK: AtomicIsize = AtomicIsize::new(0);
+
+#[derive(Clone, PartialEq)]
+struct Entry {
+    kind: ItemKind,
+    id: Option<String>,
+    role: Role,
+    running: bool,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Role {
+    App,
+    Start,
+    /// A minimized window, shown as a live thumbnail.
+    Window,
+    Folder,
+    Trash,
+}
+
+fn window_id(hwnd: isize) -> String {
+    format!("{WINDOW_ID_PREFIX}{hwnd}")
+}
+
+fn window_of(id: &str) -> Option<isize> {
+    id.strip_prefix(WINDOW_ID_PREFIX)?.parse().ok()
+}
+
+/// Work deferred until the app state is released. These calls may open a modal
+/// loop (a menu, shell error dialog, or recycle bin confirmation) that dispatches
+/// messages back to the dock.
+enum Outside {
+    Open(String),
+    OpenStart,
+    Activate(Vec<isize>),
+    Reveal(String),
+    EmptyBin,
+    OpenWith(String, Vec<String>),
+    Recycle(Vec<String>),
+    Transfer {
+        folder: String,
+        files: Vec<String>,
+        copy: bool,
+    },
+    Menu(MenuRequest),
+    QuitDock,
+    OpenSettings,
+}
+
+struct MenuRequest {
+    target: MenuTarget,
+    items: Vec<MenuItem>,
+    anchor: POINT,
+    dark: bool,
+}
+
+enum MenuTarget {
+    Entry {
+        id: String,
+        role: Role,
+        windows: Vec<isize>,
+    },
+    Dock,
+}
+
+struct Asset {
+    icon: Option<CompositionSurfaceBrush>,
+    label: Option<LabelBrush>,
+}
+
+struct Press {
+    id: String,
+    at: POINT,
+}
+
+struct Dragging {
+    id: String,
+    point: POINT,
+    removing: bool,
+}
+
+/// What dropping the dragged files at a given place would do.
+enum DropAction {
+    Nothing,
+    OpenWith(String),
+    Recycle,
+    Transfer { folder: String, copy: bool },
+    Pin { id: String, before: Option<String> },
+}
+
+impl DropAction {
+    fn effect(&self) -> DROPEFFECT {
+        match self {
+            Self::Nothing => DROPEFFECT_NONE,
+            Self::OpenWith(_) => DROPEFFECT_COPY,
+            Self::Recycle => DROPEFFECT_MOVE,
+            Self::Transfer { copy, .. } => {
+                if *copy {
+                    DROPEFFECT_COPY
+                } else {
+                    DROPEFFECT_MOVE
+                }
+            }
+            Self::Pin { .. } => DROPEFFECT_LINK,
+        }
+    }
+}
+
+struct Bounce {
+    start: Instant,
+    /// Seconds after `start` when bouncing ends. `None` means until the app opens a window.
+    until: Option<f32>,
+}
+
+/// State that determines the scene; recomposition is unnecessary if it is unchanged.
+#[derive(PartialEq)]
+struct StageKey {
+    screen: RECT,
+    scale: f32,
+    light: bool,
+    bin_full: bool,
+    auto_hide: bool,
+    icon_size: u32,
+    max_scale: f32,
+    entries: Vec<Entry>,
+}
+
+struct Stage {
+    key: StageKey,
+    window_zone: RECT,
+    scene: Scene,
+    layout: Layout,
+    magnifier: Magnifier,
+    icon: f32,
+    gap: f32,
+    scale: f32,
+    dock_origin: POINT,
+    /// Position of the resting dock inside the visual window.
+    origin: (f32, f32),
+    rest_zone: RECT,
+    hover_zone: RECT,
+    /// Thin strip at the screen edge that reveals the dock when auto-hide is on.
+    edge_zone: RECT,
+    /// How far the dock slides down to hide completely.
+    slide_distance: f32,
+}
+
+struct App {
+    visual: HWND,
+    input: HWND,
+    gfx: Gfx,
+    target: DesktopWindowTarget,
+    appbar: Option<AppBar>,
+    fullscreen: bool,
+    roster: Roster,
+    tracker: WindowTracker,
+    windows: Vec<TrackedWindow>,
+    entries: Vec<Entry>,
+    icons: IconCache,
+    downloads: Option<String>,
+    bin_full: bool,
+    _bin_watch: Option<BinWatch>,
+    assets: HashMap<String, Asset>,
+    /// Scale, theme and icon pixel size the cached assets were drawn for.
+    assets_for: (f32, bool, u32),
+    remove_label: Option<LabelBrush>,
+    config: Config,
+    /// 0 = shown, 1 = hidden (auto-hide).
+    slide: Spring,
+    press: Option<Press>,
+    drag: Option<Dragging>,
+    /// Files being dragged over the dock from another app.
+    incoming: Vec<String>,
+    pending_drop: Option<Outside>,
+    bounces: HashMap<String, Bounce>,
+    /// Minimized windows, in the order they were minimized.
+    minimized: Vec<isize>,
+    thumbnails: Thumbnails,
+    /// Minimize animations in progress.
+    flights: Vec<Flight>,
+    /// Windows whose system transitions are turned off (see `calm_windows`).
+    calmed: Vec<isize>,
+    /// Windows already minimized when the dock starts get no animation.
+    started: bool,
+    stage: Option<Stage>,
+    hovering: bool,
+    hovered: Option<usize>,
+    /// Horizontal cursor position relative to the resting dock.
+    cursor: f32,
+    /// 0 = resting, 1 = full magnification.
+    amount: Spring,
+    last_frame: Instant,
+}
+
+thread_local! {
+    static APP: RefCell<Option<App>> = const { RefCell::new(None) };
+}
+
+fn explorer_id() -> String {
+    normalize_id(&format!(
+        "{}\\explorer.exe",
+        env::var("WINDIR").unwrap_or_default()
+    ))
+}
+
+/// Saved settings or, on first launch, the defaults with the apps pinned to
+/// the Windows taskbar.
+fn load_config() -> Config {
+    let path = muelle_config::default_path();
+    match muelle_config::load(&path) {
+        Ok(Some(config)) => config,
+        Ok(None) => {
+            let config = Config {
+                pinned: taskbar_pins(),
+                ..Config::default()
+            };
+            if let Err(error) = muelle_config::save(&path, &config) {
+                eprintln!("muelle: {error}");
+            }
+            config
+        }
+        Err(error) => {
+            // Do not overwrite it; the user may want to repair the file.
+            eprintln!("muelle: {error}; se usan los valores por defecto");
+            Config::default()
+        }
+    }
+}
+
+/// The Explorer is always pinned, like Finder.
+fn roster_from(config: &Config) -> Roster {
+    let explorer = explorer_id();
+    let mut pinned = config.pinned.clone();
+    pinned.retain(|id| *id != explorer);
+    pinned.insert(0, explorer);
+    Roster::new(pinned, config.recent.clone())
+}
+
+fn save_settings(roster: &Roster, config: &Config) {
+    let path = muelle_config::default_path();
+    if let Err(error) = muelle_config::load(&path) {
+        // Do not overwrite a corrupted file; report it and skip saving.
+        eprintln!("muelle: {error}; no se guardan los cambios del dock");
+        return;
+    }
+    let config = Config {
+        pinned: roster.pinned().to_vec(),
+        recent: roster.recent().to_vec(),
+        ..config.clone()
+    };
+    if let Err(error) = muelle_config::save(&path, &config) {
+        eprintln!("muelle: {error}");
+    }
+}
+
+fn shorten(text: &str, max: usize) -> String {
+    if text.chars().count() <= max {
+        text.to_owned()
+    } else {
+        let cut: String = text.chars().take(max - 1).collect();
+        format!("{}…", cut.trim_end())
+    }
+}
+
+fn place(hwnd: HWND, zone: &RECT, visible: bool) -> Result<()> {
+    let show = if visible {
+        SWP_SHOWWINDOW
+    } else {
+        SWP_HIDEWINDOW
+    };
+    // SAFETY: `hwnd` is one of our live windows.
+    unsafe {
+        SetWindowPos(
+            hwnd,
+            Some(HWND_TOPMOST),
+            zone.left,
+            zone.top,
+            zone.right - zone.left,
+            zone.bottom - zone.top,
+            SWP_NOACTIVATE | show,
+        )?;
+    }
+    Ok(())
+}
+
+pub fn request_quit() {
+    // SAFETY: Searches for the window and posts a message with no associated data.
+    unsafe {
+        if let Ok(hwnd) = FindWindowW(WINDOW_CLASS, None) {
+            let _ = PostMessageW(Some(hwnd), WM_CLOSE, WPARAM(0), LPARAM(0));
+        }
+    }
+}
+
+unsafe extern "system" fn on_console_ctrl(event: u32) -> BOOL {
+    let hwnd = MAIN_WINDOW.load(Ordering::Relaxed);
+    if event == CTRL_C_EVENT && hwnd != 0 {
+        // SAFETY: Only a message is sent; if the window no longer exists, the call has no effect.
+        unsafe {
+            let _ = PostMessageW(Some(HWND(hwnd as *mut _)), WM_CLOSE, WPARAM(0), LPARAM(0));
+        }
+        return true.into();
+    }
+    false.into()
+}
+
+impl App {
+    /// List of items: apps, recents, Downloads, and recycle bin, separated into
+    /// sections as in macOS.
+    fn current_entries(&self) -> Vec<Entry> {
+        let separator = || Entry {
+            kind: ItemKind::Separator,
+            id: None,
+            role: Role::Folder,
+            running: false,
+        };
+        let icon = |id: &str, role: Role, running: bool| Entry {
+            kind: ItemKind::Icon,
+            id: Some(id.to_owned()),
+            role,
+            running,
+        };
+
+        let mut entries: Vec<Entry> = self
+            .roster
+            .apps()
+            .iter()
+            .map(|app| icon(&app.id, Role::App, app.running))
+            .collect();
+        entries.insert(0, icon(START_ID, Role::Start, false));
+        if !self.roster.recent().is_empty() {
+            entries.push(separator());
+            entries.extend(
+                self.roster
+                    .recent()
+                    .iter()
+                    .map(|id| icon(id, Role::App, false)),
+            );
+        }
+        entries.push(separator());
+        entries.extend(
+            self.minimized
+                .iter()
+                .map(|&hwnd| icon(&window_id(hwnd), Role::Window, false)),
+        );
+        if let Some(downloads) = &self.downloads {
+            entries.push(icon(downloads, Role::Folder, false));
+        }
+        entries.push(icon(recycle_bin::PARSING_NAME, Role::Trash, false));
+        entries
+    }
+
+    /// `wanted` is the pixel side icons are drawn at: their magnified size.
+    fn prepare_assets(&mut self, wanted: u32, scale: f32, light: bool) {
+        if self.assets_for != (scale, light, wanted) {
+            self.assets.clear();
+            self.remove_label = None;
+            self.assets_for = (scale, light, wanted);
+        }
+        if self.remove_label.is_none() {
+            self.remove_label = self.gfx.label_brush(text().remove, scale, light).ok();
+        }
+        for id in self.entries.iter().filter_map(|entry| entry.id.as_ref()) {
+            if self.assets.contains_key(id) {
+                continue;
+            }
+            if let Some(hwnd) = window_of(id) {
+                let title = shorten(&tracker::title(hwnd), WINDOW_TITLE_CHARS);
+                let label = self.gfx.label_brush(&title, scale, light).ok();
+                self.assets.insert(id.clone(), Asset { icon: None, label });
+                continue;
+            }
+            if id == START_ID {
+                let icon = self.gfx.start_brush(wanted).ok();
+                let label = self.gfx.label_brush(text().start, scale, light).ok();
+                self.assets.insert(id.clone(), Asset { icon, label });
+                continue;
+            }
+            // A missing icon should not prevent the rest of the dock from rendering.
+            let visual = if id == recycle_bin::PARSING_NAME {
+                let state = if self.bin_full { "llena" } else { "vacia" };
+                self.icons.get_variant(id, state, ICON_SOURCE_SIZE)
+            } else {
+                self.icons.get(id, ICON_SOURCE_SIZE)
+            }
+            .inspect_err(|error| eprintln!("muelle: {error}"))
+            .ok();
+            let icon = visual.as_ref().and_then(|visual| {
+                let side = wanted.min(visual.icon.width);
+                self.gfx
+                    .icon_brush(&visual.icon, side)
+                    .inspect_err(|error| eprintln!("muelle: icono de `{id}`: {error:#}"))
+                    .ok()
+            });
+            let name = visual.map_or_else(|| display_name(id), |visual| visual.name);
+            let label = self
+                .gfx
+                .label_brush(&name, scale, light)
+                .inspect_err(|error| eprintln!("muelle: etiqueta de `{id}`: {error:#}"))
+                .ok();
+            self.assets.insert(id.clone(), Asset { icon, label });
+        }
+        let entries = &self.entries;
+        self.assets
+            .retain(|id, _| entries.iter().any(|entry| entry.id.as_ref() == Some(id)));
+    }
+
+    /// Recalculates sizes, positions, and scene for the current state. Does
+    /// nothing if the scene inputs are unchanged, since many Windows notifications
+    /// do not affect the dock.
+    fn refresh(&mut self) -> Result<()> {
+        let monitor = primary_monitor().context("no se pudo consultar el monitor principal")?;
+        let key = StageKey {
+            screen: monitor.screen,
+            scale: monitor.scale,
+            light: uses_light_theme(),
+            bin_full: self.bin_full,
+            auto_hide: self.config.auto_hide,
+            icon_size: self.config.icon_size,
+            max_scale: self.config.max_scale(),
+            entries: self.current_entries(),
+        };
+        if self.stage.as_ref().is_some_and(|stage| stage.key == key) {
+            return Ok(());
+        }
+
+        let scale = monitor.scale;
+        let max_scale = key.max_scale;
+        let metrics = Metrics {
+            icon: key.icon_size as f32,
+            ..Metrics::DEFAULT
+        }
+        .scaled(scale);
+        let theme = Theme::for_system(key.light);
+        let px = |logical: f32| (logical * scale).round();
+
+        self.entries = key.entries.clone();
+        self.prepare_assets(
+            (metrics.icon * max_scale).round() as u32,
+            scale,
+            theme.light,
+        );
+
+        let kinds: Vec<ItemKind> = self.entries.iter().map(|entry| entry.kind).collect();
+        let mut dock = layout(&kinds, &metrics);
+        dock.width = dock.width.round();
+        dock.height = dock.height.round();
+        let magnifier = Magnifier {
+            range: RANGE_IN_ICONS * (metrics.icon + metrics.gap),
+            max_scale,
+        };
+
+        let side_growth = (magnifier.max_growth() / 2.0).ceil();
+        let rise = (metrics.icon * (max_scale - 1.0)).ceil();
+
+        // Position relative to the screen, not the work area; the work area
+        // already excludes the strip reserved by the dock.
+        let screen = monitor.screen;
+        let screen_width = (screen.right - screen.left) as f32;
+        let dock_x = screen.left as f32 + ((screen_width - dock.width) / 2.0).round();
+        let dock_y = screen.bottom as f32 - px(FLOAT_MARGIN) - dock.height;
+        if let Some(appbar) = &mut self.appbar {
+            // A hidden dock leaves the whole screen to maximized windows.
+            let strip = if self.config.auto_hide {
+                0
+            } else {
+                (dock.height + 2.0 * px(FLOAT_MARGIN)) as i32
+            };
+            appbar.reserve_bottom(screen, strip);
+        }
+        let (dock_right, dock_bottom) = (dock_x + dock.width, dock_y + dock.height);
+        let zone = move |left: f32, top: f32, right: f32, bottom: f32| RECT {
+            left: (dock_x - left) as i32,
+            top: (dock_y - top) as i32,
+            right: (dock_right + right) as i32,
+            bottom: (dock_bottom + bottom) as i32,
+        };
+
+        let room = px(SHADOW_ROOM);
+        let (room_x, room_top) = (room + side_growth, rise + px(LABEL_ROOM));
+        let contents: Vec<SlotContent<'_>> = self
+            .entries
+            .iter()
+            .map(|entry| {
+                let asset = entry.id.as_ref().and_then(|id| self.assets.get(id));
+                let badge = entry
+                    .id
+                    .as_deref()
+                    .and_then(window_of)
+                    .and_then(|hwnd| self.windows.iter().find(|window| window.hwnd == hwnd))
+                    .and_then(|window| self.assets.get(&window.app_id))
+                    .and_then(|asset| asset.icon.as_ref());
+                SlotContent {
+                    icon: asset.and_then(|asset| asset.icon.as_ref()),
+                    label: asset.and_then(|asset| asset.label.as_ref()),
+                    running: entry.running,
+                    badge,
+                }
+            })
+            .collect();
+        let scene = Scene::build(
+            &self.gfx,
+            &SceneInput {
+                layout: &dock,
+                contents: &contents,
+                theme,
+                scale,
+                origin: (room_x, room_top),
+                remove_label: self.remove_label.as_ref(),
+            },
+        )?;
+        self.target.SetRoot(&scene.root)?;
+
+        let (enter, leave) = (px(ENTER_HALO), px(LEAVE_HALO));
+        let stage = Stage {
+            key,
+            window_zone: zone(room_x, room_top, room_x, room),
+            scene,
+            magnifier,
+            icon: metrics.icon,
+            gap: metrics.gap,
+            scale,
+            origin: (room_x, room_top),
+            dock_origin: POINT {
+                x: dock_x as i32,
+                y: dock_y as i32,
+            },
+            rest_zone: zone(enter, enter, enter, enter),
+            hover_zone: zone(
+                side_growth + leave,
+                rise + leave,
+                side_growth + leave,
+                leave,
+            ),
+            edge_zone: RECT {
+                left: (dock_x - side_growth) as i32,
+                top: screen.bottom - REVEAL_STRIP,
+                right: (dock_right + side_growth) as i32,
+                bottom: screen.bottom,
+            },
+            slide_distance: dock.height + px(FLOAT_MARGIN) + room,
+            layout: dock,
+        };
+        self.stage = Some(stage);
+        self.place_windows()?;
+        self.schedule_trim();
+        self.render()
+    }
+
+    fn place_windows(&self) -> Result<()> {
+        let Some(stage) = &self.stage else {
+            return Ok(());
+        };
+        let visible = !self.fullscreen;
+        place(self.visual, &stage.window_zone, visible)?;
+        // Preserve the expanded input area if the cursor is already over the
+        // dock (for example, after launching an app with a dock click).
+        let input_zone = if self.hovering || self.drag.is_some() {
+            &stage.hover_zone
+        } else if self.config.auto_hide {
+            &stage.edge_zone
+        } else {
+            &stage.rest_zone
+        };
+        place(self.input, input_zone, visible)
+    }
+
+    fn schedule_trim(&self) {
+        // SAFETY: `self.input` is this live window, and this call runs on its UI thread.
+        unsafe { SetTimer(Some(self.input), TRIM_TIMER, TRIM_DELAY_MS, None) };
+    }
+
+    fn trim_if_idle(&self) {
+        if !self.hovering && !self.is_animating() {
+            power::trim_memory();
+        }
+    }
+
+    fn render(&mut self) -> Result<()> {
+        let Some(stage) = &self.stage else {
+            return Ok(());
+        };
+        let state = magnify(
+            &stage.layout,
+            self.cursor,
+            self.amount.value,
+            &stage.magnifier,
+        );
+        self.hovered = self
+            .hovering
+            .then(|| state.icon_at(&stage.layout, self.cursor, stage.gap))
+            .flatten();
+
+        let now = Instant::now();
+        let lifts: Vec<f32> = self
+            .entries
+            .iter()
+            .map(|entry| {
+                entry
+                    .id
+                    .as_ref()
+                    .and_then(|id| self.bounces.get(id))
+                    .map_or(0.0, |bounce| {
+                        let elapsed = now.duration_since(bounce.start).as_secs_f32();
+                        bounce::lift(elapsed, stage.icon * BOUNCE_HEIGHT)
+                    })
+            })
+            .collect();
+
+        let drag = self.drag.as_ref().and_then(|drag| {
+            Some(Drag {
+                index: self
+                    .entries
+                    .iter()
+                    .position(|entry| entry.id.as_deref() == Some(drag.id.as_str()))?,
+                center: (
+                    (drag.point.x - stage.dock_origin.x) as f32,
+                    (drag.point.y - stage.dock_origin.y) as f32,
+                ),
+                removing: drag.removing,
+            })
+        });
+        if drag.is_some() {
+            self.hovered = None;
+        }
+        let at_rest = self.amount.value == 0.0
+            && self.bounces.is_empty()
+            && self.slide.is_settled()
+            && drag.is_none();
+        let slide = self.slide.value * stage.slide_distance;
+        stage.scene.apply(&Frame {
+            state: &state,
+            hovered: self.hovered,
+            lifts: &lifts,
+            drag,
+            slide,
+            snap: at_rest,
+        })?;
+
+        let visible = !self.fullscreen;
+        for (entry, rect) in self.entries.iter().zip(&state.rects) {
+            if let Some(hwnd) = entry.id.as_deref().and_then(window_of) {
+                let slot = (
+                    stage.origin.0 + rect.x,
+                    stage.origin.1 + rect.y + slide,
+                    rect.width,
+                    rect.height,
+                );
+                let has_badge = self
+                    .windows
+                    .iter()
+                    .find(|window| window.hwnd == hwnd)
+                    .and_then(|window| self.assets.get(&window.app_id))
+                    .is_some_and(|asset| asset.icon.is_some());
+                let corner = if has_badge { BADGE_CORNER } else { 0.0 };
+                let opacity = match self.flights.iter().find(|flight| flight.hwnd == hwnd) {
+                    _ if !visible => 0,
+                    Some(flight) => flight.landing_opacity(now),
+                    None => 255,
+                };
+                self.thumbnails.place(hwnd, slot, corner, opacity);
+            }
+        }
+        Ok(())
+    }
+
+    /// Screen rectangle of a minimized window's slot, at rest, with the
+    /// window's aspect ratio.
+    fn minimized_slot(&self, hwnd: isize, aspect: f32) -> Option<RECT> {
+        let stage = self.stage.as_ref()?;
+        let id = window_id(hwnd);
+        let index = self
+            .entries
+            .iter()
+            .position(|entry| entry.id.as_deref() == Some(id.as_str()))?;
+        let rect = stage.layout.slots.get(index)?.rect;
+        let (width, height) = if aspect >= 1.0 {
+            (rect.width, rect.width / aspect)
+        } else {
+            (rect.height * aspect, rect.height)
+        };
+        let left = stage.dock_origin.x as f32 + rect.x + (rect.width - width) / 2.0;
+        let top = stage.dock_origin.y as f32 + rect.y + (rect.height - height) / 2.0;
+        Some(RECT {
+            left: left as i32,
+            top: top as i32,
+            right: (left + width) as i32,
+            bottom: (top + height) as i32,
+        })
+    }
+
+    /// A window starts minimizing: put it in the dock right away and fly it there.
+    fn on_minimize_start(&mut self, hwnd: isize) -> Result<()> {
+        if self.fullscreen
+            || self.minimized.contains(&hwnd)
+            || !self.windows.iter().any(|window| window.hwnd == hwnd)
+        {
+            return Ok(());
+        }
+        self.minimized.push(hwnd);
+        self.thumbnails.sync(&self.minimized);
+        self.refresh()?;
+        self.start_flights(&[hwnd]);
+        Ok(())
+    }
+
+    /// Turns off the system's transitions for every tracked window. Windows
+    /// starts its own minimize animation before the dock hears about the
+    /// minimize, and it cannot be cancelled afterwards, so it has to be off in
+    /// advance for the genie to be the only animation. The cost: those windows
+    /// also lose the system's maximize and close animations while the dock runs.
+    fn calm_windows(&mut self) {
+        if !self.config.genie || !animations_enabled() {
+            return;
+        }
+        let windows = &self.windows;
+        self.calmed
+            .retain(|hwnd| windows.iter().any(|window| window.hwnd == *hwnd));
+        for window in windows {
+            if !self.calmed.contains(&window.hwnd) {
+                set_window_transitions(window.hwnd, false);
+                self.calmed.push(window.hwnd);
+            }
+        }
+    }
+
+    fn restore_transitions(&mut self) {
+        for hwnd in self.calmed.drain(..) {
+            set_window_transitions(hwnd, true);
+        }
+    }
+
+    /// Brings windows to the front. Minimized ones get their system
+    /// transitions back first, so they return with the system's restore
+    /// animation; the next `sync` turns them off again.
+    fn activating(&mut self, windows: Vec<isize>) -> Outside {
+        for hwnd in &windows {
+            if self.minimized.contains(hwnd) {
+                set_window_transitions(*hwnd, true);
+                self.calmed.retain(|calmed| calmed != hwnd);
+            }
+        }
+        Outside::Activate(windows)
+    }
+
+    fn start_flights(&mut self, windows: &[isize]) {
+        // Respect "Animation effects" being turned off in Windows settings.
+        // One genie at a time: minimizing everything at once (Win+D) would
+        // otherwise take a screen snapshot per window.
+        if !self.config.genie || !animations_enabled() || !self.flights.is_empty() {
+            return;
+        }
+        let Some(screen) = primary_monitor().map(|monitor| monitor.screen) else {
+            return;
+        };
+        for &hwnd in windows {
+            let Some(from) = tracker::normal_rect(hwnd) else {
+                continue;
+            };
+            let aspect = (from.right - from.left) as f32 / (from.bottom - from.top).max(1) as f32;
+            if let Some(to) = self.minimized_slot(hwnd, aspect)
+                && let Some(flight) = Flight::start(&self.gfx, hwnd, from, to, screen)
+            {
+                self.flights.push(flight);
+                self.last_frame = Instant::now();
+            }
+        }
+    }
+
+    fn on_mouse_move(&mut self) -> Result<()> {
+        let Some(stage) = &self.stage else {
+            return Ok(());
+        };
+        let mut point = POINT::default();
+        // SAFETY: `point` remains alive for the duration of the call.
+        unsafe { GetCursorPos(&mut point)? };
+
+        let origin_x = stage.dock_origin.x;
+        if self.update_drag(point) {
+            self.cursor = (point.x - origin_x) as f32;
+            return self.drag_to(point);
+        }
+        let Some(stage) = &self.stage else {
+            return Ok(());
+        };
+
+        // Keep the active-area boundary aligned with the icons as they grow.
+        let rise = stage.icon * (stage.magnifier.max_scale - 1.0) * self.amount.value;
+        let ceiling = stage.dock_origin.y as f32 - rise - LEAVE_HALO * stage.scale;
+        if self.hovering && (point.y as f32) < ceiling {
+            return self.on_mouse_leave();
+        }
+
+        self.cursor = (point.x - stage.dock_origin.x) as f32;
+        if !self.hovering {
+            self.hovering = true;
+            self.amount.target = 1.0;
+            self.slide.target = 0.0;
+            self.last_frame = Instant::now();
+            // SAFETY: Timer on our own window; killing a timer that is not set is harmless.
+            unsafe {
+                let _ = KillTimer(Some(self.input), HIDE_TIMER);
+            }
+            self.place_windows()?;
+            let mut track = TRACKMOUSEEVENT {
+                cbSize: size_of::<TRACKMOUSEEVENT>() as u32,
+                dwFlags: TME_LEAVE,
+                hwndTrack: self.input,
+                dwHoverTime: 0,
+            };
+            // SAFETY: `track` is a valid structure with its size initialized.
+            unsafe { TrackMouseEvent(&mut track)? };
+        }
+        self.render()
+    }
+
+    fn on_mouse_leave(&mut self) -> Result<()> {
+        if !self.hovering || self.drag.is_some() {
+            return Ok(());
+        }
+        self.hovering = false;
+        self.amount.target = 0.0;
+        self.last_frame = Instant::now();
+        if self.config.auto_hide {
+            // SAFETY: Timer on our own window.
+            unsafe { SetTimer(Some(self.input), HIDE_TIMER, HIDE_DELAY_MS, None) };
+        }
+        self.place_windows()?;
+        self.render()
+    }
+
+    fn hide_if_unused(&mut self) -> Result<()> {
+        if !self.config.auto_hide || self.hovering || self.drag.is_some() {
+            return Ok(());
+        }
+        self.slide.target = 1.0;
+        self.last_frame = Instant::now();
+        self.place_windows()
+    }
+
+    /// Only running or pinned apps can be dragged; the Explorer, Start,
+    /// recent apps, Downloads, and the recycle bin stay in place.
+    fn is_draggable(&self, entry: &Entry) -> bool {
+        entry.role == Role::App
+            && entry.id.as_ref().is_some_and(|id| {
+                *id != explorer_id() && (self.roster.is_pinned(id) || self.roster.is_running(id))
+            })
+    }
+
+    fn on_press(&mut self) -> Result<()> {
+        let Some(entry) = self.hovered.and_then(|index| self.entries.get(index)) else {
+            return Ok(());
+        };
+        if !self.is_draggable(entry) {
+            return Ok(());
+        }
+        let mut at = POINT::default();
+        // SAFETY: `at` lives for the call; capture keeps mouse input while dragging
+        // outside the input window.
+        unsafe {
+            GetCursorPos(&mut at)?;
+            SetCapture(self.input);
+        }
+        self.press = entry.id.clone().map(|id| Press { id, at });
+        Ok(())
+    }
+
+    /// Starts a drag once the cursor moves past the system drag threshold.
+    /// Returns `true` while a drag is in progress.
+    fn update_drag(&mut self, point: POINT) -> bool {
+        if self.drag.is_none()
+            && let Some(press) = &self.press
+        {
+            // SAFETY: Read-only query.
+            let threshold = unsafe { GetSystemMetrics(SM_CXDRAG) }.max(1);
+            if (point.x - press.at.x).abs() > threshold || (point.y - press.at.y).abs() > threshold
+            {
+                self.drag = Some(Dragging {
+                    id: press.id.clone(),
+                    point,
+                    removing: false,
+                });
+            }
+        }
+        self.drag.is_some()
+    }
+
+    /// Moves the dragged icon and reorders the pinned apps live, as in macOS.
+    fn drag_to(&mut self, point: POINT) -> Result<()> {
+        let (Some(stage), Some(drag)) = (&self.stage, &mut self.drag) else {
+            return Ok(());
+        };
+        drag.point = point;
+        let id = drag.id.clone();
+        let pinned = self.roster.is_pinned(&id);
+        let top = stage.dock_origin.y as f32
+            - stage.icon * (stage.magnifier.max_scale - 1.0 + REMOVE_DISTANCE);
+        drag.removing = pinned && (point.y as f32) < top;
+        if drag.removing {
+            return self.render();
+        }
+
+        let state = magnify(
+            &stage.layout,
+            self.cursor,
+            self.amount.value,
+            &stage.magnifier,
+        );
+        let explorer = explorer_id();
+        let mut before: Option<String> = None;
+        let mut pinned_end = f32::MIN;
+        for (entry, rect) in self.entries.iter().zip(&state.rects) {
+            let Some(other) = entry.id.as_ref() else {
+                continue;
+            };
+            if entry.role != Role::App
+                || *other == id
+                || *other == explorer
+                || !self.roster.is_pinned(other)
+            {
+                continue;
+            }
+            pinned_end = rect.x + rect.width;
+            if before.is_none() && rect.x + rect.width / 2.0 > self.cursor {
+                before = Some(other.clone());
+            }
+        }
+        // An unpinned app is pinned only when dropped among the pinned ones.
+        if !pinned && before.is_none() && self.cursor > pinned_end + stage.gap {
+            return self.render();
+        }
+
+        let list = self.roster.pinned();
+        let current = list
+            .iter()
+            .position(|pinned| *pinned == id)
+            .map(|index| list.get(index + 1).cloned());
+        if current == Some(before.clone()) {
+            return self.render();
+        }
+        self.roster.pin_before(&id, before.as_deref());
+        self.refresh()
+    }
+
+    /// Hover driven by a drag from another app: OLE takes the mouse, so the
+    /// dock gets no WM_MOUSEMOVE meanwhile.
+    fn hover_at(&mut self, x: i32) -> Result<()> {
+        let Some(stage) = &self.stage else {
+            return Ok(());
+        };
+        self.cursor = (x - stage.dock_origin.x) as f32;
+        if !self.hovering {
+            self.hovering = true;
+            self.amount.target = 1.0;
+            self.slide.target = 0.0;
+            self.last_frame = Instant::now();
+            self.place_windows()?;
+        }
+        self.render()
+    }
+
+    fn drop_action(&self) -> DropAction {
+        let Some(stage) = &self.stage else {
+            return DropAction::Nothing;
+        };
+        let state = magnify(
+            &stage.layout,
+            self.cursor,
+            self.amount.value,
+            &stage.magnifier,
+        );
+        let target = state
+            .icon_at(&stage.layout, self.cursor, stage.gap)
+            .and_then(|index| self.entries.get(index));
+        let Some(entry) = target else {
+            return self.pin_action(&state);
+        };
+        let Some(id) = entry.id.clone() else {
+            return DropAction::Nothing;
+        };
+        match entry.role {
+            Role::App if id.ends_with(".exe") => DropAction::OpenWith(id),
+            Role::Trash => DropAction::Recycle,
+            Role::Folder => DropAction::Transfer {
+                copy: !self
+                    .incoming
+                    .iter()
+                    .all(|file| files::same_volume(file, &id)),
+                folder: id,
+            },
+            Role::App | Role::Start | Role::Window => DropAction::Nothing,
+        }
+    }
+
+    /// A single app or shortcut dropped between icons is pinned there.
+    fn pin_action(&self, state: &muelle_core::magnify::Magnified) -> DropAction {
+        let [file] = self.incoming.as_slice() else {
+            return DropAction::Nothing;
+        };
+        let lower = file.to_lowercase();
+        let target = if lower.ends_with(".lnk") {
+            link_target(std::path::Path::new(file))
+        } else {
+            Some(file.clone())
+        };
+        let Some(id) = target
+            .map(|target| normalize_id(&target))
+            .filter(|id| id.ends_with(".exe"))
+        else {
+            return DropAction::Nothing;
+        };
+        let explorer = explorer_id();
+        let before = self
+            .entries
+            .iter()
+            .zip(&state.rects)
+            .find(|(entry, rect)| {
+                entry.role == Role::App
+                    && entry.id.as_ref().is_some_and(|other| {
+                        *other != explorer && *other != id && self.roster.is_pinned(other)
+                    })
+                    && rect.x + rect.width / 2.0 > self.cursor
+            })
+            .and_then(|(entry, _)| entry.id.clone());
+        DropAction::Pin { id, before }
+    }
+
+    fn on_drag_enter(&mut self, incoming: Vec<String>, x: i32) -> Result<DROPEFFECT> {
+        self.incoming = incoming;
+        self.on_drag_over(x)
+    }
+
+    fn on_drag_over(&mut self, x: i32) -> Result<DROPEFFECT> {
+        self.hover_at(x)?;
+        Ok(self.drop_action().effect())
+    }
+
+    fn on_drag_leave(&mut self) -> Result<()> {
+        self.incoming.clear();
+        self.on_mouse_leave()
+    }
+
+    fn on_drop(&mut self, x: i32) -> Result<DROPEFFECT> {
+        self.hover_at(x)?;
+        let action = self.drop_action();
+        let effect = action.effect();
+        let files = std::mem::take(&mut self.incoming);
+        self.pending_drop = match action {
+            DropAction::Nothing => None,
+            DropAction::OpenWith(app) => {
+                self.start_bounce(app.clone(), None);
+                Some(Outside::OpenWith(app, files))
+            }
+            DropAction::Recycle => Some(Outside::Recycle(files)),
+            DropAction::Transfer { folder, copy } => Some(Outside::Transfer {
+                folder,
+                files,
+                copy,
+            }),
+            DropAction::Pin { id, before } => {
+                self.roster.pin_before(&id, before.as_deref());
+                save_settings(&self.roster, &self.config);
+                self.refresh()?;
+                None
+            }
+        };
+        if self.pending_drop.is_some() {
+            // SAFETY: Posting a message to our own window.
+            unsafe {
+                let _ = PostMessageW(Some(self.input), DROP_RUN, WPARAM(0), LPARAM(0));
+            }
+        }
+        // The mouse is still over the dock; the next WM_MOUSEMOVE starts a
+        // tracked hover again.
+        self.on_mouse_leave()?;
+        Ok(effect)
+    }
+
+    fn on_release(&mut self) -> Result<Option<Outside>> {
+        self.press = None;
+        let Some(drag) = self.drag.take() else {
+            // SAFETY: Releasing capture we may not hold is harmless.
+            unsafe {
+                let _ = ReleaseCapture();
+            }
+            return self.on_click();
+        };
+        // SAFETY: Same as above.
+        unsafe {
+            let _ = ReleaseCapture();
+        }
+        if drag.removing {
+            self.roster.unpin(&drag.id);
+        }
+        save_settings(&self.roster, &self.config);
+        self.refresh()?;
+        self.leave_if_outside(drag.point)?;
+        Ok(None)
+    }
+
+    /// Capture can be lost mid-drag (Alt+Tab, a system dialog): keep the order
+    /// reached so far.
+    fn cancel_drag(&mut self) -> Result<()> {
+        self.press = None;
+        let Some(drag) = self.drag.take() else {
+            return Ok(());
+        };
+        save_settings(&self.roster, &self.config);
+        self.leave_if_outside(drag.point)?;
+        self.render()
+    }
+
+    fn leave_if_outside(&mut self, point: POINT) -> Result<()> {
+        let Some(stage) = &self.stage else {
+            return Ok(());
+        };
+        let zone = stage.hover_zone;
+        let inside = point.x >= zone.left
+            && point.x < zone.right
+            && point.y >= zone.top
+            && point.y < zone.bottom;
+        if inside {
+            Ok(())
+        } else {
+            self.on_mouse_leave()
+        }
+    }
+
+    fn windows_of(&self, id: &str) -> Vec<isize> {
+        self.windows
+            .iter()
+            .filter(|window| window.app_id == id)
+            .map(|window| window.hwnd)
+            .collect()
+    }
+
+    /// On icon click, launches a closed app or brings its windows to the
+    /// foreground. Does nothing if the app is already in front, as in macOS.
+    fn on_click(&mut self) -> Result<Option<Outside>> {
+        let Some(entry) = self.hovered.and_then(|index| self.entries.get(index)) else {
+            return Ok(None);
+        };
+        let (Some(id), role) = (entry.id.clone(), entry.role) else {
+            return Ok(None);
+        };
+        let windows = self.windows_of(&id);
+
+        Ok(match role {
+            Role::App if windows.is_empty() => {
+                self.start_bounce(id.clone(), None);
+                Some(Outside::Open(id))
+            }
+            Role::App if windows.contains(&tracker::foreground_window()) => None,
+            Role::App => Some(self.activating(windows)),
+            Role::Start => Some(Outside::OpenStart),
+            Role::Window => window_of(&id).map(|hwnd| self.activating(vec![hwnd])),
+            Role::Folder | Role::Trash => Some(Outside::Open(id)),
+        })
+    }
+
+    /// Right-click prepares the menu for the item under the cursor, or the dock
+    /// menu when over empty space or a divider.
+    fn on_right_click(&mut self) -> Result<Option<Outside>> {
+        let Some(stage) = &self.stage else {
+            return Ok(None);
+        };
+        let state = magnify(
+            &stage.layout,
+            self.cursor,
+            self.amount.value,
+            &stage.magnifier,
+        );
+        let target_entry = self.hovered.and_then(|index| {
+            let entry = self.entries.get(index)?;
+            Some((entry.id.clone()?, entry.role, *state.rects.get(index)?))
+        });
+        let gap = (stage.gap / 2.0).round() as i32;
+
+        let (target, items, anchor) = match target_entry {
+            Some((id, role, rect)) => {
+                let windows = self.windows_of(&id);
+                let anchor = POINT {
+                    x: stage.dock_origin.x + (rect.x + rect.width / 2.0).round() as i32,
+                    y: stage.dock_origin.y + rect.y.round() as i32 - gap,
+                };
+                let items = self.entry_menu(&id, role, &windows);
+                (MenuTarget::Entry { id, role, windows }, items, anchor)
+            }
+            None => {
+                let anchor = POINT {
+                    x: stage.dock_origin.x + self.cursor.round() as i32,
+                    y: stage.dock_origin.y - gap,
+                };
+                let hiding = if self.config.auto_hide {
+                    text().turn_hiding_off
+                } else {
+                    text().turn_hiding_on
+                };
+                let items = vec![
+                    MenuItem::action(CMD_TOGGLE_HIDING, hiding),
+                    MenuItem::action(CMD_SETTINGS, text().settings),
+                    MenuItem::Separator,
+                    MenuItem::action(CMD_QUIT_DOCK, text().quit_dock),
+                ];
+                (MenuTarget::Dock, items, anchor)
+            }
+        };
+
+        // Hide the label while the menu is open, as in macOS.
+        self.hovered = None;
+        self.hovering = false;
+        self.render()?;
+        Ok(Some(Outside::Menu(MenuRequest {
+            target,
+            items,
+            anchor,
+            dark: !uses_light_theme(),
+        })))
+    }
+
+    fn entry_menu(&self, id: &str, role: Role, windows: &[isize]) -> Vec<MenuItem> {
+        let is_file = !id.starts_with("shell:") && !id.starts_with("::");
+        let t = text();
+        let mut items = Vec::new();
+        match role {
+            Role::App => {
+                for (index, &hwnd) in windows.iter().take(MENU_WINDOWS).enumerate() {
+                    let title = tracker::title(hwnd);
+                    if !title.is_empty() {
+                        items.push(MenuItem::action(
+                            CMD_WINDOW + index as u32,
+                            shorten(&title, MENU_TITLE_CHARS).replace('&', "&&"),
+                        ));
+                    }
+                }
+                if !items.is_empty() {
+                    items.push(MenuItem::Separator);
+                }
+                let open = if windows.is_empty() {
+                    t.open
+                } else {
+                    t.new_window
+                };
+                items.push(MenuItem::action(CMD_OPEN, open));
+                if id != explorer_id() {
+                    items.push(MenuItem::Action {
+                        command: CMD_TOGGLE_PIN,
+                        label: t.keep_in_dock.into(),
+                        checked: self.roster.is_pinned(id),
+                        enabled: true,
+                    });
+                }
+                if is_file {
+                    items.push(MenuItem::action(CMD_REVEAL, t.show_in_explorer));
+                }
+                if !windows.is_empty() {
+                    items.push(MenuItem::Separator);
+                    items.push(MenuItem::action(CMD_QUIT_APP, t.quit_app));
+                }
+            }
+            Role::Start => items.push(MenuItem::action(CMD_OPEN, t.open)),
+            Role::Window => {
+                items.push(MenuItem::action(CMD_OPEN, t.open));
+                items.push(MenuItem::Separator);
+                items.push(MenuItem::action(CMD_CLOSE_WINDOW, t.close_window));
+            }
+            Role::Folder => {
+                items.push(MenuItem::action(CMD_OPEN, t.open));
+                items.push(MenuItem::action(CMD_REVEAL, t.show_in_explorer));
+            }
+            Role::Trash => {
+                items.push(MenuItem::action(CMD_OPEN, t.open));
+                items.push(MenuItem::Separator);
+                items.push(MenuItem::Action {
+                    command: CMD_EMPTY_BIN,
+                    label: t.empty_bin.into(),
+                    checked: false,
+                    enabled: self.bin_full,
+                });
+            }
+        }
+        items
+    }
+
+    fn on_command(&mut self, target: MenuTarget, command: u32) -> Result<Option<Outside>> {
+        let MenuTarget::Entry { id, role, windows } = target else {
+            return match command {
+                CMD_QUIT_DOCK => Ok(Some(Outside::QuitDock)),
+                CMD_TOGGLE_HIDING => self.toggle_hiding().map(|()| None),
+                CMD_SETTINGS => Ok(Some(Outside::OpenSettings)),
+                _ => Ok(None),
+            };
+        };
+        Ok(match command {
+            CMD_OPEN if role == Role::Start => Some(Outside::OpenStart),
+            CMD_OPEN if role == Role::Window => {
+                window_of(&id).map(|hwnd| self.activating(vec![hwnd]))
+            }
+            CMD_CLOSE_WINDOW => {
+                launcher::close(&window_of(&id).into_iter().collect::<Vec<_>>());
+                None
+            }
+            CMD_OPEN => {
+                if role == Role::App {
+                    self.start_bounce(id.clone(), None);
+                }
+                Some(Outside::Open(id))
+            }
+            CMD_TOGGLE_PIN => {
+                if self.roster.is_pinned(&id) {
+                    self.roster.unpin(&id);
+                } else {
+                    self.roster.pin(&id);
+                }
+                save_settings(&self.roster, &self.config);
+                self.refresh()?;
+                None
+            }
+            CMD_REVEAL => Some(Outside::Reveal(id)),
+            CMD_QUIT_APP => {
+                launcher::close(&windows);
+                None
+            }
+            CMD_EMPTY_BIN => Some(Outside::EmptyBin),
+            window => {
+                let index = window.checked_sub(CMD_WINDOW).map(|index| index as usize);
+                index
+                    .and_then(|index| windows.get(index))
+                    .map(|&hwnd| self.activating(vec![hwnd]))
+            }
+        })
+    }
+
+    /// The settings app saved a change: read it and apply what differs.
+    fn reload_config(&mut self) -> Result<()> {
+        let Ok(Some(saved)) = muelle_config::load(&muelle_config::default_path()) else {
+            return Ok(());
+        };
+        // Pinned and recent apps belong to the dock; the settings app only
+        // changes the rest.
+        let config = Config {
+            pinned: self.config.pinned.clone(),
+            recent: self.config.recent.clone(),
+            ..saved
+        };
+        if config == self.config {
+            return Ok(());
+        }
+        if config.language != self.config.language {
+            strings::set_language(config.language);
+            // Labels are drawn text: redraw them in the new language.
+            self.assets_for = (0.0, false, 0);
+        }
+        if !config.genie {
+            self.restore_transitions();
+        }
+        if config.auto_hide != self.config.auto_hide {
+            self.slide.target = if config.auto_hide { 1.0 } else { 0.0 };
+            self.last_frame = Instant::now();
+        }
+        self.config = config;
+        self.calm_windows();
+        self.refresh()
+    }
+
+    fn toggle_hiding(&mut self) -> Result<()> {
+        self.config.auto_hide = !self.config.auto_hide;
+        save_settings(&self.roster, &self.config);
+        self.slide.target = if self.config.auto_hide { 1.0 } else { 0.0 };
+        self.last_frame = Instant::now();
+        self.refresh()
+    }
+
+    fn set_bin_full(&mut self, full: bool) -> Result<()> {
+        if full == self.bin_full {
+            return Ok(());
+        }
+        self.bin_full = full;
+        self.assets.remove(recycle_bin::PARSING_NAME);
+        self.refresh()
+    }
+
+    fn start_bounce(&mut self, id: String, until: Option<f32>) {
+        self.bounces.entry(id).or_insert(Bounce {
+            start: Instant::now(),
+            until,
+        });
+        self.last_frame = Instant::now();
+    }
+
+    fn on_attention(&mut self, hwnd: isize) {
+        if hwnd == tracker::foreground_window() {
+            return;
+        }
+        if let Some(window) = self.windows.iter().find(|window| window.hwnd == hwnd) {
+            self.start_bounce(
+                window.app_id.clone(),
+                Some(ATTENTION_HOPS * bounce::HOP_SECONDS),
+            );
+        }
+    }
+
+    /// Refreshes open windows and recomposes the dock if anything changed.
+    fn sync(&mut self) -> Result<()> {
+        self.windows = self.tracker.list();
+        self.calm_windows();
+        let recent_before = self.roster.recent().to_vec();
+        let changed = self
+            .roster
+            .sync(self.windows.iter().map(|window| window.app_id.as_str()));
+        if self.roster.recent() != recent_before.as_slice() {
+            save_settings(&self.roster, &self.config);
+        }
+
+        // The launching app has opened a window, so finish its current bounce.
+        let now = Instant::now();
+        for (id, bounce) in &mut self.bounces {
+            if bounce.until.is_none() && self.roster.is_running(id) {
+                let elapsed = now.duration_since(bounce.start).as_secs_f32();
+                bounce.until = Some(bounce::end_of_hop(elapsed));
+            }
+        }
+
+        let minimized_before = self.minimized.clone();
+        let now_minimized: Vec<isize> = self
+            .windows
+            .iter()
+            .filter(|window| window.minimized)
+            .map(|window| window.hwnd)
+            .collect();
+        // A window still flying in was added at minimize start and may not
+        // report as minimized yet.
+        let flights = &self.flights;
+        self.minimized.retain(|hwnd| {
+            now_minimized.contains(hwnd) || flights.iter().any(|flight| flight.hwnd == *hwnd)
+        });
+        for hwnd in now_minimized {
+            if !self.minimized.contains(&hwnd) {
+                self.minimized.push(hwnd);
+            }
+        }
+        self.thumbnails.sync(&self.minimized);
+
+        if changed || self.minimized != minimized_before {
+            self.refresh()?;
+        }
+        let newly_minimized: Vec<isize> = self
+            .minimized
+            .iter()
+            .copied()
+            .filter(|hwnd| !minimized_before.contains(hwnd))
+            .collect();
+        if self.started && !self.fullscreen {
+            self.start_flights(&newly_minimized);
+        }
+        self.started = true;
+        // A foreground-window change may mean an app entered or exited full-screen mode.
+        self.update_fullscreen()
+    }
+
+    fn tick(&mut self) -> Result<()> {
+        let now = Instant::now();
+        let flying = self.flights.len();
+        let gfx = &self.gfx;
+        self.flights.retain_mut(|flight| flight.step(gfx, now));
+        if self.flights.len() != flying {
+            // Confirm the landed windows really are minimized.
+            // SAFETY: Timer on our own window.
+            unsafe { SetTimer(Some(self.input), SYNC_TIMER, SYNC_DELAY_MS, None) };
+        }
+        let dt = now.duration_since(self.last_frame).as_secs_f32();
+        self.amount.step(dt);
+        self.slide.step(dt);
+        self.last_frame = now;
+
+        self.bounces.retain(|_, bounce| {
+            let elapsed = now.duration_since(bounce.start).as_secs_f32();
+            let until = bounce.until.unwrap_or(LAUNCH_BOUNCE_LIMIT);
+            elapsed < until
+        });
+        self.render()
+    }
+
+    /// Hides the taskbar and reserves its space again. After Explorer restarts,
+    /// both the taskbar and AppBar registrations are new.
+    fn retake_taskbar(&mut self) -> Result<()> {
+        taskbar::take_over();
+        self.appbar = None;
+        self.appbar = AppBar::register(self.visual, APPBAR_CALLBACK);
+        self.stage = None;
+        self.refresh()
+    }
+
+    /// Hides the dock while the foreground window covers the entire screen and
+    /// shows it again when it no longer does.
+    fn update_fullscreen(&mut self) -> Result<()> {
+        let Some(monitor) = primary_monitor() else {
+            return Ok(());
+        };
+        let fullscreen = tracker::foreground_is_fullscreen(monitor.screen);
+        if fullscreen == self.fullscreen {
+            return Ok(());
+        }
+        self.fullscreen = fullscreen;
+        if fullscreen {
+            self.hovering = false;
+            self.amount = Spring::at(0.0, HOVER_OMEGA);
+            self.press = None;
+            self.drag = None;
+        }
+        self.place_windows()
+    }
+
+    fn on_appbar_notice(&mut self, notice: usize) -> Result<()> {
+        match notice {
+            // Windows notifications may be missing or unreliable, so use them
+            // only as a signal to recheck the state.
+            ABN_FULLSCREENAPP => self.update_fullscreen(),
+            // The dock's own reservation can trigger this. The strip changes
+            // only with the screen or dock size, already handled by `refresh`.
+            _ => Ok(()),
+        }
+    }
+
+    fn is_animating(&self) -> bool {
+        !self.amount.is_settled()
+            || !self.slide.is_settled()
+            || !self.bounces.is_empty()
+            || !self.flights.is_empty()
+    }
+}
+
+/// Runs `action` on the app and logs failures; a transient failure must not
+/// terminate the dock.
+fn with_app(what: &str, action: impl FnOnce(&mut App) -> Result<()>) {
+    with_app_then(what, |app| action(app).map(|()| None));
+}
+
+/// Like `with_app`, but `action` can request work to perform after releasing
+/// the app state (see [`Outside`]).
+fn with_app_then(what: &str, action: impl FnOnce(&mut App) -> Result<Option<Outside>>) {
+    let outside = APP.with(|cell| {
+        // Modal calls run outside the borrow, so this should not happen. If it
+        // does, discard the message rather than terminating the dock.
+        let Ok(mut app) = cell.try_borrow_mut() else {
+            eprintln!("muelle: {what}: el dock estaba ocupado; se ignora");
+            return None;
+        };
+        match app.as_mut().map(action) {
+            Some(Ok(outside)) => outside,
+            Some(Err(error)) => {
+                eprintln!("muelle: {what}: {error:#}");
+                None
+            }
+            None => None,
+        }
+    });
+    if let Some(outside) = outside {
+        run_outside(outside);
+    }
+}
+
+unsafe extern "system" fn on_win_event(
+    _hook: HWINEVENTHOOK,
+    event: u32,
+    hwnd: HWND,
+    object: i32,
+    _child: i32,
+    _thread: u32,
+    _time: u32,
+) {
+    if event == EVENT_SYSTEM_MINIMIZESTART && object == OBJID_WINDOW.0 {
+        with_app("minimizar", |app| app.on_minimize_start(hwnd.0 as isize));
+    }
+}
+
+/// Like `with_app`, for callers that need a value back (OLE callbacks).
+fn with_app_value<T: Default>(what: &str, action: impl FnOnce(&mut App) -> Result<T>) -> T {
+    let mut value = T::default();
+    with_app(what, |app| {
+        value = action(app)?;
+        Ok(())
+    });
+    value
+}
+
+pub fn drag_enter(files: Vec<String>, x: i32, _y: i32) -> DROPEFFECT {
+    with_app_value("arrastre de archivos", |app| app.on_drag_enter(files, x))
+}
+
+pub fn drag_over(x: i32, _y: i32) -> DROPEFFECT {
+    with_app_value("arrastre de archivos", |app| app.on_drag_over(x))
+}
+
+pub fn drag_leave() {
+    with_app("arrastre de archivos", App::on_drag_leave);
+}
+
+pub fn drop_files(x: i32, _y: i32) -> DROPEFFECT {
+    with_app_value("soltar archivos", |app| app.on_drop(x))
+}
+
+/// Checks the recycle bin on a background thread by scanning each drive
+/// (measured at 50–75 ms), so the UI is not blocked. The result arrives via
+/// `BIN_STATE`.
+fn query_bin_in_background() {
+    let window = MAIN_WINDOW.load(Ordering::Relaxed);
+    thread::spawn(move || {
+        // SAFETY: COM is initialized and released on this thread; the message
+        // is harmless if the window no longer exists.
+        unsafe {
+            let com = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+            let full = recycle_bin::has_items();
+            if com.is_ok() {
+                CoUninitialize();
+            }
+            let _ = PostMessageW(
+                Some(HWND(window as *mut _)),
+                BIN_STATE,
+                WPARAM(usize::from(full)),
+                LPARAM(0),
+            );
+        }
+    });
+}
+
+fn main_window() -> HWND {
+    HWND(MAIN_WINDOW.load(Ordering::Relaxed) as *mut _)
+}
+
+fn run_outside(outside: Outside) {
+    let report = |result: Result<(), launcher::LaunchError>| {
+        if let Err(error) = result {
+            eprintln!("muelle: {error}");
+        }
+    };
+    match outside {
+        Outside::Open(id) => report(launcher::open(&id)),
+        Outside::OpenStart => launcher::open_start_menu(),
+        Outside::Activate(windows) => launcher::activate(&windows),
+        Outside::Reveal(path) => report(launcher::reveal(&path)),
+        Outside::OpenWith(app, files) => report(launcher::open_with(&app, &files)),
+        Outside::Recycle(paths) => files::recycle(main_window(), &paths),
+        Outside::Transfer {
+            folder,
+            files: paths,
+            copy,
+        } => files::transfer(main_window(), &paths, &folder, copy),
+        Outside::EmptyBin => {
+            let owner = HWND(MAIN_WINDOW.load(Ordering::Relaxed) as *mut _);
+            recycle_bin::empty(owner);
+        }
+        Outside::QuitDock => request_quit(),
+        Outside::OpenSettings => {
+            // The settings app is installed next to the dock.
+            let settings = env::current_exe()
+                .ok()
+                .map(|exe| exe.with_file_name("muelle-settings.exe"));
+            match settings {
+                Some(path) if path.exists() => report(launcher::open(&path.to_string_lossy())),
+                _ => eprintln!("muelle: no se encontró muelle-settings.exe junto al dock"),
+            }
+        }
+        Outside::Menu(request) => {
+            let owner = HWND(MAIN_WINDOW.load(Ordering::Relaxed) as *mut _);
+            let chosen = menu::show(owner, &request.items, request.anchor, request.dark);
+            if let Some(command) = chosen {
+                with_app_then("orden del menú", |app| {
+                    app.on_command(request.target, command)
+                });
+            }
+        }
+    }
+}
+
+unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LRESULT {
+    match msg {
+        WM_MOUSEMOVE => with_app("movimiento del ratón", App::on_mouse_move),
+        WM_MOUSELEAVE => with_app("salida del ratón", App::on_mouse_leave),
+        WM_LBUTTONDOWN => with_app("pulsación", App::on_press),
+        WM_LBUTTONUP => with_app_then("clic", App::on_release),
+        WM_CAPTURECHANGED => {
+            // SAFETY: Posting a message to our own window.
+            unsafe {
+                let _ = PostMessageW(Some(hwnd), DRAG_CANCELLED, WPARAM(0), LPARAM(0));
+            }
+        }
+        DRAG_CANCELLED => with_app("arrastre", App::cancel_drag),
+        DROP_RUN => with_app_then("soltar archivos", |app| Ok(app.pending_drop.take())),
+        WM_RBUTTONUP => with_app_then("menú", App::on_right_click),
+        BIN_STATE => with_app("papelera", |app| app.set_bin_full(w.0 != 0)),
+        BIN_CHANGED => {
+            // SAFETY: `hwnd` is this live window on its owning UI thread.
+            unsafe { SetTimer(Some(hwnd), BIN_TIMER, BIN_DELAY_MS, None) };
+        }
+        WM_SETTINGCHANGE if w.0 == SPI_SETWORKAREA => {}
+        WM_SETTINGCHANGE | WM_DISPLAYCHANGE | WM_DPICHANGED => {
+            // SAFETY: `hwnd` is our window; scheduling the same timer resets it.
+            unsafe { SetTimer(Some(hwnd), REFRESH_TIMER, REFRESH_DELAY_MS, None) };
+        }
+        WM_TIMER if w.0 == BIN_TIMER => {
+            // SAFETY: `hwnd` is this live window on its owning UI thread.
+            unsafe {
+                let _ = KillTimer(Some(hwnd), w.0);
+            }
+            query_bin_in_background();
+        }
+        WM_TIMER if w.0 == HIDE_TIMER => {
+            // SAFETY: Same as above.
+            unsafe {
+                let _ = KillTimer(Some(hwnd), w.0);
+            }
+            with_app("ocultación", App::hide_if_unused);
+        }
+        WM_TIMER if w.0 == TRIM_TIMER => {
+            // SAFETY: `hwnd` is this live window on its owning UI thread.
+            unsafe {
+                let _ = KillTimer(Some(hwnd), w.0);
+            }
+            with_app("recorte de memoria", |app| {
+                app.trim_if_idle();
+                Ok(())
+            });
+        }
+        WM_TIMER if [REFRESH_TIMER, SYNC_TIMER, TASKBAR_TIMER].contains(&w.0) => {
+            // SAFETY: `hwnd` is this live window on its owning UI thread.
+            unsafe {
+                let _ = KillTimer(Some(hwnd), w.0);
+            }
+            match w.0 {
+                REFRESH_TIMER => with_app("recomposición del dock", App::refresh),
+                SYNC_TIMER => with_app("lectura de ventanas", App::sync),
+                _ => with_app("ocultar la barra de Windows", App::retake_taskbar),
+            }
+        }
+        APPBAR_CALLBACK => with_app("aviso de AppBar", |app| app.on_appbar_notice(w.0)),
+        // Once the taskbar is set to auto-hide, the dock strip moves to the
+        // screen edge, so reserve and reposition it again.
+        TASKBAR_TAKEN => with_app("reserva de espacio", |app| {
+            app.stage = None;
+            app.refresh()
+        }),
+        WM_POWERBROADCAST if w.0 == PBT_APMRESUMEAUTOMATIC => {
+            // SAFETY: `hwnd` is this live window on its owning UI thread.
+            unsafe { SetTimer(Some(hwnd), TASKBAR_TIMER, TASKBAR_DELAY_MS, None) };
+        }
+        _ if CONFIG_CHANGED.get() == Some(&msg) => with_app("ajustes", App::reload_config),
+        _ if TASKBAR_CREATED.get() == Some(&msg) => {
+            // SAFETY: `hwnd` is this live window on its owning UI thread.
+            unsafe { SetTimer(Some(hwnd), TASKBAR_TIMER, TASKBAR_DELAY_MS, None) };
+        }
+        WM_DESTROY => unsafe { PostQuitMessage(0) },
+        _ if SHELL_HOOK.get() == Some(&msg) => match w.0 {
+            // Changing the foreground window does not change the app list; it
+            // can only enter or exit full-screen mode.
+            HSHELL_WINDOWACTIVATED | HSHELL_RUDEAPPACTIVATED => {
+                with_app("ventana activa", App::update_fullscreen);
+            }
+            code => {
+                if code == HSHELL_FLASH {
+                    with_app("aviso de atención", |app| {
+                        app.on_attention(l.0);
+                        Ok(())
+                    });
+                }
+                // SAFETY: `hwnd` is this live window on its owning UI thread.
+                unsafe { SetTimer(Some(hwnd), SYNC_TIMER, SYNC_DELAY_MS, None) };
+            }
+        },
+        _ => return unsafe { DefWindowProcW(hwnd, msg, w, l) },
+    }
+    LRESULT(0)
+}
+
+fn is_animating() -> bool {
+    APP.with_borrow(|app| app.as_ref().is_some_and(App::is_animating))
+}
+
+/// Main loop. Sleeps while idle (0% CPU) and advances one frame per display
+/// refresh while an animation is running.
+///
+/// Outside animations, the thread uses EcoQoS because remaining work (window
+/// tracking and recomposition) is not time-sensitive.
+fn message_loop() {
+    let mut msg = MSG::default();
+    let mut was_animating = None;
+    unsafe {
+        loop {
+            let animating = is_animating();
+            if was_animating != Some(animating) {
+                power::set_thread_efficiency(!animating);
+                if was_animating == Some(true) {
+                    with_app("recorte de memoria", |app| {
+                        app.schedule_trim();
+                        Ok(())
+                    });
+                }
+                was_animating = Some(animating);
+            }
+            if animating {
+                while PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).as_bool() {
+                    if msg.message == WM_QUIT {
+                        return;
+                    }
+                    DispatchMessageW(&msg);
+                }
+                with_app("animación", App::tick);
+                // Wait for the next refresh to pace animation without timers.
+                let _ = DwmFlush();
+            } else {
+                if !GetMessageW(&mut msg, None, 0, 0).as_bool() {
+                    return;
+                }
+                DispatchMessageW(&msg);
+            }
+        }
+    }
+}
+
+pub fn run() -> Result<()> {
+    let gfx = Gfx::new()?;
+    // SAFETY: The thread is already a single-threaded COM apartment (see
+    // `main`); OLE adds drag and drop on top of it and is released at the end.
+    unsafe { OleInitialize(None)? };
+
+    unsafe {
+        let instance = GetModuleHandleW(None)?;
+        let class = WINDOW_CLASS;
+        RegisterClassW(&WNDCLASSW {
+            lpfnWndProc: Some(wndproc),
+            hInstance: instance.into(),
+            hCursor: LoadCursorW(None, IDC_ARROW)?,
+            lpszClassName: class,
+            ..Default::default()
+        });
+
+        let base = WS_EX_NOREDIRECTIONBITMAP | WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE;
+        let create = |extra: WINDOW_EX_STYLE| {
+            CreateWindowExW(
+                base | extra,
+                class,
+                w!("Muelle"),
+                WS_POPUP,
+                0,
+                0,
+                0,
+                0,
+                None,
+                None,
+                Some(instance.into()),
+                None,
+            )
+        };
+        let visual = create(WS_EX_LAYERED | WS_EX_TRANSPARENT)?;
+        let input = create(WINDOW_EX_STYLE::default())?;
+
+        // Without this, the system backdrop brush appears black.
+        let enable = BOOL::from(true);
+        DwmSetWindowAttribute(
+            visual,
+            DWMWA_USE_HOSTBACKDROPBRUSH,
+            (&raw const enable).cast(),
+            size_of::<BOOL>() as u32,
+        )?;
+
+        let target = gfx
+            .compositor
+            .cast::<ICompositorDesktopInterop>()?
+            .CreateDesktopWindowTarget(visual, true)?;
+
+        muelle_config::migrate_legacy_folder();
+        let config = load_config();
+        strings::set_language(config.language);
+        let roster = roster_from(&config);
+        let auto_hide = config.auto_hide;
+        let mut app = App {
+            visual,
+            input,
+            gfx,
+            target,
+            appbar: AppBar::register(visual, APPBAR_CALLBACK),
+            fullscreen: false,
+            roster,
+            tracker: WindowTracker::default(),
+            windows: Vec::new(),
+            entries: Vec::new(),
+            icons: IconCache::default(),
+            downloads: downloads_folder(),
+            bin_full: false,
+            _bin_watch: BinWatch::register(input, BIN_CHANGED),
+            assets: HashMap::new(),
+            assets_for: (0.0, false, 0),
+            remove_label: None,
+            config,
+            slide: Spring::at(if auto_hide { 1.0 } else { 0.0 }, SLIDE_OMEGA),
+            press: None,
+            drag: None,
+            incoming: Vec::new(),
+            pending_drop: None,
+            bounces: HashMap::new(),
+            minimized: Vec::new(),
+            thumbnails: Thumbnails::new(visual),
+            flights: Vec::new(),
+            calmed: Vec::new(),
+            started: false,
+            stage: None,
+            hovering: false,
+            hovered: None,
+            cursor: 0.0,
+            amount: Spring::at(0.0, HOVER_OMEGA),
+            last_frame: Instant::now(),
+        };
+        let _ = TASKBAR_CREATED.set(RegisterWindowMessageW(w!("TaskbarCreated")));
+        let _ = CONFIG_CHANGED.set(RegisterWindowMessageW(
+            muelle_shell::dock_link::CONFIG_CHANGED,
+        ));
+        MAIN_WINDOW.store(visual.0 as isize, Ordering::Relaxed);
+        // The dock inherits the "ignore Ctrl+C" attribute from its parent
+        // (some tools enable it), so clear it to ensure Ctrl+C is handled.
+        let _ = SetConsoleCtrlHandler(None, false);
+        let _ = SetConsoleCtrlHandler(Some(on_console_ctrl), true);
+
+        app.sync()?;
+        // `sync` recomposes only when the list changes; run it unconditionally at startup.
+        if app.stage.is_none() {
+            app.refresh()?;
+        }
+
+        // The shell notifies this window when a window is created, closed,
+        // activated, or requests attention.
+        let _ = SHELL_HOOK.set(RegisterWindowMessageW(w!("SHELLHOOK")));
+        RegisterShellHookWindow(input).ok()?;
+        // Delivered through this thread's message loop; no code runs in other processes.
+        let minimize_hook = SetWinEventHook(
+            EVENT_SYSTEM_MINIMIZESTART,
+            EVENT_SYSTEM_MINIMIZESTART,
+            None,
+            Some(on_win_event),
+            0,
+            0,
+            WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS,
+        );
+        MINIMIZE_HOOK.store(minimize_hook.0 as isize, Ordering::Relaxed);
+        let target: IDropTarget = DropTarget.into();
+        RegisterDragDrop(input, &target)?;
+        DROP_WINDOW.store(input.0 as isize, Ordering::Relaxed);
+
+        APP.set(Some(app));
+    }
+
+    // Hiding the taskbar is a synchronous Explorer call that takes 50–500 ms
+    // depending on load. Run it off the UI thread after the dock is visible.
+    let visual_window = MAIN_WINDOW.load(Ordering::Relaxed);
+    query_bin_in_background();
+    let taking_over = thread::spawn(move || {
+        taskbar::take_over();
+        // SAFETY: Only a message is sent; if the window no longer exists, the call has no effect.
+        unsafe {
+            let _ = PostMessageW(
+                Some(HWND(visual_window as *mut _)),
+                TASKBAR_TAKEN,
+                WPARAM(0),
+                LPARAM(0),
+            );
+        }
+    });
+
+    message_loop();
+    // SAFETY: The drop target was registered on this window in this thread.
+    unsafe {
+        let _ = RevokeDragDrop(HWND(DROP_WINDOW.load(Ordering::Relaxed) as *mut _));
+        let _ = UnhookWinEvent(HWINEVENTHOOK(
+            MINIMIZE_HOOK.load(Ordering::Relaxed) as *mut _
+        ));
+    }
+    APP.with_borrow_mut(|app| {
+        if let Some(app) = app {
+            app.restore_transitions();
+        }
+    });
+    APP.set(None);
+    // SAFETY: Balances `OleInitialize` above, on the same thread.
+    unsafe { OleUninitialize() };
+    // Wait for taskbar takeover to finish before restoring it.
+    let _ = taking_over.join();
+    Ok(())
+}

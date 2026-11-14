@@ -1,0 +1,24 @@
+import { invoke } from "@tauri-apps/api/core";
+
+export type Language = "auto" | "es" | "en";
+
+/** Mirrors `muelle_config::Config`. */
+export interface Config {
+  version: number;
+  pinned: string[];
+  recent: string[];
+  autoHide: boolean;
+  iconSize: number;
+  magnification: boolean;
+  magnifiedSize: number;
+  genie: boolean;
+  language: Language;
+}
+
+export const ICON_SIZE = { min: 32, max: 96 } as const;
+export const MAX_MAGNIFIED_SIZE = 160;
+
+export const loadConfig = () => invoke<Config>("get_config");
+export const saveConfig = (config: Config) => invoke<Config>("set_config", { config });
+export const getAutostart = () => invoke<boolean>("get_autostart");
+export const setAutostart = (enabled: boolean) => invoke<void>("set_autostart", { enabled });

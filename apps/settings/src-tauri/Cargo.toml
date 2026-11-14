@@ -1,0 +1,23 @@
+[package]
+name = "muelle-settings"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+muelle-config.workspace = true
+muelle-shell.workspace = true
+serde.workspace = true
+tauri = { version = "2", features = [] }
+
+[features]
+# Serve the bundled front end instead of the Vite dev server. On by default so
+# a plain `cargo build` yields a working app; `tauri dev` turns it off.
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]

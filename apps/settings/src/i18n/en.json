@@ -1,0 +1,20 @@
+{
+  "dock": "Dock",
+  "system": "System",
+  "size": "Size",
+  "small": "Small",
+  "large": "Large",
+  "magnification": "Magnification",
+  "magnificationHint": "Icons grow as the pointer passes over them.",
+  "magnifiedSize": "Magnified size",
+  "autoHide": "Automatically hide and show the Dock",
+  "autoHideHint": "It reappears when you touch the bottom edge of the screen.",
+  "genie": "Genie effect when minimizing",
+  "genieHint": "While it is on, windows do not use the Windows animations for maximizing or closing.",
+  "autostart": "Open Muelle at login",
+  "language": "Language",
+  "languageAuto": "Automatic",
+  "close": "Close",
+  "minimize": "Minimize",
+  "saveError": "The settings could not be saved."
+}

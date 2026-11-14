@@ -1,0 +1,20 @@
+{
+  "dock": "Dock",
+  "system": "Sistema",
+  "size": "Tamaño",
+  "small": "Pequeño",
+  "large": "Grande",
+  "magnification": "Ampliación",
+  "magnificationHint": "Los iconos crecen al pasar el cursor.",
+  "magnifiedSize": "Tamaño ampliado",
+  "autoHide": "Ocultar y mostrar el Dock automáticamente",
+  "autoHideHint": "Reaparece al tocar el borde inferior de la pantalla.",
+  "genie": "Efecto genio al minimizar",
+  "genieHint": "Mientras está activo, las ventanas no usan las animaciones de Windows al maximizar ni al cerrar.",
+  "autostart": "Abrir Muelle al iniciar sesión",
+  "language": "Idioma",
+  "languageAuto": "Automático",
+  "close": "Cerrar",
+  "minimize": "Minimizar",
+  "saveError": "No se pudieron guardar los ajustes."
+}
