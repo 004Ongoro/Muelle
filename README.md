@@ -1,6 +1,6 @@
 <div align="center">
   
-<img width="50%" alt="169e658d-4f67-4932-8e9b-480dd2536d90 (1)" src="https://github.com/user-attachments/assets/72a84b9a-7a47-4ca7-acc8-580c3ed350d7" />
+<img width="50%" alt="Frame 1116606779" src="https://github.com/user-attachments/assets/8c715a53-a0df-4780-9dd4-09ce3ccd9043" />
 
   **A lightweight, macOS-inspired dock for Windows 11.**
 
