@@ -1,18 +1,19 @@
 import { site } from "@/data/site";
 
 export const navigation = [
-  { label: "How", href: "#how" },
-  { label: "Features", href: "#features" },
-  { label: "Install", href: "#install" },
+  { label: "Dock", href: "#dock" },
+  { label: "Settings", href: "#customize" },
+  { label: "Reversible", href: "#safety" },
 ] as const;
 
 export const footerGroups = [
   {
     title: "Product",
     links: [
-      { label: "How it works", href: "#how", external: false },
-      { label: "Features", href: "#features", external: false },
-      { label: "Install", href: "#install", external: false },
+      { label: "The Dock", href: "#dock", external: false },
+      { label: "Settings", href: "#customize", external: false },
+      { label: "Reversible", href: "#safety", external: false },
+      { label: "Download", href: "#download", external: false },
     ],
   },
   {

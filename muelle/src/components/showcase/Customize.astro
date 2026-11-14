@@ -1,0 +1,190 @@
+---
+import { Image } from "astro:assets";
+import wallpaper from "@/assets/wallpapers/desktop-02.jpg";
+import Section from "@/components/layout/Section.astro";
+import SectionIntro from "@/components/showcase/SectionIntro.astro";
+import {
+  customizeIntro,
+  previewIcons,
+  settingsDefaults as d,
+  settingsText,
+  type SettingsKey,
+} from "@/data/showcase";
+import "@/styles/showcase.css";
+
+const t = settingsText.en;
+const tx = (key: SettingsKey) => ({ "data-t": key });
+const checked = (on: boolean) => (on ? "true" : "false");
+---
+
+<Section id="customize">
+  <SectionIntro {...customizeIntro} />
+
+  <div class="custom" data-customize data-r>
+    <div class="mac-window settings" role="group" aria-label="Muelle Settings, interactive replica">
+      <aside class="settings-side">
+        <div class="mac-lights" aria-hidden="true"><i></i><i></i><i></i></div>
+        <nav class="settings-nav">
+          <button type="button" data-pane="dock" aria-current="page">
+            <span class="settings-glyph" aria-hidden="true">▭</span>
+            <span {...tx("dock")}>{t.dock}</span>
+          </button>
+          <button type="button" data-pane="system">
+            <span class="settings-glyph" aria-hidden="true">⚙</span>
+            <span {...tx("system")}>{t.system}</span>
+          </button>
+        </nav>
+      </aside>
+
+      <div class="settings-main">
+        <p class="settings-title" data-pane-title>{t.dock}</p>
+
+        <div class="settings-body" data-view="dock">
+          <div class="settings-card">
+            <div class="settings-row">
+              <span class="settings-label" {...tx("size")}>{t.size}</span>
+              <span class="mac-range-wrap">
+                <small {...tx("small")}>{t.small}</small>
+                <input
+                  type="range"
+                  class="mac-range"
+                  aria-label={t.size}
+                  data-setting="iconSize"
+                  min={d.iconSizeMin}
+                  max={d.iconSizeMax}
+                  value={d.iconSize}
+                />
+                <small {...tx("large")}>{t.large}</small>
+              </span>
+            </div>
+            <div class="settings-row">
+              <span class="settings-text">
+                <span class="settings-label" {...tx("magnification")}>{t.magnification}</span>
+                <span class="settings-hint" {...tx("magnificationHint")}>{t.magnificationHint}</span>
+              </span>
+              <button
+                type="button"
+                role="switch"
+                class="mac-switch"
+                aria-checked={checked(d.magnification)}
+                aria-label={t.magnification}
+                data-setting="magnification"><i></i></button
+              >
+            </div>
+            <div class="settings-row">
+              <span class="settings-label" {...tx("magnifiedSize")}>{t.magnifiedSize}</span>
+              <span class="mac-range-wrap">
+                <small {...tx("small")}>{t.small}</small>
+                <input
+                  type="range"
+                  class="mac-range"
+                  aria-label={t.magnifiedSize}
+                  data-setting="magnifiedSize"
+                  min={d.iconSize}
+                  max={d.magnifiedSizeMax}
+                  value={d.magnifiedSize}
+                />
+                <small {...tx("large")}>{t.large}</small>
+              </span>
+            </div>
+          </div>
+
+          <div class="settings-card">
+            {
+              (
+                [
+                  ["autoHide", "autoHideHint", d.autoHide],
+                  ["menuBar", "menuBarHint", d.menuBar],
+                  ["menuBarAutoHide", "menuBarAutoHideHint", d.menuBarAutoHide],
+                  ["genie", "genieHint", d.genie],
+                ] as const
+              ).map(([key, hint, on]) => (
+                <div class="settings-row" data-row={key}>
+                  <span class="settings-text">
+                    <span class="settings-label" {...tx(key)}>
+                      {t[key]}
+                    </span>
+                    <span class="settings-hint" {...tx(hint)}>
+                      {t[hint]}
+                    </span>
+                  </span>
+                  <button
+                    type="button"
+                    role="switch"
+                    class="mac-switch"
+                    aria-checked={checked(on)}
+                    aria-label={t[key]}
+                    data-setting={key}
+                  >
+                    <i />
+                  </button>
+                </div>
+              ))
+            }
+          </div>
+        </div>
+
+        <div class="settings-body" data-view="system" hidden>
+          <div class="settings-card">
+            <div class="settings-row">
+              <span class="settings-label" {...tx("autostart")}>{t.autostart}</span>
+              <button
+                type="button"
+                role="switch"
+                class="mac-switch"
+                aria-checked={checked(d.autostart)}
+                aria-label={t.autostart}
+                data-setting="autostart"><i></i></button
+              >
+            </div>
+            <div class="settings-row">
+              <span class="settings-label" {...tx("language")}>{t.language}</span>
+              <span class="mac-seg" role="radiogroup" aria-label={t.language}>
+                <button type="button" role="radio" aria-checked="true" data-lang="auto" {...tx("languageAuto")}
+                  >{t.languageAuto}</button
+                >
+                <button type="button" role="radio" aria-checked="false" data-lang="es">Español</button>
+                <button type="button" role="radio" aria-checked="false" data-lang="en">English</button>
+              </span>
+            </div>
+          </div>
+          <div class="settings-card">
+            <div class="settings-row">
+              <span class="settings-text">
+                <span class="settings-label" {...tx("updates")}>{t.updates}</span>
+                <span class="settings-hint" data-update-status>{t.updatesCurrent}</span>
+              </span>
+              <button type="button" class="mac-button" data-update {...tx("updatesCheck")}>{t.updatesCheck}</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="preview" data-preview aria-label="Live preview of the dock" role="img">
+      <Image src={wallpaper} alt="" class="preview-wall" widths={[480, 960]} sizes="(min-width: 1024px) 480px, 100vw" />
+      <div class="preview-bar" data-preview-bar>
+        <b>File Explorer</b>
+        <span class="tabular-nums" data-clock>9:41</span>
+      </div>
+      <div class="preview-dock" data-preview-dock>
+        {previewIcons.map((icon) => <Image src={icon} alt="" width={128} height={128} />)}
+      </div>
+    </div>
+
+    <script type="application/json" is:inline data-settings-text set:html={JSON.stringify(settingsText)} />
+  </div>
+</Section>
+
+<script>
+  import { initCustomize } from "@/scripts/customize";
+  import { initReveal } from "@/scripts/reveal";
+  import { initClock } from "@/scripts/clock";
+
+  const section = document.querySelector<HTMLElement>("#customize");
+  if (section) {
+    initReveal(section);
+    initCustomize(section);
+  }
+  initClock();
+</script>

@@ -34,22 +34,4 @@ export function initReveal(root: HTMLElement) {
         }),
     });
   });
-
-  const pipe = root.querySelector<HTMLElement>(".pipe");
-  if (!pipe) return;
-
-  // The connectors read `--w` from the node, so they grow out of it.
-  ScrollTrigger.create({
-    trigger: pipe,
-    start: "top 75%",
-    once: true,
-          onEnter: () => {
-        // The connector's CSS default is already 1, so it has to be driven from 0 to grow.
-        gsap.fromTo(
-          pipe.querySelectorAll(".node"),
-          { "--w": 0 },
-          { "--w": 1, duration: 0.8, stagger: 0.1, ease: "power2.out" },
-        );
-      },
-  });
 }

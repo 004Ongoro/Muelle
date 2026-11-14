@@ -1,11 +1,11 @@
 ---
 import SiteFooter from "@/components/layout/SiteFooter.astro";
 import SiteHeader from "@/components/layout/SiteHeader.astro";
-import ClosingCta from "@/components/sections/ClosingCta.astro";
-import Features from "@/components/sections/Features.astro";
 import Hero from "@/components/sections/Hero.astro";
-import HowItWorks from "@/components/sections/HowItWorks.astro";
-import Install from "@/components/sections/Install.astro";
+import Customize from "@/components/showcase/Customize.astro";
+import DockAnatomy from "@/components/showcase/DockAnatomy.astro";
+import Download from "@/components/showcase/Download.astro";
+import Reversible from "@/components/showcase/Reversible.astro";
 import { site } from "@/data/site";
 import BaseLayout from "@/layouts/BaseLayout.astro";
 ---
@@ -15,10 +15,10 @@ import BaseLayout from "@/layouts/BaseLayout.astro";
 
   <main>
     <Hero />
-    <HowItWorks />
-    <Features />
-    <Install />
-    <ClosingCta />
+    <DockAnatomy />
+    <Customize />
+    <Reversible />
+    <Download />
   </main>
 
   <SiteFooter />
