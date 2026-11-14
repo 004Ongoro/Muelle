@@ -2,7 +2,7 @@
 // below the fold can be captured after scrolling (headless --screenshot cannot scroll).
 // Usage: node .shots/shot.mjs <url> <out.png> <width> <height> <selector|y>
 import { spawn } from "node:child_process";
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 
 const CHROME = "C:/Program Files/Google/Chrome/Application/chrome.exe";
 const PORT = 9333;
@@ -94,6 +94,16 @@ try {
   await send("Runtime.evaluate", { expression: `scrollTo(0, ${scroll})` });
   await sleep(1800);
 
+  if (process.env.PROBE) {
+    const expression = readFileSync(process.env.PROBE, "utf8");
+    const out = await send("Runtime.evaluate", {
+      expression: `(() => { ${expression} })()`,
+      returnByValue: true,
+      awaitPromise: true,
+    });
+    console.log("probe:", out.result?.value ?? JSON.stringify(out));
+  }
+
   const hover = process.argv[7];
   if (hover) {
     const [hx, hy] = hover.split(",").map(Number);
@@ -134,14 +144,149 @@ try {
 
   const state = await send("Runtime.evaluate", {
     expression: `JSON.stringify({
-      revealed: document.querySelector("#features")?.dataset.revealed ?? "sin marcar",
-      sliderTick: document.querySelector("[data-magnify-range]")?.style.getPropertyValue("--p") ?? "sin valor",
-      cardOpacity: getComputedStyle(document.querySelector("[data-spotlight]")).opacity,
+      progress: (() => {
+        const note = document.querySelector("[data-note]");
+        if (!note) return null;
+        const top = note.getBoundingClientRect().top + scrollY;
+        const start = Math.max(0, top - innerHeight * 0.55);
+        return Math.min(1, Math.max(0, (scrollY - start) / innerHeight)).toFixed(2);
+      })(),
+      slot: document.querySelector("[data-dock-thumb]")?.style.getPropertyValue("--slot") ?? "",
+      thumbWidth: Math.round(document.querySelector("[data-dock-thumb]")?.getBoundingClientRect().width ?? 0),
+      genieTarget: document.querySelector(".desk")?.dataset.genieTarget ?? "",
+      genieDesk: (() => {
+        const desk = document.querySelector(".desk").getBoundingClientRect();
+        return [Math.round(desk.left), Math.round(desk.top), Math.round(desk.width), Math.round(desk.height)];
+      })(),
+      target: (() => {
+        const desk = document.querySelector(".desk");
+        const slot = document.querySelector("[data-dock-thumb]");
+        if (!desk || !slot) return null;
+        const items = [...desk.querySelectorAll(".dock-item")];
+        const saved = items.map((item) => [item.style.width, item.style.height]);
+        items.forEach((item) => { item.style.width = "52px"; item.style.height = "52px"; });
+        const previous = slot.style.getPropertyValue("--slot");
+        slot.style.setProperty("--slot", "1");
+        const rect = slot.getBoundingClientRect();
+        if (previous) slot.style.setProperty("--slot", previous); else slot.style.removeProperty("--slot");
+        items.forEach((item, index) => { item.style.width = saved[index][0]; item.style.height = saved[index][1]; });
+        const base = desk.getBoundingClientRect();
+        return [Math.round(rect.left + rect.width / 2 - base.left), Math.round(rect.top + rect.height / 2 - base.top)];
+      })(),
+      slotNow: (() => {
+        const desk = document.querySelector(".desk").getBoundingClientRect();
+        const rect = document.querySelector("[data-dock-thumb]").getBoundingClientRect();
+        return [Math.round(rect.left + rect.width / 2 - desk.left), Math.round(rect.top + rect.height / 2 - desk.top)];
+      })(),
     })`,
   });
   console.log("page:", state.result?.value);
 
-  const shot = await send("Page.captureScreenshot", { format: "png", captureBeyondViewport: false });
+  if (process.env.INTERACT === "1") {
+    const clickAt = async ({ x, y }) => {
+      await send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y, button: "none", buttons: 0 });
+      await send("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", buttons: 1, clickCount: 1 });
+      await send("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", buttons: 0, clickCount: 1 });
+      await sleep(300);
+    };
+
+    const centreOf = async (selector) => {
+      const found = await send("Runtime.evaluate", {
+        returnByValue: true,
+        expression: `(() => { const el = ${selector}; if (!el) return null; const b = el.getBoundingClientRect(); return { x: b.left + b.width / 2, y: b.top + b.height / 2 }; })()`,
+      });
+      return found.result?.value;
+    };
+
+    // A real click is what grants the transient activation the clipboard needs.
+    await send("Browser.grantPermissions", {
+      permissions: ["clipboardReadWrite", "clipboardSanitizedWrite"],
+      origin: "http://localhost:4321",
+    });
+
+    const tabCentre = await centreOf(`document.querySelectorAll("[data-tab]")[1]`);
+    if (tabCentre) await clickAt(tabCentre);
+
+    const key = async (name, code, vk) => {
+      await send("Input.dispatchKeyEvent", {
+        type: "keyDown",
+        key: name,
+        code,
+        windowsVirtualKeyCode: vk,
+        nativeVirtualKeyCode: vk,
+      });
+      await send("Input.dispatchKeyEvent", { type: "keyUp", key: name, code, windowsVirtualKeyCode: vk, nativeVirtualKeyCode: vk });
+      await sleep(200);
+    };
+
+    await key("ArrowRight", "ArrowRight", 39);
+    const keyboard = await send("Runtime.evaluate", {
+      returnByValue: true,
+      expression: `JSON.stringify({ focus: document.activeElement?.id, selected: [...document.querySelectorAll("[data-tab]")].map((t) => t.getAttribute("aria-selected")) })`,
+    });
+    console.log("keyboard:", keyboard.result?.value);
+
+    if (tabCentre) await clickAt(tabCentre);
+
+    const copyCentre = await centreOf(`document.querySelector("[data-panel]:not([hidden]) [data-copy]")`);
+    if (copyCentre) await clickAt(copyCentre);
+    await sleep(400);
+
+    const result = await send("Runtime.evaluate", {
+      awaitPromise: true,
+      returnByValue: true,
+      expression: `(async () => {
+        const tabs = [...document.querySelectorAll("[data-tab]")];
+        const copy = document.querySelector("[data-panel]:not([hidden]) [data-copy]");
+        const clip = await navigator.clipboard.readText().catch((e) => "ERR " + e.name);
+        return JSON.stringify({
+          selected: tabs.map((t) => t.getAttribute("aria-selected")),
+          hidden: [...document.querySelectorAll("[data-panel]")].map((p) => p.hidden),
+          copied: copy.dataset.copied,
+          clip,
+          label: copy.getAttribute("aria-label"),
+        });
+      })()`,
+    });
+    console.log("interact:", result.result?.value);
+  }
+
+  if (process.env.ACTION === "restore") {
+    const tap = async ({ x, y }) => {
+      await send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y, button: "none", buttons: 0 });
+      await send("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", buttons: 1, clickCount: 1 });
+      await send("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", buttons: 0, clickCount: 1 });
+      await sleep(300);
+    };
+    const centre = async (selector) => {
+      const found = await send("Runtime.evaluate", {
+        returnByValue: true,
+        expression: `(() => { const el = ${selector}; if (!el) return null; const b = el.getBoundingClientRect(); return { x: b.left + b.width / 2, y: b.top + b.height / 2 }; })()`,
+      });
+      return found.result?.value;
+    };
+
+    const slotCentre = await centre(`document.querySelector("[data-dock-restore]")`);
+    if (slotCentre) await tap(slotCentre);
+    await sleep(1500);
+
+    const after = await send("Runtime.evaluate", {
+      returnByValue: true,
+      expression: `JSON.stringify({
+        progress: (() => { const n = document.querySelector("[data-note]"); const top = n.getBoundingClientRect().top + scrollY; const start = Math.max(0, top - innerHeight * 0.55); return Math.min(1, Math.max(0, (scrollY - start) / innerHeight)).toFixed(2); })(),
+        slot: document.querySelector("[data-dock-thumb]").style.getPropertyValue("--slot"),
+        thumbWidth: Math.round(document.querySelector("[data-dock-thumb]").getBoundingClientRect().width),
+        noteVisibility: getComputedStyle(document.querySelector("[data-note]")).visibility,
+      })`,
+    });
+    console.log("restore:", after.result?.value);
+  }
+
+  const clip = process.env.CLIP?.split(",").map(Number);
+  const options = clip ? { clip: { x: clip[0], y: clip[1], width: clip[2], height: clip[3], scale: 2 } } : {};
+  const shot = out.endsWith(".jpg")
+    ? await send("Page.captureScreenshot", { format: "jpeg", quality: 80, captureBeyondViewport: false, ...options })
+    : await send("Page.captureScreenshot", { format: "png", captureBeyondViewport: false, ...options });
   writeFileSync(out, Buffer.from(shot.data, "base64"));
   console.log(`saved ${out} at y=${scroll}`);
   await send("Browser.close");
