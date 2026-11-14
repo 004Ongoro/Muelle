@@ -86,7 +86,7 @@ use windows::{
 
 use crate::{
     drop::DropTarget,
-    flight::Flight,
+    flight::{Flight, Snapshot},
     gfx::{Gfx, LabelBrush},
     menu::{self, MenuItem},
     menubar::MenuBar,
@@ -145,6 +145,10 @@ const REFRESH_DELAY_MS: u32 = 120;
 /// Window notifications also arrive in bursts when an app opens.
 const SYNC_TIMER: usize = 2;
 const SYNC_DELAY_MS: u32 = 40;
+/// Minimized windows whose snapshot is kept to fly them back out of the dock.
+/// Each costs a quarter of the window's pixels; older ones restore without
+/// the genie.
+const MAX_SNAPSHOTS: usize = 4;
 /// After Explorer restarts or the system resumes, the new taskbar needs time
 /// to apply its initial state before it can be taken over again.
 const TASKBAR_TIMER: usize = 3;
@@ -369,8 +373,10 @@ struct App {
     /// Minimized windows, in the order they were minimized.
     minimized: Vec<isize>,
     thumbnails: Thumbnails,
-    /// Minimize animations in progress.
+    /// Genie animations in progress.
     flights: Vec<Flight>,
+    /// What the windows minimized with the genie looked like, oldest first.
+    snapshots: Vec<(isize, Snapshot)>,
     menubar: Option<MenuBar>,
     /// Display names already looked up, by app id.
     names: HashMap<String, String>,
@@ -929,17 +935,56 @@ impl App {
         }
     }
 
-    /// Brings windows to the front. Minimized ones get their system
-    /// transitions back first, so they return with the system's restore
-    /// animation; the next `sync` turns them off again.
-    fn activating(&mut self, windows: Vec<isize>) -> Outside {
+    /// Brings windows to the front. A minimized one flies out of the dock if
+    /// it flew in; otherwise it gets its system transitions back first, so it
+    /// returns with the system's restore animation (the next `sync` turns
+    /// them off again).
+    fn activating(&mut self, windows: Vec<isize>) -> Option<Outside> {
+        if self.start_restore_flight(&windows) {
+            // `tick` restores the window when the genie reaches full size.
+            return None;
+        }
         for hwnd in &windows {
             if self.minimized.contains(hwnd) {
                 set_window_transitions(*hwnd, true);
                 self.calmed.retain(|calmed| calmed != hwnd);
             }
         }
-        Outside::Activate(windows)
+        Some(Outside::Activate(windows))
+    }
+
+    /// Flies out of the dock the window that activating `windows` would
+    /// restore. `false` if the genie does not apply and the caller must
+    /// restore it directly.
+    fn start_restore_flight(&mut self, windows: &[isize]) -> bool {
+        if !self.config.genie || !animations_enabled() || !self.flights.is_empty() {
+            return false;
+        }
+        // Activation restores a window only when all of them are minimized,
+        // and then only the first.
+        let Some(&hwnd) = windows.first() else {
+            return false;
+        };
+        if !windows.iter().all(|window| self.minimized.contains(window)) {
+            return false;
+        }
+        let Some(position) = self.snapshots.iter().position(|(owner, _)| *owner == hwnd) else {
+            return false;
+        };
+        let Some(screen) = primary_monitor().map(|monitor| monitor.screen) else {
+            return false;
+        };
+        let flight = self.snapshots.get(position).and_then(|(_, snapshot)| {
+            let slot = self.minimized_slot(hwnd, snapshot.aspect())?;
+            Flight::restore(&self.gfx, hwnd, snapshot, slot, screen)
+        });
+        let Some(flight) = flight else {
+            return false;
+        };
+        self.snapshots.remove(position);
+        self.flights.push(flight);
+        self.last_frame = Instant::now();
+        true
     }
 
     fn start_flights(&mut self, windows: &[isize]) {
@@ -1350,9 +1395,9 @@ impl App {
                 Some(Outside::Open(id))
             }
             Role::App if windows.contains(&tracker::foreground_window()) => None,
-            Role::App => Some(self.activating(windows)),
+            Role::App => self.activating(windows),
             Role::Start => Some(Outside::OpenStart),
-            Role::Window => window_of(&id).map(|hwnd| self.activating(vec![hwnd])),
+            Role::Window => window_of(&id).and_then(|hwnd| self.activating(vec![hwnd])),
             Role::Folder | Role::Trash => Some(Outside::Open(id)),
         })
     }
@@ -1493,7 +1538,7 @@ impl App {
         Ok(match command {
             CMD_OPEN if role == Role::Start => Some(Outside::OpenStart),
             CMD_OPEN if role == Role::Window => {
-                window_of(&id).map(|hwnd| self.activating(vec![hwnd]))
+                window_of(&id).and_then(|hwnd| self.activating(vec![hwnd]))
             }
             CMD_CLOSE_WINDOW => {
                 launcher::close(&window_of(&id).into_iter().collect::<Vec<_>>());
@@ -1525,7 +1570,7 @@ impl App {
                 let index = window.checked_sub(CMD_WINDOW).map(|index| index as usize);
                 index
                     .and_then(|index| windows.get(index))
-                    .map(|&hwnd| self.activating(vec![hwnd]))
+                    .and_then(|&hwnd| self.activating(vec![hwnd]))
             }
         })
     }
@@ -1552,6 +1597,7 @@ impl App {
         }
         if !config.genie {
             self.restore_transitions();
+            self.snapshots.clear();
         }
         if config.auto_hide != self.config.auto_hide {
             self.slide.target = if config.auto_hide { 1.0 } else { 0.0 };
@@ -1641,6 +1687,8 @@ impl App {
             }
         }
         self.thumbnails.sync(&self.minimized);
+        let minimized = &self.minimized;
+        self.snapshots.retain(|(hwnd, _)| minimized.contains(hwnd));
 
         if changed || self.minimized != minimized_before {
             self.refresh()?;
@@ -1659,13 +1707,27 @@ impl App {
         self.update_fullscreen()
     }
 
-    fn tick(&mut self) -> Result<()> {
+    fn tick(&mut self) -> Result<Option<Outside>> {
         let now = Instant::now();
         let flying = self.flights.len();
         let gfx = &self.gfx;
-        self.flights.retain_mut(|flight| flight.step(gfx, now));
+        let snapshots = &mut self.snapshots;
+        let mut restore = None;
+        self.flights.retain_mut(|flight| {
+            let going = flight.step(gfx, now);
+            if flight.take_restore(!going) {
+                restore = Some(flight.hwnd);
+            }
+            if !going && let Some(snapshot) = flight.take_snapshot_for_restore() {
+                if snapshots.len() >= MAX_SNAPSHOTS {
+                    snapshots.remove(0);
+                }
+                snapshots.push((flight.hwnd, snapshot));
+            }
+            going
+        });
         if self.flights.len() != flying {
-            // Confirm the landed windows really are minimized.
+            // Confirm the windows really are minimized, or restored.
             // SAFETY: Timer on our own window.
             unsafe { SetTimer(Some(self.input), SYNC_TIMER, SYNC_DELAY_MS, None) };
         }
@@ -1679,7 +1741,8 @@ impl App {
             let until = bounce.until.unwrap_or(LAUNCH_BOUNCE_LIMIT);
             elapsed < until
         });
-        self.render()
+        self.render()?;
+        Ok(restore.map(|hwnd| Outside::Activate(vec![hwnd])))
     }
 
     /// Hides the taskbar and reserves its space again. After Explorer restarts,
@@ -2079,7 +2142,7 @@ fn message_loop() {
                     }
                     DispatchMessageW(&msg);
                 }
-                with_app("animación", App::tick);
+                with_app_then("animación", App::tick);
                 // Wait for the next refresh to pace animation without timers.
                 let _ = DwmFlush();
             } else {
@@ -2176,6 +2239,7 @@ pub fn run() -> Result<()> {
             minimized: Vec::new(),
             thumbnails: Thumbnails::new(visual),
             flights: Vec::new(),
+            snapshots: Vec::new(),
             menubar: None,
             names: HashMap::new(),
             calmed: Vec::new(),
