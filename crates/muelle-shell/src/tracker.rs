@@ -123,7 +123,21 @@ pub fn normal_rect(hwnd: isize) -> Option<RECT> {
     };
     // SAFETY: The structure has its size initialized and lives for the call.
     unsafe { GetWindowPlacement(HWND(hwnd as *mut _), &mut placement) }.ok()?;
-    let rect = placement.rcNormalPosition;
+    // Placement uses workspace coordinates, whose origin is the top-left
+    // corner of the work area: below the menu bar when it is shown.
+    let (dx, dy) = crate::system::primary_monitor().map_or((0, 0), |monitor| {
+        (
+            monitor.work_left - monitor.screen.left,
+            monitor.work_top - monitor.screen.top,
+        )
+    });
+    let local = placement.rcNormalPosition;
+    let rect = RECT {
+        left: local.left + dx,
+        top: local.top + dy,
+        right: local.right + dx,
+        bottom: local.bottom + dy,
+    };
     (rect.right > rect.left && rect.bottom > rect.top).then_some(rect)
 }
 

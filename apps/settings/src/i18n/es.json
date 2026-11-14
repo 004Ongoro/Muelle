@@ -11,6 +11,8 @@
   "autoHideHint": "Reaparece al tocar el borde inferior de la pantalla.",
   "genie": "Efecto genio al minimizar",
   "genieHint": "Mientras está activo, las ventanas no usan las animaciones de Windows al maximizar ni al cerrar.",
+  "menuBar": "Barra superior",
+  "menuBarHint": "Hora, batería y acceso a los ajustes rápidos y las notificaciones de Windows.",
   "autostart": "Abrir Muelle al iniciar sesión",
   "language": "Idioma",
   "languageAuto": "Automático",

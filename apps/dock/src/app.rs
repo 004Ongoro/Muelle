@@ -31,7 +31,7 @@ use muelle_core::{
     spring::Spring,
 };
 use muelle_shell::{
-    appbar::{ABN_FULLSCREENAPP, AppBar},
+    appbar::{ABN_FULLSCREENAPP, AppBar, Edge},
     files,
     icon_cache::IconCache,
     launcher,
@@ -89,6 +89,7 @@ use crate::{
     flight::Flight,
     gfx::{Gfx, LabelBrush},
     menu::{self, MenuItem},
+    menubar::MenuBar,
     scene::{Drag, Frame, Scene, SceneInput, SlotContent, Theme},
     strings::{self, text},
     thumbnails::Thumbnails,
@@ -370,6 +371,9 @@ struct App {
     thumbnails: Thumbnails,
     /// Minimize animations in progress.
     flights: Vec<Flight>,
+    menubar: Option<MenuBar>,
+    /// Display names already looked up, by app id.
+    names: HashMap<String, String>,
     /// Windows whose system transitions are turned off (see `calm_windows`).
     calmed: Vec<isize>,
     /// Windows already minimized when the dock starts get no animation.
@@ -601,6 +605,9 @@ impl App {
     /// nothing if the scene inputs are unchanged, since many Windows notifications
     /// do not affect the dock.
     fn refresh(&mut self) -> Result<()> {
+        if let Some(bar) = &mut self.menubar {
+            bar.refresh(&self.gfx)?;
+        }
         let monitor = primary_monitor().context("no se pudo consultar el monitor principal")?;
         let key = StageKey {
             screen: monitor.screen,
@@ -658,7 +665,7 @@ impl App {
             } else {
                 (dock.height + 2.0 * px(FLOAT_MARGIN)) as i32
             };
-            appbar.reserve_bottom(screen, strip);
+            appbar.reserve(Edge::Bottom, screen, strip);
         }
         let (dock_right, dock_bottom) = (dock_x + dock.width, dock_y + dock.height);
         let zone = move |left: f32, top: f32, right: f32, bottom: f32| RECT {
@@ -1551,6 +1558,8 @@ impl App {
             self.last_frame = Instant::now();
         }
         self.config = config;
+        self.apply_menu_bar_setting();
+        self.update_menu_bar_app()?;
         self.calm_windows();
         self.refresh()
     }
@@ -1679,13 +1688,56 @@ impl App {
         taskbar::take_over();
         self.appbar = None;
         self.appbar = AppBar::register(self.visual, APPBAR_CALLBACK);
+        // The menu bar's reservation is gone as well: rebuild it.
+        self.menubar = None;
+        self.apply_menu_bar_setting();
         self.stage = None;
         self.refresh()
     }
 
     /// Hides the dock while the foreground window covers the entire screen and
     /// shows it again when it no longer does.
+    /// Creates or removes the menu bar to match the settings.
+    fn apply_menu_bar_setting(&mut self) {
+        if !self.config.menu_bar {
+            self.menubar = None;
+        } else if self.menubar.is_none() {
+            self.menubar = MenuBar::create(&self.gfx)
+                .inspect_err(|error| eprintln!("muelle: barra superior: {error:#}"))
+                .ok();
+            if let Some(bar) = &mut self.menubar {
+                bar.set_visible(!self.fullscreen);
+            }
+        }
+    }
+
+    /// Shows the name of the app in front, as the macOS menu bar does.
+    fn update_menu_bar_app(&mut self) -> Result<()> {
+        if self.menubar.is_none() {
+            return Ok(());
+        }
+        let front = tracker::foreground_window();
+        let id = self
+            .windows
+            .iter()
+            .find(|window| window.hwnd == front)
+            .map_or_else(explorer_id, |window| window.app_id.clone());
+        if !self.names.contains_key(&id) {
+            let name = self
+                .icons
+                .get(&id, ICON_SOURCE_SIZE)
+                .map_or_else(|_| display_name(&id), |visual| visual.name);
+            self.names.insert(id.clone(), name);
+        }
+        let name = self.names.get(&id).map_or("", String::as_str);
+        match &mut self.menubar {
+            Some(bar) => bar.set_app_name(&self.gfx, name),
+            None => Ok(()),
+        }
+    }
+
     fn update_fullscreen(&mut self) -> Result<()> {
+        self.update_menu_bar_app()?;
         let Some(monitor) = primary_monitor() else {
             return Ok(());
         };
@@ -1694,6 +1746,9 @@ impl App {
             return Ok(());
         }
         self.fullscreen = fullscreen;
+        if let Some(bar) = &mut self.menubar {
+            bar.set_visible(!fullscreen);
+        }
         if fullscreen {
             self.hovering = false;
             self.amount = Spring::at(0.0, HOVER_OMEGA);
@@ -1774,6 +1829,22 @@ fn with_app_value<T: Default>(what: &str, action: impl FnOnce(&mut App) -> Resul
         Ok(())
     });
     value
+}
+
+pub fn menu_bar_clicked(x: f32) {
+    with_app("barra superior", |app| {
+        if let Some(bar) = &app.menubar {
+            bar.click(x);
+        }
+        Ok(())
+    });
+}
+
+pub fn menu_bar_tick() {
+    with_app("barra superior", |app| match &mut app.menubar {
+        Some(bar) => bar.tick(&app.gfx),
+        None => Ok(()),
+    });
 }
 
 pub fn drag_enter(files: Vec<String>, x: i32, _y: i32) -> DROPEFFECT {
@@ -2093,6 +2164,8 @@ pub fn run() -> Result<()> {
             minimized: Vec::new(),
             thumbnails: Thumbnails::new(visual),
             flights: Vec::new(),
+            menubar: None,
+            names: HashMap::new(),
             calmed: Vec::new(),
             started: false,
             stage: None,
@@ -2112,6 +2185,7 @@ pub fn run() -> Result<()> {
         let _ = SetConsoleCtrlHandler(None, false);
         let _ = SetConsoleCtrlHandler(Some(on_console_ctrl), true);
 
+        app.apply_menu_bar_setting();
         app.sync()?;
         // `sync` recomposes only when the list changes; run it unconditionally at startup.
         if app.stage.is_none() {

@@ -159,6 +159,13 @@ export function App() {
                     onChange={(autoHide) => update({ autoHide })}
                   />
                 </Row>
+                <Row label={t.menuBar} hint={t.menuBarHint}>
+                  <Toggle
+                    label={t.menuBar}
+                    checked={config.menuBar}
+                    onChange={(menuBar) => update({ menuBar })}
+                  />
+                </Row>
                 <Row label={t.genie} hint={t.genieHint}>
                   <Toggle
                     label={t.genie}

@@ -20,8 +20,9 @@ use windows::{
                 },
                 D2D1_BITMAP_OPTIONS_NONE, D2D1_BITMAP_PROPERTIES1,
                 D2D1_BUFFER_PRECISION_8BPC_UNORM, D2D1_COLOR_INTERPOLATION_MODE_PREMULTIPLIED,
-                D2D1_COLOR_SPACE_SRGB, D2D1_DRAW_TEXT_OPTIONS_NONE, D2D1_EXTEND_MODE_CLAMP,
-                D2D1_INTERPOLATION_MODE, D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC,
+                D2D1_COLOR_SPACE_SRGB, D2D1_DRAW_TEXT_OPTIONS_NONE, D2D1_ELLIPSE,
+                D2D1_EXTEND_MODE_CLAMP, D2D1_INTERPOLATION_MODE,
+                D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC,
                 D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR, D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES,
                 D2D1_ROUNDED_RECT, D2D1CreateDevice, ID2D1Device, ID2D1DeviceContext,
             },
@@ -32,8 +33,8 @@ use windows::{
             },
             DirectWrite::{
                 DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL,
-                DWRITE_FONT_WEIGHT_MEDIUM, DWRITE_TEXT_METRICS, DWriteCreateFactory,
-                IDWriteFactory,
+                DWRITE_FONT_WEIGHT_MEDIUM, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_WEIGHT_SEMI_BOLD,
+                DWRITE_TEXT_METRICS, DWriteCreateFactory, IDWriteFactory,
             },
             Dxgi::{Common::DXGI_FORMAT_B8G8R8A8_UNORM, IDXGIDevice},
         },
@@ -368,6 +369,178 @@ impl Gfx {
             Ok(())
         })
     }
+
+    /// Plain text on a transparent background (menu bar).
+    pub fn text_brush(&self, text: &str, scale: f32, bold: bool, ink: Ink) -> Result<LabelBrush> {
+        let utf16: Vec<u16> = text.encode_utf16().collect();
+        let weight = if bold {
+            DWRITE_FONT_WEIGHT_SEMI_BOLD
+        } else {
+            DWRITE_FONT_WEIGHT_NORMAL
+        };
+        // SAFETY: Strings and structures passed to each call remain alive for its duration.
+        let (layout, metrics) = unsafe {
+            let format = self.dwrite.CreateTextFormat(
+                w!("Segoe UI Variable Text"),
+                None,
+                weight,
+                DWRITE_FONT_STYLE_NORMAL,
+                DWRITE_FONT_STRETCH_NORMAL,
+                13.0 * scale,
+                w!(""),
+            )?;
+            let layout = self
+                .dwrite
+                .CreateTextLayout(&utf16, &format, 4096.0, 256.0)?;
+            let mut metrics = DWRITE_TEXT_METRICS::default();
+            layout.GetMetrics(&mut metrics)?;
+            (layout, metrics)
+        };
+        let (width, height) = (
+            metrics.width.ceil().max(1.0),
+            metrics.height.ceil().max(1.0),
+        );
+        let brush = self.draw(width as u32, height as u32, |dc| {
+            // SAFETY: The brush and layout live for the drawing call.
+            unsafe {
+                let ink = dc.CreateSolidColorBrush(&ink.color(), None)?;
+                dc.DrawTextLayout(
+                    Vector2 { X: 0.0, Y: 0.0 },
+                    &layout,
+                    &ink,
+                    D2D1_DRAW_TEXT_OPTIONS_NONE,
+                );
+            }
+            Ok(())
+        })?;
+        Ok(LabelBrush {
+            brush,
+            width,
+            height,
+        })
+    }
+
+    /// Two switches, one on and one off: the control center glyph.
+    pub fn control_center_brush(&self, scale: f32, ink: Ink) -> Result<LabelBrush> {
+        let (width, height) = ((19.0 * scale).round(), (16.0 * scale).round());
+        let brush = self.draw(width as u32, height as u32, |dc| {
+            let pill_height = height * 0.44;
+            let radius = pill_height / 2.0;
+            let stroke = (1.2 * scale).max(1.0);
+            // SAFETY: The brush lives for the drawing calls.
+            unsafe {
+                let ink = dc.CreateSolidColorBrush(&ink.color(), None)?;
+                for (row, knob_right) in [(0.0, true), (height - pill_height, false)] {
+                    let pill = D2D1_ROUNDED_RECT {
+                        rect: D2D_RECT_F {
+                            left: stroke / 2.0,
+                            top: row + stroke / 2.0,
+                            right: width - stroke / 2.0,
+                            bottom: row + pill_height - stroke / 2.0,
+                        },
+                        radiusX: radius,
+                        radiusY: radius,
+                    };
+                    dc.DrawRoundedRectangle(&pill, &ink, stroke, None);
+                    let center = if knob_right { width - radius } else { radius };
+                    dc.FillEllipse(
+                        &D2D1_ELLIPSE {
+                            point: Vector2 {
+                                X: center,
+                                Y: row + radius,
+                            },
+                            radiusX: radius - stroke * 0.3,
+                            radiusY: radius - stroke * 0.3,
+                        },
+                        &ink,
+                    );
+                }
+            }
+            Ok(())
+        })?;
+        Ok(LabelBrush {
+            brush,
+            width,
+            height,
+        })
+    }
+
+    /// Battery outline filled to `percent`, green while charging.
+    pub fn battery_brush(
+        &self,
+        percent: u8,
+        charging: bool,
+        scale: f32,
+        ink: Ink,
+    ) -> Result<LabelBrush> {
+        let (width, height) = ((26.0 * scale).round(), (12.0 * scale).round());
+        let brush = self.draw(width as u32, height as u32, |dc| {
+            let stroke = (1.0 * scale).max(1.0);
+            let cap = 2.0 * scale;
+            let body_right = width - cap - stroke;
+            let level = if charging {
+                rgb(0.20, 0.78, 0.35, 1.0)
+            } else if percent <= 20 {
+                rgb(1.0, 0.27, 0.23, 1.0)
+            } else {
+                ink.color()
+            };
+            // SAFETY: The brushes live for the drawing calls.
+            unsafe {
+                let outline = dc.CreateSolidColorBrush(&ink.faded(), None)?;
+                let fill = dc.CreateSolidColorBrush(&level, None)?;
+                dc.DrawRoundedRectangle(
+                    &D2D1_ROUNDED_RECT {
+                        rect: D2D_RECT_F {
+                            left: stroke / 2.0,
+                            top: stroke / 2.0,
+                            right: body_right,
+                            bottom: height - stroke / 2.0,
+                        },
+                        radiusX: 3.0 * scale,
+                        radiusY: 3.0 * scale,
+                    },
+                    &outline,
+                    stroke,
+                    None,
+                );
+                dc.FillRoundedRectangle(
+                    &D2D1_ROUNDED_RECT {
+                        rect: D2D_RECT_F {
+                            left: body_right + stroke,
+                            top: height * 0.32,
+                            right: width,
+                            bottom: height * 0.68,
+                        },
+                        radiusX: scale,
+                        radiusY: scale,
+                    },
+                    &outline,
+                );
+                let inset = stroke * 2.0;
+                let room = body_right - 2.0 * inset;
+                dc.FillRoundedRectangle(
+                    &D2D1_ROUNDED_RECT {
+                        rect: D2D_RECT_F {
+                            left: inset,
+                            top: inset,
+                            right: inset + room * f32::from(percent.min(100)) / 100.0,
+                            bottom: height - inset,
+                        },
+                        radiusX: 1.5 * scale,
+                        radiusY: 1.5 * scale,
+                    },
+                    &fill,
+                );
+            }
+            Ok(())
+        })?;
+        Ok(LabelBrush {
+            brush,
+            width,
+            height,
+        })
+    }
 }
 
 fn draw_image(
@@ -411,4 +584,29 @@ fn draw_image(
 
 const fn rgb(r: f32, g: f32, b: f32, a: f32) -> D2D1_COLOR_F {
     D2D1_COLOR_F { r, g, b, a }
+}
+
+/// Foreground color of menu bar content, by theme.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Ink {
+    /// Dark content for a light bar.
+    Dark,
+    /// Light content for a dark bar.
+    Light,
+}
+
+impl Ink {
+    fn color(self) -> D2D1_COLOR_F {
+        match self {
+            Self::Dark => rgb(0.0, 0.0, 0.0, 0.86),
+            Self::Light => rgb(1.0, 1.0, 1.0, 0.94),
+        }
+    }
+
+    fn faded(self) -> D2D1_COLOR_F {
+        match self {
+            Self::Dark => rgb(0.0, 0.0, 0.0, 0.5),
+            Self::Light => rgb(1.0, 1.0, 1.0, 0.55),
+        }
+    }
 }

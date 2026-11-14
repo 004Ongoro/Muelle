@@ -11,6 +11,8 @@
   "autoHideHint": "It reappears when you touch the bottom edge of the screen.",
   "genie": "Genie effect when minimizing",
   "genieHint": "While it is on, windows do not use the Windows animations for maximizing or closing.",
+  "menuBar": "Menu bar",
+  "menuBarHint": "Time, battery, and access to the Windows quick settings and notifications.",
   "autostart": "Open Muelle at login",
   "language": "Language",
   "languageAuto": "Automatic",

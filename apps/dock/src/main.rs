@@ -15,6 +15,7 @@ mod flight;
 mod gfx;
 mod guard;
 mod menu;
+mod menubar;
 mod scene;
 mod strings;
 mod thumbnails;

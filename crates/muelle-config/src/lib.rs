@@ -48,6 +48,8 @@ pub struct Config {
     /// Genie effect when minimizing. Off by default: while it is on, the dock
     /// turns off the system's own window transitions (see plan, "Efecto genio").
     pub genie: bool,
+    /// macOS-style bar across the top with the clock and status items.
+    pub menu_bar: bool,
     pub language: Language,
 }
 
@@ -97,6 +99,7 @@ impl Default for Config {
             magnification: true,
             magnified_size: 77,
             genie: false,
+            menu_bar: true,
             language: Language::Auto,
         }
     }

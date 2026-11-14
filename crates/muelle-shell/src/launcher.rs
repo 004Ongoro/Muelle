@@ -5,7 +5,7 @@ use windows::{
         UI::{
             Input::KeyboardAndMouse::{
                 INPUT, INPUT_0, INPUT_KEYBOARD, KEYBD_EVENT_FLAGS, KEYBDINPUT, KEYEVENTF_KEYUP,
-                SendInput, VK_LWIN,
+                SendInput, VIRTUAL_KEY, VK_A, VK_LWIN, VK_N,
             },
             Shell::ShellExecuteW,
             WindowsAndMessaging::{
@@ -73,23 +73,42 @@ pub fn open_with(app: &str, files: &[String]) -> Result<(), LaunchError> {
     }
 }
 
-/// Opens the Windows Start menu, exactly as the Windows key does.
-pub fn open_start_menu() {
-    let key = |flags: KEYBD_EVENT_FLAGS| INPUT {
+/// Presses the given keys together and releases them.
+fn tap(keys: &[VIRTUAL_KEY]) {
+    let key = |vk: VIRTUAL_KEY, flags: KEYBD_EVENT_FLAGS| INPUT {
         r#type: INPUT_KEYBOARD,
         Anonymous: INPUT_0 {
             ki: KEYBDINPUT {
-                wVk: VK_LWIN,
+                wVk: vk,
                 dwFlags: flags,
                 ..Default::default()
             },
         },
     };
-    let inputs = [key(KEYBD_EVENT_FLAGS(0)), key(KEYEVENTF_KEYUP)];
+    let inputs: Vec<INPUT> = keys
+        .iter()
+        .map(|&vk| key(vk, KEYBD_EVENT_FLAGS(0)))
+        .chain(keys.iter().rev().map(|&vk| key(vk, KEYEVENTF_KEYUP)))
+        .collect();
     // SAFETY: The array lives for the duration of the call.
     unsafe {
         SendInput(&inputs, size_of::<INPUT>() as i32);
     }
+}
+
+/// Opens the Windows Start menu, exactly as the Windows key does.
+pub fn open_start_menu() {
+    tap(&[VK_LWIN]);
+}
+
+/// Opens the Windows 11 quick settings panel (network, volume, battery): Win+A.
+pub fn open_quick_settings() {
+    tap(&[VK_LWIN, VK_A]);
+}
+
+/// Opens the Windows 11 notification center and calendar: Win+N.
+pub fn open_notifications() {
+    tap(&[VK_LWIN, VK_N]);
 }
 
 pub fn reveal(path: &str) -> Result<(), LaunchError> {

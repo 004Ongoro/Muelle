@@ -127,3 +127,54 @@ pub fn set_window_transitions(hwnd: isize, enabled: bool) {
         );
     }
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Battery {
+    /// 0..=100.
+    pub percent: u8,
+    pub charging: bool,
+}
+
+/// Battery state, or `None` on a computer without a battery.
+#[must_use]
+pub fn battery() -> Option<Battery> {
+    use windows::Win32::System::Power::{GetSystemPowerStatus, SYSTEM_POWER_STATUS};
+    const NO_BATTERY: u8 = 128;
+    const UNKNOWN: u8 = 255;
+    let mut status = SYSTEM_POWER_STATUS::default();
+    // SAFETY: `status` is a valid structure the call fills in.
+    unsafe { GetSystemPowerStatus(&mut status) }.ok()?;
+    (status.BatteryFlag & NO_BATTERY == 0
+        && status.BatteryFlag != UNKNOWN
+        && status.BatteryLifePercent <= 100)
+        .then_some(Battery {
+            percent: status.BatteryLifePercent,
+            charging: status.ACLineStatus == 1,
+        })
+}
+
+/// Current date and time in the regional format of the user, e.g. "vie 13 nov  19:42".
+#[must_use]
+pub fn clock_text() -> String {
+    use windows::Win32::Globalization::{GetDateFormatEx, GetTimeFormatEx, TIME_NOSECONDS};
+    let mut date = [0u16; 64];
+    let mut time = [0u16; 32];
+    // SAFETY: The buffers live for the calls, which return the length written
+    // including the terminator (0 on failure).
+    let (date_len, time_len) = unsafe {
+        (
+            GetDateFormatEx(
+                None,
+                Default::default(),
+                None,
+                w!("ddd d MMM"),
+                Some(&mut date),
+                None,
+            ),
+            GetTimeFormatEx(None, TIME_NOSECONDS, None, None, Some(&mut time)),
+        )
+    };
+    let text =
+        |buffer: &[u16], len: i32| String::from_utf16_lossy(&buffer[..(len - 1).max(0) as usize]);
+    format!("{}  {}", text(&date, date_len), text(&time, time_len))
+}

@@ -7,11 +7,18 @@ use std::mem::size_of;
 use windows::Win32::{
     Foundation::{HWND, RECT},
     UI::Shell::{
-        ABE_BOTTOM, ABM_NEW, ABM_QUERYPOS, ABM_REMOVE, ABM_SETPOS, APPBARDATA, SHAppBarMessage,
+        ABE_BOTTOM, ABE_TOP, ABM_NEW, ABM_QUERYPOS, ABM_REMOVE, ABM_SETPOS, APPBARDATA,
+        SHAppBarMessage,
     },
 };
 
 pub const ABN_FULLSCREENAPP: usize = 2;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Edge {
+    Top,
+    Bottom,
+}
 
 pub struct AppBar {
     hwnd: HWND,
@@ -37,13 +44,20 @@ impl AppBar {
         })
     }
 
-    /// Reserves a `height`-pixel strip at the bottom of monitor `screen`.
-    /// Calls the system only when the strip changes because each reservation
-    /// triggers a settings-change notification; repeating it would create a loop.
-    pub fn reserve_bottom(&mut self, screen: RECT, height: i32) {
-        let wanted = RECT {
-            top: screen.bottom - height,
-            ..screen
+    /// Reserves a strip `thickness` pixels deep along `edge` of monitor
+    /// `screen`. Calls the system only when the strip changes because each
+    /// reservation triggers a settings-change notification; repeating it would
+    /// create a loop.
+    pub fn reserve(&mut self, edge: Edge, screen: RECT, thickness: i32) {
+        let wanted = match edge {
+            Edge::Top => RECT {
+                bottom: screen.top + thickness,
+                ..screen
+            },
+            Edge::Bottom => RECT {
+                top: screen.bottom - thickness,
+                ..screen
+            },
         };
         if self.reserved == Some(wanted) {
             return;
@@ -52,7 +66,10 @@ impl AppBar {
         let mut data = APPBARDATA {
             cbSize: size_of::<APPBARDATA>() as u32,
             hWnd: self.hwnd,
-            uEdge: ABE_BOTTOM,
+            uEdge: match edge {
+                Edge::Top => ABE_TOP,
+                Edge::Bottom => ABE_BOTTOM,
+            },
             rc: wanted,
             ..Default::default()
         };
@@ -60,8 +77,11 @@ impl AppBar {
         unsafe {
             SHAppBarMessage(ABM_QUERYPOS, &mut data);
             // Another bar on the same edge (the Windows taskbar, before it is
-            // hidden) shifts the strip upward, so preserve its height.
-            data.rc.top = data.rc.bottom - height;
+            // hidden) pushes the strip inward, so preserve its thickness.
+            match edge {
+                Edge::Top => data.rc.bottom = data.rc.top + thickness,
+                Edge::Bottom => data.rc.top = data.rc.bottom - thickness,
+            }
             SHAppBarMessage(ABM_SETPOS, &mut data);
         }
         // Treat the reservation as complete only if the system granted the
