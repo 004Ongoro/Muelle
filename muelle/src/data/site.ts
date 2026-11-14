@@ -3,8 +3,15 @@
 export const site = {
   name: "Muelle",
   tagline: "The macOS Dock, made for Windows.",
+  /** Kept under ~155 characters so Google does not truncate it. */
   description:
-    "Muelle replaces the Windows 11 taskbar with a macOS-style dock: icons that grow under the cursor, minimized windows as live thumbnails, an optional menu bar and Genie effect. Free and open source.",
+    "Muelle replaces the Windows 11 taskbar with a glass dock: icons that grow under your cursor and minimized windows as live thumbnails. Free and open source.",
+  /** Canonical origin. Must match `site` in astro.config.mjs and the sitemap. */
+  url: "https://muellee.vercel.app",
+  /** Path to the social card in `public/`. Empty until the image exists: the
+   * Open Graph tags are then omitted instead of pointing at a 404. */
+  ogImage: "",
+  locale: "en_US",
   repository: "https://github.com/crafter-station/Muelle",
   releases: "https://github.com/crafter-station/Muelle/releases",
   download: "https://github.com/crafter-station/Muelle/releases/latest/download/Muelle-Setup.exe",

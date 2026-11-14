@@ -11,10 +11,10 @@ interface Props {
 const { href, variant = "primary", size = "md", external = false, class: className } = Astro.props;
 
 const base = [
-  "inline-flex items-center gap-2.5 rounded-full border-[1.5px]",
+  "inline-flex items-center gap-2.5 squircle-pill border-[1.5px]",
   "font-bold tracking-[-0.01em] transition-transform duration-[180ms]",
-  "ease-[cubic-bezier(.34,1.56,.64,1)] hover:-translate-y-0.5 hover:-rotate-1",
-  "focus-visible:outline-2 focus-visible:outline-offset-[3px] focus-visible:outline-acid",
+  "ease-[cubic-bezier(.34,1.56,.64,1)] hover:-translate-y-0.5 hover:scale-[1.02]",
+  "focus-visible:outline-2 focus-visible:outline-offset-[3px] focus-visible:outline-primary",
 ];
 
 const sizes = {
@@ -24,14 +24,13 @@ const sizes = {
 
 const variants = {
   primary: [
-    "border-ink bg-acid text-ink shadow-[0_4px_0_var(--color-ink)]",
+    "border-ink bg-primary-gradient text-ink shadow-[0_4px_0_var(--color-ink)]",
     "hover:shadow-[0_6px_0_var(--color-ink)]",
     "active:translate-y-[3px] active:scale-[.98] active:shadow-[0_1px_0_var(--color-ink)]",
   ],
   secondary: ["border-fg text-fg", "active:translate-y-px active:scale-[.98]"],
-  // For the cyan closing block, where the acid-on-ink pair would disappear.
   inverse: [
-    "border-ink bg-ink text-acid shadow-[0_4px_0_rgb(6_22_28/0.28)]",
+    "border-ink bg-ink text-primary-end shadow-[0_4px_0_rgb(6_22_28/0.28)]",
     "hover:shadow-[0_6px_0_rgb(6_22_28/0.28)]",
     "active:translate-y-[3px] active:scale-[.98] active:shadow-[0_1px_0_rgb(6_22_28/0.28)]",
   ],

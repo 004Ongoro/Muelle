@@ -13,7 +13,7 @@ const { inputs, outputs, core } = Astro.props;
 ---
 
 <div
-  class="pipe grid items-center gap-4 rounded-[22px] border border-line bg-card p-4 min-[900px]:grid-cols-[1fr_1.25fr_1fr] min-[900px]:gap-12 min-[900px]:p-10"
+  class="pipe grid items-center gap-4 squircle-lg border border-line bg-card p-4 min-[900px]:grid-cols-[1fr_1.25fr_1fr] min-[900px]:gap-12 min-[900px]:p-10"
 >
   <div class="flex flex-col gap-3.5">
     {inputs.map((step) => <PipelineNode step={step} direction="in" />)}

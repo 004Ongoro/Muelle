@@ -13,7 +13,7 @@ const memory = `${core.memory.value} ${core.memory.unit}`;
 ---
 
 <div
-  class="core flex flex-col gap-3 rounded-[18px] p-[18px]"
+  class="core flex flex-col gap-3 squircle-lg p-[18px]"
   data-r
   style={`background-image: linear-gradient(rgb(0 0 0 / 0.35), rgb(0 0 0 / 0.35)), url("${coreCardBackground.src}")`}
 >
@@ -22,7 +22,7 @@ const memory = `${core.memory.value} ${core.memory.unit}`;
     <span>{memory}</span>
   </span>
 
-  <div class="flex justify-center gap-2.5 rounded-xl px-3 py-6">
+  <div class="flex justify-center gap-2.5 squircle-md px-3 py-6">
     {
       core.icons.map((icon) => (
         <Image
@@ -35,7 +35,7 @@ const memory = `${core.memory.value} ${core.memory.unit}`;
     }
   </div>
 
-  <span class="track h-1 overflow-hidden rounded" aria-hidden="true">
+  <span class="track h-1 overflow-hidden squircle-pill" aria-hidden="true">
     <i class="progress"></i>
   </span>
 

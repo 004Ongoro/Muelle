@@ -14,11 +14,57 @@
   /* 0.46 keeps the ghost half of a heading at 3.1:1 on --bg: still clearly secondary,
      but large text meets the 3:1 floor instead of 2.4:1. */
   --color-dim: rgb(20 17 15 / 0.46);
-  --color-acid: #2fd8ff;
+  --color-primary: #f97c03;
+  --color-primary-end: #f9cd5a;
   --color-ink: #06161c;
-  /* 4.8:1 on --bg; the original #0a7a99 sat at 4.44:1, just under AA for body text. */
-  --color-signal: #0a7490;
+  --color-signal: #994900;
   --color-amber: #ffb547;
+}
+
+:root {
+  --gradient-primary: linear-gradient(
+    105deg,
+    var(--color-primary) 0%,
+    var(--color-primary-end) 100%
+  );
+}
+
+@utility bg-primary-gradient {
+  background-image: var(--gradient-primary);
+}
+
+@utility squircle-xs {
+  corner-shape: squircle;
+  border-radius: 4px;
+}
+
+@utility squircle-sm {
+  corner-shape: squircle;
+  border-radius: 8px;
+}
+
+@utility squircle-md {
+  corner-shape: squircle;
+  border-radius: 14px;
+}
+
+@utility squircle-lg {
+  corner-shape: squircle;
+  border-radius: 22px;
+}
+
+@utility squircle-xl {
+  corner-shape: squircle;
+  border-radius: 30px;
+}
+
+@utility squircle-pill {
+  corner-shape: squircle;
+  border-radius: 9999px;
+}
+
+@utility circle {
+  border-radius: 50%;
 }
 
 /* Theme variables live in Tailwind's `theme` layer, so an unlayered override wins without `!important`. */
@@ -30,7 +76,7 @@
     --color-mute: #9a978d;
     --color-line: #26292b;
     --color-dim: rgb(242 241 236 / 0.56);
-    --color-signal: #5ee1ff;
+    --color-signal: #f9cd5a;
   }
 }
 
@@ -62,7 +108,7 @@
   }
 
   ::selection {
-    background-color: var(--color-acid);
+    background-color: var(--color-primary);
     color: var(--color-ink);
   }
 

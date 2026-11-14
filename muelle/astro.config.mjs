@@ -4,9 +4,10 @@ import sitemap from "@astrojs/sitemap";
 import tailwindcss from "@tailwindcss/vite";
 
 export default defineConfig({
-  // Placeholder until the real domain is chosen; it only feeds the canonical URL and the sitemap.
-  site: "https://muelle.app",
-  integrations: [sitemap()],
+  // Feeds the canonical URLs and the sitemap. Keep in sync with `site.url`.
+  site: "https://muellee.vercel.app",
+  // The 404 page must stay out: a sitemap lists canonical, indexable URLs only.
+  integrations: [sitemap({ filter: (page) => !page.endsWith("/404") })],
   vite: {
     plugins: [tailwindcss()],
   },

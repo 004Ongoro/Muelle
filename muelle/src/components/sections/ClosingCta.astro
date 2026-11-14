@@ -2,13 +2,18 @@
 import Section from "@/components/layout/Section.astro";
 import Button from "@/components/ui/Button.astro";
 import Icon from "@/components/ui/Icon.astro";
+import closingBackground from "@/assets/backgrounds/closing-cta.avif";
 import { closing } from "@/data/install";
 import { site } from "@/data/site";
 import "@/styles/install.css";
 ---
 
-<Section id="download" spacing={false}>
-  <div class="end" data-r>
+<Section id="download" spacing={false} class="mask-b-from-70% mask-b-to-99%">
+  <div
+    class="end"
+    data-r
+    style={`--closing-background: url("${closingBackground.src}")`}
+  >
     <h2>{closing.heading}</h2>
     <p class="text-lg">{closing.body}</p>
     <Button href={site.download} variant="inverse">

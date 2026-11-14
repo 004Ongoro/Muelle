@@ -22,7 +22,7 @@ import { site } from "@/data/site";
         navigation.map(({ label, href }) => (
           <a
             href={href}
-            class="transition-colors hover:text-fg focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-acid"
+            class="transition-colors hover:text-fg focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-primary"
           >
             {label}
           </a>
@@ -36,7 +36,7 @@ import { site } from "@/data/site";
         target="_blank"
         rel="noopener noreferrer"
         aria-label={`${site.name} on GitHub`}
-        class="rounded-full p-2 text-fg/80 transition-colors hover:bg-card hover:text-fg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-acid"
+        class="squircle-pill p-2 text-fg/80 transition-colors hover:bg-card hover:text-fg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
       >
         <Icon name="github" size={20} />
       </a>
@@ -50,7 +50,7 @@ import { site } from "@/data/site";
         aria-expanded="false"
         aria-controls="mobile-menu"
         aria-label="Open menu"
-        class="ml-1 rounded-full p-2 text-fg transition-colors hover:bg-card focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-acid md:hidden"
+        class="ml-1 squircle-pill p-2 text-fg transition-colors hover:bg-card focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary md:hidden"
       >
         <Icon name="menu" size={20} class="icon-menu" />
         <Icon name="close" size={20} class="icon-close hidden" />
@@ -64,7 +64,7 @@ import { site } from "@/data/site";
         navigation.map(({ label, href }) => (
           <a
             href={href}
-            class="rounded-lg px-2 py-2.5 font-mono text-[12px] tracking-[0.08em] text-mute uppercase transition-colors hover:bg-card hover:text-fg"
+            class="squircle-sm px-2 py-2.5 font-mono text-[12px] tracking-[0.08em] text-mute uppercase transition-colors hover:bg-card hover:text-fg"
           >
             {label}
           </a>
