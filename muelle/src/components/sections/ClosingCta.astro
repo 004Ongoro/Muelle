@@ -1,0 +1,27 @@
+---
+import Section from "@/components/layout/Section.astro";
+import Button from "@/components/ui/Button.astro";
+import Icon from "@/components/ui/Icon.astro";
+import { closing } from "@/data/install";
+import { site } from "@/data/site";
+import "@/styles/install.css";
+---
+
+<Section id="download" spacing={false}>
+  <div class="end" data-r>
+    <h2>{closing.heading}</h2>
+    <p class="text-lg">{closing.body}</p>
+    <Button href={site.download} variant="inverse">
+      {closing.cta}
+      <Icon name="arrow-right" size={18} />
+    </Button>
+    <Icon name="anchor" size={320} class="cta-icon" />
+  </div>
+</Section>
+
+<script>
+  import { initReveal } from "@/scripts/reveal";
+
+  const section = document.querySelector<HTMLElement>("#download");
+  if (section) initReveal(section);
+</script>

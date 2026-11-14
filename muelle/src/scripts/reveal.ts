@@ -43,13 +43,13 @@ export function initReveal(root: HTMLElement) {
     trigger: pipe,
     start: "top 75%",
     once: true,
-    onEnter: () => {
-      gsap.to(pipe.querySelectorAll(".node"), {
-        "--w": 1,
-        duration: 0.8,
-        stagger: 0.1,
-        ease: "power2.out",
-      });
-    },
+          onEnter: () => {
+        // The connector's CSS default is already 1, so it has to be driven from 0 to grow.
+        gsap.fromTo(
+          pipe.querySelectorAll(".node"),
+          { "--w": 0 },
+          { "--w": 1, duration: 0.8, stagger: 0.1, ease: "power2.out" },
+        );
+      },
   });
 }

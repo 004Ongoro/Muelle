@@ -88,6 +88,23 @@
 .tl .is-live::after {
   border-color: var(--color-ink);
   background: var(--color-acid);
+  animation: tl-ping 2s ease-out infinite;
+}
+
+@keyframes tl-ping {
+  0% {
+    box-shadow: 0 0 0 0 rgb(47 216 255 / 0.55);
+  }
+  80%,
+  100% {
+    box-shadow: 0 0 0 9px rgb(47 216 255 / 0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tl .is-live::after {
+    animation: none;
+  }
 }
 
 .tl .is-warn::after {
@@ -142,7 +159,7 @@
   padding: 0 10px 4px;
 }
 
-.md img {
+.md-icon {
   flex: none;
   width: var(--s, 40px);
   height: var(--s, 40px);
@@ -257,10 +274,6 @@
 @media (max-width: 899px) {
   .bento {
     grid-template-columns: 1fr;
-  }
-
-  .bento-card {
-    min-height: 320px;
   }
 
   .bento-card--wide {

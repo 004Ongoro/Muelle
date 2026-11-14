@@ -33,12 +33,14 @@ import { site } from "@/data/site";
     <div class="flex items-center gap-1">
       <a
         href={site.repository}
+        target="_blank"
+        rel="noopener noreferrer"
         aria-label={`${site.name} on GitHub`}
         class="rounded-full p-2 text-fg/80 transition-colors hover:bg-card hover:text-fg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-acid"
       >
         <Icon name="github" size={20} />
       </a>
-      <Button href={site.releases} size="sm" class="ml-1 max-sm:hidden">
+      <Button href={site.download} size="sm" class="ml-1 max-sm:hidden">
         Download
         <Icon name="arrow-right" size={16} />
       </Button>
@@ -68,7 +70,7 @@ import { site } from "@/data/site";
           </a>
         ))
       }
-      <Button href={site.releases} class="mt-3">
+      <Button href={site.download} class="mt-3">
         Download for Windows
         <Icon name="arrow-right" size={18} />
       </Button>
@@ -94,7 +96,8 @@ import { site } from "@/data/site";
     button.addEventListener("click", () => setOpen(button.getAttribute("aria-expanded") !== "true"));
     // Anchors navigate away from the panel, so it must not stay open behind them.
     panel.addEventListener("click", (event) => {
-      if (event.target instanceof HTMLAnchorElement) setOpen(false);
+      // The click can land on an icon inside the link, so look for the closest anchor.
+      if (event.target instanceof Element && event.target.closest("a")) setOpen(false);
     });
     document.addEventListener("keydown", (event) => {
       if (event.key === "Escape") setOpen(false);

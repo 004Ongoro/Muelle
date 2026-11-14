@@ -2,8 +2,8 @@
 export const figures = {
   memory: { value: "16", unit: "MB", label: "private memory" },
   cpu: { value: "0", unit: "%", label: "cpu when idle" },
-  genie: { value: "0.5", unit: "s", label: "genie minimize" },
-  restore: { value: "2", unit: "s", label: "taskbar restore" },
+  installer: { value: "2.4", unit: "MB", label: "installer" },
+  admin: { value: "0", unit: "", label: "admin rights needed" },
 } as const;
 
 /** The stat strip, in the order the landing shows them. */

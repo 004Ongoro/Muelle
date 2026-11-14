@@ -1,44 +1,49 @@
 ---
+import { Image } from "astro:assets";
+import kDecor from "@/assets/decorators/k-decor.webp";
 import WindowMock from "@/components/dock/WindowMock.astro";
 import Section from "@/components/layout/Section.astro";
-import Badge from "@/components/ui/Badge.astro";
 import Button from "@/components/ui/Button.astro";
 import Icon from "@/components/ui/Icon.astro";
 import StatStrip from "@/components/ui/StatStrip.astro";
 import { site } from "@/data/site";
 ---
 
-<Section id="top" spacing={false} class="pt-32 text-center">
-  <span class="font-mono text-[11px] tracking-[0.08em] text-mute uppercase">
-    Open source · MIT · Rust
-  </span>
+<Section id="top" spacing={false} class="pt-20 text-center">
 
-  <h1 class="mt-[18px] text-[clamp(2.75rem,7.4vw,6rem)]">
+  <h1 data-h class="mt-[18px] text-[clamp(2.75rem,7.4vw,6rem)]">
     <span class="inline-flex items-center gap-[0.14em]">
-      Your Dock
-      <Badge class="size-[1.05em] rotate-[-8deg] text-[0.9em]">
-        <Icon name="anchor" size={20} class="size-[0.72em]" />
-      </Badge>
+      Your Dock<Image
+          src={kDecor}
+          alt=""
+          class="pointer-events-none absolute top-[0.6em] right-[3.15em] w-[0.82em] select-none -mask-linear-50 mask-linear-from-60% mask-linear-to-80%"
+        />
     </span>
-    <span class="block text-dim">now on Windows.</span>
+    <span class="block  bg-gradient-to-r from-neutral-600 via-neutral-400 to-white bg-clip-text text-transparent">now on Windows.</span>
   </h1>
 
-  <p class="mx-auto mt-[22px] mb-[30px] max-w-[560px] text-lg text-mute">
-    Muelle swaps the taskbar for a glass dock that magnifies, bounces and genies. Crash it, and
-    Windows gets its taskbar back in under two seconds.
+  <p data-h class="mx-auto mt-[22px] mb-[30px] max-w-[560px] text-lg text-mute">
+    Muelle replaces the Windows 11 taskbar with a glass dock: icons grow under your cursor and
+    minimized windows wait as live thumbnails. Free, open source and light.
   </p>
 
-  <div class="flex flex-wrap justify-center gap-3">
-    <Button href={site.releases}>
+  <div data-h class="flex flex-wrap justify-center gap-3">
+    <Button href={site.download}>
       Download for Windows
       <Icon name="arrow-right" size={18} />
     </Button>
     <Button href="#how" variant="secondary">See how it works</Button>
   </div>
 
-  <div class="mt-14">
+  <div data-hero-mock>
     <WindowMock />
   </div>
 
   <StatStrip class="mt-12" />
 </Section>
+
+<script>
+  import { initHeroMotion } from "@/scripts/hero";
+
+  initHeroMotion();
+</script>

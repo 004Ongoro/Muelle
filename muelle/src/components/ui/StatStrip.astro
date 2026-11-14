@@ -6,6 +6,9 @@ interface Props {
 }
 
 const { class: className } = Astro.props;
+
+/** "0.5" shows one decimal while counting; "16" must not flicker through "16.0". */
+const decimalsOf = (value: string) => (value.split(".")[1] ?? "").length;
 ---
 
 <div
@@ -17,11 +20,20 @@ const { class: className } = Astro.props;
   {
     stats.map(({ value, unit, label }) => (
       <div class="bg-bg px-5 py-[22px] text-left">
-        <b class="block text-4xl font-extrabold tracking-[-0.05em]">
-          {value} {unit}
+        <b class="block text-4xl font-extrabold tracking-[-0.05em] tabular-nums">
+          <span data-counter data-to={value} data-decimals={decimalsOf(value)}>
+            {value}
+          </span>{" "}
+          {unit}
         </b>
         <span class="font-mono text-[10px] tracking-[0.08em] text-mute uppercase">{label}</span>
       </div>
     ))
   }
 </div>
+
+<script>
+  import { initCounters } from "@/scripts/counters";
+
+  initCounters(document);
+</script>

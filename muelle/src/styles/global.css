@@ -11,10 +11,13 @@
   --color-fg: #14110f;
   --color-mute: #6b675e;
   --color-line: #dcd8cc;
-  --color-dim: rgb(20 17 15 / 0.38);
+  /* 0.46 keeps the ghost half of a heading at 3.1:1 on --bg: still clearly secondary,
+     but large text meets the 3:1 floor instead of 2.4:1. */
+  --color-dim: rgb(20 17 15 / 0.46);
   --color-acid: #2fd8ff;
   --color-ink: #06161c;
-  --color-signal: #0a7a99;
+  /* 4.8:1 on --bg; the original #0a7a99 sat at 4.44:1, just under AA for body text. */
+  --color-signal: #0a7490;
   --color-amber: #ffb547;
 }
 
@@ -26,7 +29,7 @@
     --color-fg: #f2f1ec;
     --color-mute: #9a978d;
     --color-line: #26292b;
-    --color-dim: rgb(242 241 236 / 0.38);
+    --color-dim: rgb(242 241 236 / 0.56);
     --color-signal: #5ee1ff;
   }
 }

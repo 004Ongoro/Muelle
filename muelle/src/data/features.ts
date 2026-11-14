@@ -7,7 +7,7 @@ import recycleBin from "@/assets/icons/recycle-bin.webp";
 import windowsTerminal from "@/assets/icons/windows-terminal.webp";
 import { site } from "@/data/site";
 
-/** One beat of the crash-and-recover timeline. */
+/** One beat of the "your taskbar always comes back" timeline. */
 export interface TimelineStep {
   time: string;
   title: string;
@@ -24,26 +24,26 @@ export const features = {
 export const safety = {
   label: "Safety",
   title: "Never stranded.",
-  body: "A tiny guardian process watches the Dock. If it dies, your Windows taskbar comes back before you notice.",
+  body: "Muelle hides the Windows taskbar, never removes it. Quit, uninstall or even a crash: the taskbar comes back.",
   steps: [
-    { time: "00:00", title: "Dock crashes", detail: "muelle.exe exits", state: "warn" },
-    { time: "00:00.4", title: "Guardian wakes", detail: "--guard sees it" },
-    { time: "00:01.8 // live", title: "Taskbar restored", detail: "Windows is whole again", state: "live" },
-    { time: "00:03", title: "Dock relaunches", detail: "Autostart brings it back" },
+    { time: "Quit", title: "You quit Muelle", detail: "From the Dock menu" },
+    { time: "Crash", title: "Dock stops", detail: "For any reason", state: "warn" },
+    { time: "At once // live", title: "Taskbar is back", detail: "A tiny guardian sees to it", state: "live" },
+    { time: "Uninstall", title: "Windows as it was", detail: "Nothing left behind" },
   ] satisfies TimelineStep[],
 };
 
 export const material = {
   label: "Material",
   title: "Liquid glass.",
-  body: "Live blur, specular edge, soft shadow. Tilt it with the cursor.",
+  body: "Real system blur behind the glass, a light edge and a soft shadow. Tilt this one with your cursor.",
   icons: [fileExplorer, microsoftPhotos, microsoftStore, windowsTerminal] as ImageMetadata[],
 };
 
 export const motion = {
   label: "Motion",
   title: "Follows your cursor.",
-  body: "Hover the row. Smooth curve, no steps.",
+  body: "Icons grow under the pointer on a smooth curve. Size and magnification are yours to set.",
   icons: [
     microsoftStore,
     fileExplorer,
@@ -52,13 +52,13 @@ export const motion = {
     downloads,
     recycleBin,
   ] as ImageMetadata[],
-  range: { min: 28, max: 48, value: 40 },
+  range: { min: 32, max: 48, value: 40 },
 };
 
 export const menuBar = {
   label: "Menu bar",
   title: "Time, battery, control.",
-  body: "A slim bar on top. Quick settings are one click away.",
+  body: "Optional slim bar on top: the app in front, battery, Windows quick settings and notifications. It can hide itself too.",
   app: "Muelle",
   time: "9:41",
 };
@@ -66,6 +66,7 @@ export const menuBar = {
 export const source = {
   label: "Source",
   title: "Open, in Rust.",
-  body: "MIT licensed. Read it, fork it, ship it.",
-  commands: [`git clone ${site.repository.replace(/^https?:\/\//, "")}`, "cargo run -p muelle"],
+  body: "MIT licensed and written in Rust. Read it, build it, improve it.",
+  // A bare `github.com/user/repo` is not a URL git understands, so the full https one is shown.
+  commands: [`git clone ${site.repository}`, "cd Muelle && cargo run -p muelle"],
 };

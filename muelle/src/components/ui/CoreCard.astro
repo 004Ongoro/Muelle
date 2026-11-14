@@ -1,5 +1,6 @@
 ---
 import { Image } from "astro:assets";
+import coreCardBackground from "@/assets/backgrounds/core-card-background.avif";
 import type { PipelineCore } from "@/data/pipeline";
 
 interface Props {
@@ -11,22 +12,24 @@ const { core } = Astro.props;
 const memory = `${core.memory.value} ${core.memory.unit}`;
 ---
 
-<div class="core flex flex-col gap-3 rounded-[18px] p-[18px]" data-r>
+<div
+  class="core flex flex-col gap-3 rounded-[18px] p-[18px]"
+  data-r
+  style={`background-image: linear-gradient(rgb(0 0 0 / 0.35), rgb(0 0 0 / 0.35)), url("${coreCardBackground.src}")`}
+>
   <span class="label flex justify-between font-mono text-[11px] leading-[1.4] tracking-[0.08em] uppercase">
     <span>{core.name}</span>
     <span>{memory}</span>
   </span>
 
-  <div class="mini flex justify-center gap-2.5 rounded-xl px-3 py-6">
+  <div class="flex justify-center gap-2.5 rounded-xl px-3 py-6">
     {
       core.icons.map((icon) => (
         <Image
           src={icon}
           alt=""
-          width={46}
-          height={46}
           aria-hidden="true"
-          class="drop-shadow-[0_3px_4px_rgba(0,0,0,0.35)]"
+          class="w-12 drop-shadow-[0_3px_4px_rgba(0,0,0,0.35)]"
         />
       ))
     }
@@ -42,14 +45,15 @@ const memory = `${core.memory.value} ${core.memory.unit}`;
 </div>
 
 <style>
-  /* The app's own surface: light cream in both themes, as in the product. */
   .core {
-    background: #efebe2;
-    color: #14110f;
+    color: #fff;
+    background-position: center;
+    background-repeat: no-repeat;
+    background-size: cover;
   }
 
   .core .label {
-    color: #6a6960;
+    color: #fff;
   }
 
   .mini {
@@ -57,13 +61,13 @@ const memory = `${core.memory.value} ${core.memory.unit}`;
   }
 
   .track {
-    background: #d9d5ca;
+    background: rgb(255 255 255 / 0.3);
   }
 
   .progress {
     display: block;
     height: 100%;
-    background: #14110f;
+    background: #fff;
     animation: fill 3.2s ease-in-out infinite;
   }
 

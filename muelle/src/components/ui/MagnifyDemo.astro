@@ -10,8 +10,8 @@ interface Props {
 const { icons, range } = Astro.props;
 ---
 
-<div class="md" data-magnify-row aria-hidden="true">
-  {icons.map((icon) => <Image src={icon} alt="" width={range.value} height={range.value} />)}
+<div class="md" data-magnify-row style={`--s: ${range.value}px`} aria-hidden="true">
+  {icons.map((icon) => <Image src={icon} alt="" class="md-icon" />)}
 </div>
 
 <div class="mt-3.5 flex items-baseline justify-between">

@@ -19,11 +19,20 @@ export function initMagnifyDemo(root: ParentNode) {
   const max = Number(range.max);
   let centers: number[] = [];
 
+  const measureCenters = () => {
+    centers = icons.map((icon) => {
+      const rect = icon.getBoundingClientRect();
+      return rect.left + rect.width / 2;
+    });
+  };
+
   const applySize = () => {
     const size = Number(range.value);
     row.style.setProperty("--s", `${size}px`);
     range.style.setProperty("--p", String((size - min) / (max - min)));
     output.textContent = `${size} px`;
+    // Resizing moves every icon, and the pointer may be sitting on the row while it changes.
+    if (centers.length) measureCenters();
   };
 
   range.addEventListener("input", applySize);
@@ -32,12 +41,7 @@ export function initMagnifyDemo(root: ParentNode) {
   if (prefersReducedMotion()) return;
 
   // The icons move when the slider resizes the row, so measure on every enter.
-  row.addEventListener("pointerenter", () => {
-    centers = icons.map((icon) => {
-      const rect = icon.getBoundingClientRect();
-      return rect.left + rect.width / 2;
-    });
-  });
+  row.addEventListener("pointerenter", measureCenters);
 
   row.addEventListener("pointermove", (event) => {
     if (!centers.length) return;

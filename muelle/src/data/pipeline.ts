@@ -27,15 +27,15 @@ export const howItWorks = {
 
 /** What wakes the dock up. */
 export const inputs: PipelineStep[] = [
-  { label: "WinEvent", title: "Windows open and close", detail: "Events, never polling" },
-  { label: "Shell hook", title: "Minimize, flash, fullscreen", detail: "Public APIs only" },
+  { label: "Shell events", title: "Windows open and close", detail: "Notified, never polled" },
+  { label: "Foreground", title: "Minimize, restore, fullscreen", detail: "Public Windows APIs only" },
   { label: "config.json", title: "Settings change", detail: "One message reloads it live" },
 ];
 
 /** What the dock does in response. */
 export const outputs: PipelineStep[] = [
-  { label: "Dock", title: "Springs on the compositor", detail: "DWM animates, not the app" },
-  { label: "Genie", title: "Rows warped into the Dock", detail: "Live thumbnail left behind" },
+  { label: "Dock", title: "Drawn by Windows composition", detail: "System blur, no GPU load" },
+  { label: "Minimize", title: "Live thumbnail in the Dock", detail: "Optional Genie effect" },
   { label: "Taskbar", title: "Hidden, always restored", detail: "On quit, uninstall or crash" },
 ];
 
