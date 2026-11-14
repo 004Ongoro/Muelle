@@ -2,15 +2,9 @@
   
 <img width="50%" alt="169e658d-4f67-4932-8e9b-480dd2536d90 (1)" src="https://github.com/user-attachments/assets/72a84b9a-7a47-4ca7-acc8-580c3ed350d7" />
 
-
   **A lightweight, macOS-inspired dock for Windows 11.**
 
   Smooth magnification, live window previews, and an optional Genie-style minimize effect.
-
-  ![Windows 11](https://img.shields.io/badge/Windows-11-0078D4?logo=windows11&logoColor=white)
-  ![Rust](https://img.shields.io/badge/Rust-2024%20edition-000000?logo=rust&logoColor=white)
-  ![Tauri](https://img.shields.io/badge/Settings-Tauri%202-24C8D8?logo=tauri&logoColor=white)
-  ![Status](https://img.shields.io/badge/status-in%20development-orange)
 </div>
 
 Muelle replaces the Windows taskbar with a customizable dock and an optional
