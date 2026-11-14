@@ -7,6 +7,9 @@
 //!
 //! Cost while idle: one timer that fires once a minute, on the minute, to
 //! redraw the clock. Everything else is event-driven.
+//!
+//! With auto-hide on, the bar reserves no space and stays off screen; a thin
+//! strip along the top edge reveals it while the pointer is there.
 
 use anyhow::Result;
 use muelle_shell::{
@@ -17,7 +20,7 @@ use muelle_shell::{
 use windows::{
     UI::{
         Color,
-        Composition::{Desktop::DesktopWindowTarget, SpriteVisual},
+        Composition::{ContainerVisual, Desktop::DesktopWindowTarget, SpriteVisual},
     },
     Win32::{
         Foundation::{HWND, LPARAM, LRESULT, RECT, SYSTEMTIME, WPARAM},
@@ -26,11 +29,12 @@ use windows::{
             LibraryLoader::GetModuleHandleW, SystemInformation::GetLocalTime,
             WinRT::Composition::ICompositorDesktopInterop,
         },
+        UI::Input::KeyboardAndMouse::{TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent},
         UI::WindowsAndMessaging::{
             CreateWindowExW, DefWindowProcW, DestroyWindow, HWND_TOPMOST, IDC_ARROW, LoadCursorW,
             RegisterClassW, SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_SHOWWINDOW, SetTimer, SetWindowPos,
-            WM_APP, WM_LBUTTONUP, WM_TIMER, WNDCLASSW, WS_EX_NOACTIVATE, WS_EX_NOREDIRECTIONBITMAP,
-            WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+            WM_APP, WM_LBUTTONUP, WM_MOUSEMOVE, WM_TIMER, WNDCLASSW, WS_EX_NOACTIVATE,
+            WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
         },
     },
     core::{BOOL, Interface, w},
@@ -49,8 +53,12 @@ const ITEM_GAP: f32 = 16.0;
 /// Extra clickable room around an item.
 const HIT_SLOP: f32 = 7.0;
 
+/// Height of the strip that reveals a hidden bar, in physical pixels.
+const REVEAL_STRIP: i32 = 2;
+
 const CLOCK_TIMER: usize = 1;
 const WM_POWERBROADCAST: u32 = 0x0218;
+const WM_MOUSELEAVE: u32 = 0x02A3;
 /// AppBar notifications need a message id; the bar ignores them.
 const APPBAR_CALLBACK: u32 = WM_APP + 20;
 
@@ -80,6 +88,12 @@ pub struct MenuBar {
     /// Clickable spans, in window pixels.
     zones: Vec<(f32, f32, Action)>,
     visible: bool,
+    auto_hide: bool,
+    /// With auto-hide on: the pointer is at the top edge, so the bar shows.
+    revealed: bool,
+    /// Current visual tree and where the full bar goes on screen.
+    root: Option<ContainerVisual>,
+    bounds: RECT,
 }
 
 unsafe extern "system" fn bar_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LRESULT {
@@ -88,6 +102,8 @@ unsafe extern "system" fn bar_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -
             let x = (l.0 & 0xFFFF) as i16;
             app::menu_bar_clicked(f32::from(x));
         }
+        WM_MOUSEMOVE => app::menu_bar_hover(true),
+        WM_MOUSELEAVE => app::menu_bar_hover(false),
         // The minute changed, or the charger was plugged or unplugged.
         WM_TIMER | WM_POWERBROADCAST => app::menu_bar_tick(),
         // SAFETY: Standard forwarding of unhandled messages.
@@ -158,6 +174,10 @@ impl MenuBar {
             look: None,
             zones: Vec::new(),
             visible: true,
+            auto_hide: false,
+            revealed: false,
+            root: None,
+            bounds: RECT::default(),
         };
         bar.refresh(gfx)?;
         bar.schedule_next_minute();
@@ -173,31 +193,84 @@ impl MenuBar {
     }
 
     /// Hidden while an app is full screen.
-    pub fn set_visible(&mut self, visible: bool) {
+    pub fn set_visible(&mut self, visible: bool) -> Result<()> {
         if self.visible == visible {
-            return;
+            return Ok(());
         }
         self.visible = visible;
-        let show = if visible {
+        self.place()
+    }
+
+    pub fn set_auto_hide(&mut self, auto_hide: bool) -> Result<()> {
+        if self.auto_hide == auto_hide {
+            return Ok(());
+        }
+        self.auto_hide = auto_hide;
+        self.revealed = false;
+        self.place()
+    }
+
+    /// The pointer reached the top edge or left the bar.
+    pub fn hover(&mut self, inside: bool) -> Result<()> {
+        if !self.auto_hide || self.revealed == inside {
+            return Ok(());
+        }
+        self.revealed = inside;
+        self.place()?;
+        if inside {
+            let mut track = TRACKMOUSEEVENT {
+                cbSize: size_of::<TRACKMOUSEEVENT>() as u32,
+                dwFlags: TME_LEAVE,
+                hwndTrack: self.hwnd,
+                dwHoverTime: 0,
+            };
+            // SAFETY: `track` is a valid structure with its size initialized.
+            unsafe { TrackMouseEvent(&mut track)? };
+        }
+        Ok(())
+    }
+
+    /// Positions the window and reserves (or frees) its strip of the screen.
+    fn place(&mut self) -> Result<()> {
+        let bounds = self.bounds;
+        let height = bounds.bottom - bounds.top;
+        if height <= 0 {
+            return Ok(());
+        }
+        let hidden = self.auto_hide && !self.revealed;
+        if let Some(appbar) = &mut self.appbar {
+            // An auto-hiding bar leaves the whole screen to the windows.
+            let strip = if self.auto_hide { 0 } else { height };
+            appbar.reserve(Edge::Top, bounds, strip);
+        }
+        if let Some(root) = &self.root {
+            // Hidden: the content sits above the screen edge, and only the
+            // reveal strip of the window remains to catch the pointer.
+            let lift = if hidden { -(height as f32) } else { 0.0 };
+            root.SetOffset(Vector3 {
+                X: 0.0,
+                Y: lift,
+                Z: 0.0,
+            })?;
+        }
+        let show = if self.visible {
             SWP_SHOWWINDOW
         } else {
             SWP_HIDEWINDOW
         };
-        // SAFETY: Our own live window; only its visibility changes.
+        // SAFETY: Our own live window.
         unsafe {
-            let _ = SetWindowPos(
+            SetWindowPos(
                 self.hwnd,
                 Some(HWND_TOPMOST),
-                0,
-                0,
-                0,
-                0,
-                SWP_NOACTIVATE
-                    | show
-                    | windows::Win32::UI::WindowsAndMessaging::SWP_NOMOVE
-                    | windows::Win32::UI::WindowsAndMessaging::SWP_NOSIZE,
-            );
+                bounds.left,
+                bounds.top,
+                bounds.right - bounds.left,
+                if hidden { REVEAL_STRIP } else { height },
+                SWP_NOACTIVATE | show,
+            )?;
         }
+        Ok(())
     }
 
     /// The minute changed or the power state did: redraw what differs.
@@ -264,7 +337,10 @@ impl MenuBar {
         let ink = if look.light { Ink::Dark } else { Ink::Light };
 
         let root = c.CreateContainerVisual()?;
-        root.SetRelativeSizeAdjustment(Vector2 { X: 1.0, Y: 1.0 })?;
+        root.SetSize(Vector2 {
+            X: width,
+            Y: height,
+        })?;
         let layers = root.Children()?;
         let tint = if look.light {
             rgba(255, 255, 255, 110)
@@ -332,28 +408,12 @@ impl MenuBar {
         }
 
         self.target.SetRoot(&root)?;
-
-        if let Some(appbar) = &mut self.appbar {
-            appbar.reserve(Edge::Top, screen, height as i32);
-        }
-        let show = if self.visible {
-            SWP_SHOWWINDOW
-        } else {
-            SWP_HIDEWINDOW
+        self.root = Some(root);
+        self.bounds = RECT {
+            bottom: screen.top + height as i32,
+            ..screen
         };
-        // SAFETY: Our own live window.
-        unsafe {
-            SetWindowPos(
-                self.hwnd,
-                Some(HWND_TOPMOST),
-                screen.left,
-                screen.top,
-                width as i32,
-                height as i32,
-                SWP_NOACTIVATE | show,
-            )?;
-        }
-        Ok(())
+        self.place()
     }
 }
 

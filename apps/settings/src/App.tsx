@@ -166,6 +166,15 @@ export function App() {
                     onChange={(menuBar) => update({ menuBar })}
                   />
                 </Row>
+                {config.menuBar ? (
+                  <Row label={t.menuBarAutoHide} hint={t.menuBarAutoHideHint}>
+                    <Toggle
+                      label={t.menuBarAutoHide}
+                      checked={config.menuBarAutoHide}
+                      onChange={(menuBarAutoHide) => update({ menuBarAutoHide })}
+                    />
+                  </Row>
+                ) : null}
                 <Row label={t.genie} hint={t.genieHint}>
                   <Toggle
                     label={t.genie}

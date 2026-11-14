@@ -13,6 +13,8 @@
   "genieHint": "Mientras está activo, las ventanas no usan las animaciones de Windows al maximizar ni al cerrar.",
   "menuBar": "Barra superior",
   "menuBarHint": "Hora, batería y acceso a los ajustes rápidos y las notificaciones de Windows.",
+  "menuBarAutoHide": "Ocultar y mostrar la barra superior automáticamente",
+  "menuBarAutoHideHint": "Reaparece al tocar el borde superior de la pantalla.",
   "autostart": "Abrir Muelle al iniciar sesión",
   "language": "Idioma",
   "languageAuto": "Automático",

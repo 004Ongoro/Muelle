@@ -13,6 +13,8 @@
   "genieHint": "While it is on, windows do not use the Windows animations for maximizing or closing.",
   "menuBar": "Menu bar",
   "menuBarHint": "Time, battery, and access to the Windows quick settings and notifications.",
+  "menuBarAutoHide": "Automatically hide and show the menu bar",
+  "menuBarAutoHideHint": "It reappears when you touch the top edge of the screen.",
   "autostart": "Open Muelle at login",
   "language": "Language",
   "languageAuto": "Automatic",

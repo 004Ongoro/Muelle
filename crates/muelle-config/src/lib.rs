@@ -50,6 +50,8 @@ pub struct Config {
     pub genie: bool,
     /// macOS-style bar across the top with the clock and status items.
     pub menu_bar: bool,
+    /// Keep the menu bar off screen until the pointer touches the top edge.
+    pub menu_bar_auto_hide: bool,
     pub language: Language,
 }
 
@@ -100,6 +102,7 @@ impl Default for Config {
             magnified_size: 77,
             genie: false,
             menu_bar: true,
+            menu_bar_auto_hide: false,
             language: Language::Auto,
         }
     }

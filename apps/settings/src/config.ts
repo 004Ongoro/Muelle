@@ -13,6 +13,7 @@ export interface Config {
   magnifiedSize: number;
   genie: boolean;
   menuBar: boolean;
+  menuBarAutoHide: boolean;
   language: Language;
 }
 

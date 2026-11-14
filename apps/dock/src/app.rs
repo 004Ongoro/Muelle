@@ -1705,8 +1705,13 @@ impl App {
             self.menubar = MenuBar::create(&self.gfx)
                 .inspect_err(|error| eprintln!("muelle: barra superior: {error:#}"))
                 .ok();
-            if let Some(bar) = &mut self.menubar {
-                bar.set_visible(!self.fullscreen);
+        }
+        if let Some(bar) = &mut self.menubar {
+            let applied = bar
+                .set_auto_hide(self.config.menu_bar_auto_hide)
+                .and_then(|()| bar.set_visible(!self.fullscreen));
+            if let Err(error) = applied {
+                eprintln!("muelle: barra superior: {error:#}");
             }
         }
     }
@@ -1747,7 +1752,7 @@ impl App {
         }
         self.fullscreen = fullscreen;
         if let Some(bar) = &mut self.menubar {
-            bar.set_visible(!fullscreen);
+            bar.set_visible(!fullscreen)?;
         }
         if fullscreen {
             self.hovering = false;
@@ -1837,6 +1842,13 @@ pub fn menu_bar_clicked(x: f32) {
             bar.click(x);
         }
         Ok(())
+    });
+}
+
+pub fn menu_bar_hover(inside: bool) {
+    with_app("barra superior", |app| match &mut app.menubar {
+        Some(bar) => bar.hover(inside),
+        None => Ok(()),
     });
 }
 
