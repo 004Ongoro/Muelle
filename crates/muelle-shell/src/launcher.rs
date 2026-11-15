@@ -1,7 +1,9 @@
 use thiserror::Error;
 use windows::{
     Win32::{
-        Foundation::{HWND, LPARAM, WPARAM},
+        Foundation::{CloseHandle, HANDLE, HWND, LPARAM, WPARAM},
+        Security::{GetTokenInformation, TOKEN_ELEVATION, TOKEN_QUERY, TokenElevation},
+        System::Threading::{OpenProcess, OpenProcessToken, PROCESS_QUERY_LIMITED_INFORMATION},
         UI::{
             Input::KeyboardAndMouse::{
                 INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBD_EVENT_FLAGS, KEYBDINPUT,
@@ -10,10 +12,11 @@ use windows::{
             },
             Shell::ShellExecuteW,
             WindowsAndMessaging::{
-                ASFW_ANY, AllowSetForegroundWindow, GetForegroundWindow, HWND_TOP, IsIconic,
-                IsWindowVisible, PostMessageW, SW_MINIMIZE, SW_RESTORE, SW_SHOWNORMAL,
-                SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SetForegroundWindow, SetWindowPos,
-                ShowWindow, ShowWindowAsync, SwitchToThisWindow, WM_CLOSE,
+                ASFW_ANY, AllowSetForegroundWindow, FindWindowW, GetForegroundWindow,
+                GetWindowThreadProcessId, HWND_TOP, IsIconic, IsWindowVisible, PostMessageW,
+                SW_MINIMIZE, SW_RESTORE, SW_SHOWNORMAL, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+                SetForegroundWindow, SetWindowPos, ShowWindow, ShowWindowAsync, SwitchToThisWindow,
+                WM_CLOSE,
             },
         },
     },
@@ -88,8 +91,67 @@ pub fn open_with(app: &str, files: &[String]) -> Result<(), LaunchError> {
     }
 }
 
+/// `true` if the window in front belongs to a program running as
+/// administrator (Task Manager, an admin terminal, an installer), or to one
+/// the dock cannot even inspect, which is never less privileged.
+fn foreground_is_elevated() -> bool {
+    // SAFETY: Read-only queries on the foreground window.
+    let pid = unsafe {
+        let window = GetForegroundWindow();
+        if window.is_invalid() {
+            return false;
+        }
+        let mut pid = 0u32;
+        GetWindowThreadProcessId(window, Some(&mut pid));
+        pid
+    };
+    process_is_elevated(pid)
+}
+
+/// See [`foreground_is_elevated`].
+#[must_use]
+pub fn process_is_elevated(pid: u32) -> bool {
+    // SAFETY: Read-only queries; both handles are closed before returning.
+    unsafe {
+        let Ok(process) = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) else {
+            return true;
+        };
+        let mut token = HANDLE::default();
+        let opened = OpenProcessToken(process, TOKEN_QUERY, &mut token).is_ok();
+        let _ = CloseHandle(process);
+        if !opened {
+            return true;
+        }
+        let mut elevation = TOKEN_ELEVATION::default();
+        let mut size = 0u32;
+        let read = GetTokenInformation(
+            token,
+            TokenElevation,
+            Some((&raw mut elevation).cast()),
+            size_of::<TOKEN_ELEVATION>() as u32,
+            &mut size,
+        )
+        .is_ok();
+        let _ = CloseHandle(token);
+        !read || elevation.TokenIsElevated != 0
+    }
+}
+
 /// Presses the given keys together and releases them.
+///
+/// Windows drops simulated input aimed at a program running as administrator
+/// (UIPI), so with one in front the Windows key did nothing. In that case the
+/// dock first takes the focus itself, which it may because the user just
+/// clicked it, and the keys then go to an ordinary process.
 fn tap(keys: &[VIRTUAL_KEY]) {
+    if foreground_is_elevated() {
+        // SAFETY: Looks up the dock's own window and focuses it.
+        unsafe {
+            if let Ok(dock) = FindWindowW(crate::dock_link::DOCK_WINDOW_CLASS, None) {
+                bring_to_front(dock);
+            }
+        }
+    }
     let key = |vk: VIRTUAL_KEY, flags: KEYBD_EVENT_FLAGS| INPUT {
         r#type: INPUT_KEYBOARD,
         Anonymous: INPUT_0 {

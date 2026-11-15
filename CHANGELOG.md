@@ -18,6 +18,9 @@ copia la sección de la versión que se publica a la release de GitHub.
 - Fixed: the Dock section of Settings could not scroll to its last options.
 - Fixed: opening Settings twice opened two windows; it now brings the open one
   to the front.
+- Fixed: with an app running as administrator in front (Task Manager, an admin
+  terminal, an installer), the dock's Start button and the menu bar buttons did
+  nothing, because Windows drops simulated keys aimed at such apps.
 
 ### Español
 
@@ -28,6 +31,10 @@ copia la sección de la versión que se publica a la release de GitHub.
   a la frecuencia del monitor y ya no se salta sus primeros fotogramas.
 - Corregido: la sección Dock de Ajustes no dejaba bajar hasta las últimas opciones.
 - Corregido: abrir Ajustes dos veces abría dos ventanas; ahora trae al frente la abierta.
+- Corregido: con una app de administrador delante (Administrador de tareas, una
+  terminal de administrador, un instalador), el botón Inicio del dock y los botones
+  de la barra superior no hacían nada, porque Windows descarta las teclas simuladas
+  dirigidas a esas apps.
 
 ## [0.1.1]
 
