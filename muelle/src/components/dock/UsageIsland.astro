@@ -17,17 +17,18 @@ interface Props {
 }
 
 const { mode = "hover", focusable = false, class: className } = Astro.props;
+const showcaseProviders = usageProviders.slice(0, 2);
 ---
 
 <div class:list={["island", `island-${mode}`, className]} tabindex={focusable ? 0 : undefined}>
   <div class="island-compact">
     {
-      usageProviders.map((provider, index) => (
+      showcaseProviders.map((provider, index) => (
         <>
           {index > 0 && <i class="island-divider" />}
           <span class="island-provider">
             <Image src={provider.logo} alt="" width={16} height={16} />
-            <b class="tabular-nums">{provider.session}%</b>
+            <b class="tabular-nums">{provider.primary.used}%</b>
             <svg class="island-ring" viewBox="0 0 16 16" aria-hidden="true" style={`--ring: ${provider.color}`}>
               <circle cx="8" cy="8" r="6" pathLength="100" />
               <circle
@@ -35,7 +36,7 @@ const { mode = "hover", focusable = false, class: className } = Astro.props;
                 cy="8"
                 r="6"
                 pathLength="100"
-                stroke-dasharray={`${provider.session} 100`}
+                stroke-dasharray={`${provider.primary.used} 100`}
               />
             </svg>
           </span>
@@ -50,21 +51,29 @@ const { mode = "hover", focusable = false, class: className } = Astro.props;
       <span>Updated 2 min ago</span>
     </div>
     {
-      usageProviders.map((provider) => (
+      showcaseProviders.map((provider) => (
         <div class="island-row">
           <Image src={provider.logo} alt="" width={20} height={20} />
           <div class="island-detail">
             <p>
               <b>{provider.name}</b>
-              <span class="tabular-nums">5 h · {provider.session}%</span>
+              <span class="tabular-nums">{provider.primary.label} · {provider.primary.used}%</span>
             </p>
             <span class="island-bar">
-              <i style={`width: ${provider.session}%; background: ${provider.color}`} />
+              <i style={`width: ${provider.primary.used}%; background: ${provider.color}`} />
             </span>
-            <p class="island-meta">
-              <span class="tabular-nums">7 days · {provider.week}% used</span>
-              <span>{provider.resets}</span>
-            </p>
+            {
+              provider.secondary ? (
+                <p class="island-meta">
+                  <span class="tabular-nums">{provider.secondary.label} · {provider.secondary.used}% used</span>
+                  <span>{provider.secondary.resets}</span>
+                </p>
+              ) : (
+                <p class="island-meta">
+                  <span>{provider.primary.resets}</span>
+                </p>
+              )
+            }
           </div>
         </div>
       ))

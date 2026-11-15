@@ -33,9 +33,9 @@ Smooth magnification, live window previews, and an optional Genie-style minimize
 - Optional auto-hide.
 - A top menu bar with the app in front, clock, network, volume and battery, plus
   the Search, Task View and Widgets buttons if you have them on the Windows taskbar.
-- A curved island in the menu bar for Claude, Codex, GitHub Copilot, Cursor,
-  OpenCode Go, and Gemini or Antigravity usage. It appears when a supported
-  client is running; click it to see available limits and reset times.
+- A curved island in the menu bar for usage limits from Claude Code, Codex,
+  GitHub Copilot, Cursor, OpenCode Go, Gemini CLI, and Antigravity. Gemini Pro
+  and Flash quotas appear separately when available.
 - Separate Settings app with live changes, Spanish and English, and a
   configurable Genie-style minimize animation.
 - A watchdog restores the Windows taskbar if the dock exits unexpectedly.
@@ -186,8 +186,10 @@ project. It makes two kinds of network requests, both optional:
   opens. Turn it off in Settings → System → *Check for updates automatically*.
 - **AI provider usage:** while a supported client is running, Muelle reads its
   existing local sign-in and asks that provider for available plan limits
-  every five minutes while visible, or when you press Refresh. Antigravity usage comes from its local service.
-  Credentials stay in memory and are never stored by Muelle. Turn it off in
-  Settings → Menu bar → *Show AI provider usage*.
+  every five minutes while visible, or when you press Refresh. For Gemini CLI
+  and Antigravity, Gemini Pro and Flash quotas are shown separately when
+  available; Antigravity is queried through its local service. Credentials stay
+  in memory and are never stored by Muelle. Turn it off in Settings → Menu bar
+  → *Show AI provider usage*.
 
 Details: [muellee.vercel.app/privacy](https://muellee.vercel.app/privacy).

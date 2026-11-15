@@ -5,7 +5,7 @@ export const site = {
   tagline: "The macOS Dock, made for Windows.",
   /** Kept under ~155 characters so Google does not truncate it. */
   description:
-    "Muelle replaces the Windows taskbar with a macOS-style glass dock with the Genie effect and a menu bar that shows AI provider usage. Free.",
+    "Free macOS-style Windows dock with AI usage limits for Claude Code, Codex, GitHub Copilot, Cursor, OpenCode Go, Gemini CLI and Antigravity.",
   /** Canonical origin. Must match `site` in astro.config.mjs and the sitemap. */
   url: "https://muellee.vercel.app",
   /** Path to the social card in `public/`. */

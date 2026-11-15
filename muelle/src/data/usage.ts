@@ -1,42 +1,87 @@
 import claude from "@/assets/usage/claude.svg";
 import codex from "@/assets/usage/codex.svg";
+import copilot from "@/assets/usage/copilot.svg";
+import cursor from "@/assets/usage/cursor.svg";
+import gemini from "@/assets/usage/gemini.svg";
+import opencode from "@/assets/usage/opencode.svg";
 
-/** One plan limit the menu bar island shows, with example values. */
-export interface UsageProvider {
-  name: string;
-  logo: ImageMetadata;
-  /** Accent of its progress ring and bar. */
-  color: string;
-  /** Share of the five-hour window used, 0-100. */
-  session: number;
-  /** Share of the weekly window used, 0-100. */
-  week: number;
+export interface QuotaExample {
+  label: string;
+  used: number;
   resets: string;
 }
 
+/** One supported AI client with illustrative, not live, quota values. */
+export interface UsageProvider {
+  name: string;
+  logo: ImageMetadata;
+  color: string;
+  primary: QuotaExample;
+  secondary?: QuotaExample;
+}
+
 export const usageProviders: UsageProvider[] = [
-  { name: "Claude", logo: claude, color: "#d97757", session: 63, week: 19, resets: "Resets 9:40 PM" },
-  { name: "Codex", logo: codex, color: "#8ab4f8", session: 28, week: 41, resets: "Resets tomorrow 8:00 AM" },
+  {
+    name: "Claude Code",
+    logo: claude,
+    color: "#d97757",
+    primary: { label: "5 h", used: 46, resets: "Resets 3:10 PM" },
+    secondary: { label: "7 d", used: 35, resets: "Resets Nov 21" },
+  },
+  {
+    name: "Codex",
+    logo: codex,
+    color: "#87bef5",
+    primary: { label: "5 h", used: 28, resets: "Resets 4:30 PM" },
+    secondary: { label: "7 d", used: 41, resets: "Resets Nov 21" },
+  },
+  {
+    name: "GitHub Copilot",
+    logo: copilot,
+    color: "#93a4ba",
+    primary: { label: "Premium", used: 32, resets: "Resets Nov 30" },
+    secondary: { label: "Chat", used: 74, resets: "Resets Nov 30" },
+  },
+  {
+    name: "Cursor",
+    logo: cursor,
+    color: "#aeb4bd",
+    primary: { label: "Billing cycle", used: 57, resets: "Resets Nov 30" },
+  },
+  {
+    name: "OpenCode Go",
+    logo: opencode,
+    color: "#84c4a6",
+    primary: { label: "5 h", used: 25, resets: "Resets 4:00 PM" },
+    secondary: { label: "7 d", used: 40, resets: "Resets Nov 21" },
+  },
+  {
+    name: "Gemini / Antigravity",
+    logo: gemini,
+    color: "#6f92ff",
+    primary: { label: "Gemini Pro", used: 49, resets: "Resets 5:10 PM" },
+    secondary: { label: "Gemini Flash", used: 18, resets: "Resets Nov 21" },
+  },
 ];
 
 export const usageIntro = {
   eyebrow: "AI usage",
-  title: "Your AI limits, at a glance.",
-  lead: "While a supported AI client is open, a curved island in the menu bar shows its available plan limits. Click for details and reset times.",
+  title: "AI plan usage, at a glance.",
+  lead: "Muelle shows available limits for Claude Code, Codex, GitHub Copilot, Cursor, OpenCode Go, and Gemini CLI or Antigravity. Gemini Pro and Flash quotas appear separately when available.",
 } as const;
 
 export const usageFacts = [
   {
     title: "Only while you use them",
-    body: "Claude, Codex, GitHub Copilot, Cursor, OpenCode Go, and Gemini or Antigravity appear while their clients are running.",
+    body: "The island recognizes six clients: Claude Code, Codex, GitHub Copilot, Cursor, OpenCode Go, and Gemini CLI or Antigravity.",
   },
   {
     title: "Your existing session",
-    body: "It reuses the sign-in those tools already keep on your PC. No new Muelle account or token to paste.",
+    body: "Muelle reuses the sign-in those tools already keep on your PC. Gemini Pro and Flash are shown as separate model families when the provider supplies those quotas.",
   },
   {
     title: "Straight to the provider",
-    body: "Each provider is asked about its limits every five minutes or when you press Refresh; Antigravity uses its local service. A separate process keeps the dock responsive.",
+    body: "It checks available limits every five minutes or when you press Refresh. Antigravity is queried through its authenticated local service; a separate process keeps the dock responsive.",
   },
   {
     title: "One switch to turn it off",

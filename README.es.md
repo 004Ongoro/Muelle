@@ -27,9 +27,9 @@ en desarrollo activo.
 - Ocultación automática opcional.
 - Barra superior con la app en primer plano, hora, red, volumen y batería, además de
   los botones de búsqueda, Vista de tareas y Widgets si los tienes en la barra de Windows.
-- Una isla curva en la barra superior con el uso de Claude, Codex, GitHub Copilot,
-  Cursor, OpenCode Go y Gemini o Antigravity. Aparece cuando el cliente está abierto;
-  al pulsarla muestra los límites disponibles y cuándo se reinician.
+- Una isla curva en la barra superior con los límites de Claude Code, Codex,
+  GitHub Copilot, Cursor, OpenCode Go, Gemini CLI y Antigravity. Las cuotas de
+  Gemini Pro y Flash aparecen por separado cuando están disponibles.
 - App de Ajustes aparte, con cambios en vivo, en español e inglés, y efecto genio configurable.
 - Un proceso guardián devuelve la barra de tareas de Windows si el dock se cierra de forma inesperada.
 
@@ -172,8 +172,10 @@ dos tipos de conexión de red, ambas opcionales:
   actualizaciones automáticamente*.
 - **Uso de proveedores de IA:** mientras un cliente compatible está abierto,
   Muelle reutiliza su sesión local para consultar los límites disponibles de
-  su proveedor cada cinco minutos mientras está visible, o al pulsar Actualizar. Antigravity entrega el uso desde
-  su servicio local. Las credenciales permanecen en memoria; Muelle no las
-  guarda. Se desactiva en Ajustes → Barra superior → *Mostrar uso de proveedores de IA*.
+  su proveedor cada cinco minutos mientras está visible, o al pulsar Actualizar.
+  Gemini CLI y Antigravity pueden mostrar por separado las cuotas de Gemini Pro
+  y Flash; Antigravity se consulta mediante su servicio local. Las credenciales
+  permanecen en memoria; Muelle no las guarda. Se desactiva en Ajustes → Barra
+  superior → *Mostrar uso de proveedores de IA*.
 
 Detalles: [muellee.vercel.app/privacy](https://muellee.vercel.app/privacy).

@@ -26,13 +26,15 @@ import { site } from "@/data/site";
 
   <h2>2. AI provider usage</h2>
   <p>
-    The menu bar can show available plan limits for Claude, Codex, GitHub Copilot, Cursor,
-    OpenCode Go, and Gemini or Antigravity. It checks usage only while a supported client is running.
+    The menu bar can show available plan limits for Claude Code, Codex, GitHub Copilot, Cursor,
+    OpenCode Go, Gemini CLI, or Antigravity. It checks usage only while a supported client is
+    running. Gemini Pro and Flash quotas are shown as separate model families when the provider
+    supplies them.
   </p>
   <ul>
     <li>
       It reads the sign-in that each client already stores on your computer: Claude Code, Codex,
-      VS Code or Copilot CLI, Cursor, OpenCode, or Gemini CLI. VS Code's GitHub session is decrypted
+      VS Code or Copilot CLI, Cursor, OpenCode, Gemini CLI, or Antigravity. VS Code's GitHub session is decrypted
       locally with Windows DPAPI. Muelle does not save or change these credentials.
     </li>
     <li>
