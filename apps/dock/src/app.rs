@@ -2001,6 +2001,20 @@ pub fn menu_bar_hover(inside: bool) {
     });
 }
 
+pub fn menu_bar_pointer_moved(x: f32) {
+    with_app("barra superior", |app| match &mut app.menubar {
+        Some(bar) => bar.pointer_moved(&app.gfx, x),
+        None => Ok(()),
+    });
+}
+
+pub fn menu_bar_dismiss_usage() {
+    with_app("barra superior", |app| match &mut app.menubar {
+        Some(bar) => bar.dismiss_usage(&app.gfx),
+        None => Ok(()),
+    });
+}
+
 pub fn menu_bar_tick() {
     with_app("barra superior", |app| match &mut app.menubar {
         Some(bar) => bar.tick(&app.gfx),

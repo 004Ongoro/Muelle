@@ -23,7 +23,7 @@ use muelle_shell::{
     status::{self, AudioWatch, Network, NetworkWatch, TaskbarButtons, Volume},
     system::{self, Battery, Monitor},
 };
-use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicIsize, Ordering};
 use windows::{
     UI::{
         Color,
@@ -41,11 +41,13 @@ use windows::{
         },
         UI::Input::KeyboardAndMouse::{TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent},
         UI::WindowsAndMessaging::{
-            CreateWindowExW, DefWindowProcW, DestroyWindow, GetCursorPos, HWND_TOPMOST, IDC_ARROW,
-            IDC_HAND, LoadCursorW, PostMessageW, RegisterClassW, SWP_HIDEWINDOW, SWP_NOACTIVATE,
-            SWP_SHOWWINDOW, SetCursor, SetTimer, SetWindowPos, WM_APP, WM_LBUTTONUP, WM_MOUSEMOVE,
-            WM_NCHITTEST, WM_SETCURSOR, WM_SETTINGCHANGE, WM_TIMER, WNDCLASSW, WS_EX_NOACTIVATE,
-            WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+            CallNextHookEx, CreateWindowExW, DefWindowProcW, DestroyWindow, GetCursorPos, HHOOK,
+            HWND_TOPMOST, IDC_ARROW, IDC_HAND, LoadCursorW, MSLLHOOKSTRUCT, PostMessageW,
+            RegisterClassW, SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_SHOWWINDOW, SetCursor, SetTimer,
+            SetWindowPos, SetWindowsHookExW, UnhookWindowsHookEx, WH_MOUSE_LL, WM_APP,
+            WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MOUSEMOVE, WM_NCHITTEST,
+            WM_RBUTTONDOWN, WM_SETCURSOR, WM_SETTINGCHANGE, WM_TIMER, WM_XBUTTONDOWN, WNDCLASSW,
+            WS_EX_NOACTIVATE, WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
         },
     },
     core::{BOOL, Interface, w},
@@ -85,6 +87,7 @@ const STATUS_CHANGED: u32 = WM_APP + 21;
 /// Posted by the bar to itself to update from the message loop.
 const TICK: u32 = WM_APP + 22;
 const USAGE_CHANGED: u32 = WM_APP + 23;
+const DISMISS_USAGE: u32 = WM_APP + 24;
 /// `wParam` of WM_SETTINGCHANGE when the work area changes, which every
 /// AppBar reservation (the dock's, this bar's) causes.
 const SPI_SETWORKAREA: usize = 0x002F;
@@ -96,6 +99,8 @@ static BAR_TOP: AtomicI32 = AtomicI32::new(0);
 static BAR_BOTTOM: AtomicI32 = AtomicI32::new(0);
 static HEADER_BOTTOM: AtomicI32 = AtomicI32::new(0);
 static PANEL_BOTTOM: AtomicI32 = AtomicI32::new(0);
+/// The hook exists only while the usage panel is open.
+static USAGE_HOOK_WINDOW: AtomicIsize = AtomicIsize::new(0);
 
 /// Segoe Fluent Icons code points.
 mod glyph {
@@ -108,6 +113,8 @@ mod glyph {
     pub const SEARCH: char = '\u{E721}';
     pub const TASK_VIEW: char = '\u{E7C4}';
     pub const WIDGETS: char = '\u{F246}';
+    /// The taskbar's "show hidden icons" arrow.
+    pub const HIDDEN_ICONS: char = '\u{E70E}';
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -118,6 +125,7 @@ enum Action {
     Search,
     TaskView,
     Widgets,
+    HiddenIcons,
 }
 
 /// Network, volume and taskbar buttons, read only when Windows reports a change.
@@ -169,6 +177,7 @@ pub struct MenuBar {
     island_left: f32,
     island_right: f32,
     refresh_button: Option<(f32, f32, f32, f32)>,
+    outside_click_hook: Option<HHOOK>,
     /// Held for their callbacks; dropping them unsubscribes.
     _network: Option<NetworkWatch>,
     audio: Option<AudioWatch>,
@@ -181,8 +190,12 @@ unsafe extern "system" fn bar_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -
             let y = (l.0 >> 16) as i16;
             app::menu_bar_clicked(f32::from(x), f32::from(y));
         }
-        WM_MOUSEMOVE => app::menu_bar_hover(true),
+        WM_MOUSEMOVE => {
+            let x = (l.0 & 0xFFFF) as i16;
+            app::menu_bar_pointer_moved(f32::from(x));
+        }
         WM_MOUSELEAVE => app::menu_bar_hover(false),
+        DISMISS_USAGE => app::menu_bar_dismiss_usage(),
         WM_SETCURSOR => {
             let mut point = POINT::default();
             // SAFETY: The point is a valid output for the current pointer location.
@@ -236,6 +249,38 @@ unsafe extern "system" fn bar_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -
         _ => return unsafe { DefWindowProcW(hwnd, msg, w, l) },
     }
     LRESULT(0)
+}
+
+unsafe extern "system" fn outside_click_proc(code: i32, w: WPARAM, l: LPARAM) -> LRESULT {
+    if code >= 0
+        && matches!(
+            w.0 as u32,
+            WM_LBUTTONDOWN | WM_RBUTTONDOWN | WM_MBUTTONDOWN | WM_XBUTTONDOWN
+        )
+    {
+        // SAFETY: Windows provides an MSLLHOOKSTRUCT for mouse hook actions.
+        let point = unsafe { (*(l.0 as *const MSLLHOOKSTRUCT)).pt };
+        if point.x < ISLAND_LEFT.load(Ordering::Relaxed)
+            || point.x >= ISLAND_RIGHT.load(Ordering::Relaxed)
+            || point.y < BAR_TOP.load(Ordering::Relaxed)
+            || point.y >= PANEL_BOTTOM.load(Ordering::Relaxed)
+        {
+            let window = USAGE_HOOK_WINDOW.load(Ordering::Relaxed);
+            if window != 0 {
+                // SAFETY: The window remains live until the hook is removed in Drop.
+                unsafe {
+                    let _ = PostMessageW(
+                        Some(HWND(window as *mut _)),
+                        DISMISS_USAGE,
+                        WPARAM(0),
+                        LPARAM(0),
+                    );
+                }
+            }
+        }
+    }
+    // SAFETY: Never consume the click; the target application must receive it.
+    unsafe { CallNextHookEx(None, code, w, l) }
 }
 
 fn rgba(r: u8, g: u8, b: u8, a: u8) -> Color {
@@ -724,6 +769,7 @@ impl MenuBar {
             island_left: 0.0,
             island_right: 0.0,
             refresh_button: None,
+            outside_click_hook: None,
             _network: NetworkWatch::new(hwnd.0 as isize, STATUS_CHANGED),
             audio: AudioWatch::new(hwnd.0 as isize, STATUS_CHANGED),
         };
@@ -792,6 +838,22 @@ impl MenuBar {
         self.refresh(gfx)
     }
 
+    /// Leaving the island sideways still stays inside the full-width bar window.
+    pub fn pointer_moved(&mut self, gfx: &Gfx, x: f32) -> Result<()> {
+        if self.expanded && (x < self.island_left || x >= self.island_right) {
+            self.dismiss_usage(gfx)?;
+        }
+        self.hover(gfx, true)
+    }
+
+    pub fn dismiss_usage(&mut self, gfx: &Gfx) -> Result<()> {
+        if self.expanded {
+            self.expanded = false;
+            self.refresh(gfx)?;
+        }
+        Ok(())
+    }
+
     /// Positions the window and reserves (or frees) its strip of the screen.
     fn place(&mut self) -> Result<()> {
         let bounds = self.bounds;
@@ -839,6 +901,31 @@ impl MenuBar {
                 },
                 SWP_NOACTIVATE | show,
             )?;
+        }
+        self.sync_outside_click_hook()
+    }
+
+    fn sync_outside_click_hook(&mut self) -> Result<()> {
+        let needed = self.expanded && self.visible && (!self.auto_hide || self.revealed);
+        if needed && self.outside_click_hook.is_none() {
+            // SAFETY: This process owns the hook procedure and installs the hook
+            // only while the panel is visible.
+            let module = unsafe { GetModuleHandleW(None)? };
+            let hook = unsafe {
+                SetWindowsHookExW(
+                    WH_MOUSE_LL,
+                    Some(outside_click_proc),
+                    Some(module.into()),
+                    0,
+                )?
+            };
+            USAGE_HOOK_WINDOW.store(self.hwnd.0 as isize, Ordering::Relaxed);
+            self.outside_click_hook = Some(hook);
+        } else if !needed && let Some(hook) = self.outside_click_hook {
+            // SAFETY: This hook was installed by this MenuBar.
+            unsafe { UnhookWindowsHookEx(hook)? };
+            self.outside_click_hook = None;
+            USAGE_HOOK_WINDOW.store(0, Ordering::Relaxed);
         }
         Ok(())
     }
@@ -921,6 +1008,13 @@ impl MenuBar {
             .zones
             .iter()
             .find(|(left, right, _)| x >= *left && x < *right);
+        // Where a flyout opened from this item should hang: under its centre.
+        let anchor = hit.map_or((0, 0), |(left, right, _)| {
+            (
+                self.bounds.left + ((left + right) / 2.0) as i32,
+                self.bounds.bottom,
+            )
+        });
         match hit.map(|(_, _, action)| *action) {
             Some(Action::QuickSettings) => launcher::open_quick_settings(),
             Some(Action::Notifications) => launcher::open_notifications(),
@@ -928,6 +1022,7 @@ impl MenuBar {
             Some(Action::Search) => launcher::open_search(),
             Some(Action::TaskView) => launcher::open_task_view(),
             Some(Action::Widgets) => launcher::open_widgets(),
+            Some(Action::HiddenIcons) => launcher::open_hidden_icons(anchor),
             None => {}
         }
         Ok(())
@@ -1090,6 +1185,9 @@ impl MenuBar {
                 Action::QuickSettings,
             ));
         }
+        // The notification area (antivirus, OneDrive, apps in the background)
+        // lives only in the hidden taskbar; this arrow opens its flyout.
+        items.push((symbol(&[(glyph::HIDDEN_ICONS, 1.0)])?, Action::HiddenIcons));
         if status.buttons.task_view {
             items.push((symbol(&[(glyph::TASK_VIEW, 1.0)])?, Action::TaskView));
         }
@@ -1297,7 +1395,7 @@ impl MenuBar {
                 title.usage_refresh
             };
             let button_label = gfx.text_brush_sized(button_text, scale, 11.5, true, ink)?;
-            let button_width = button_label.width + px(37.0);
+            let button_width = button_label.width + px(20.0);
             let button_height = px(27.0);
             let button_left = island_width - px(23.0) - button_width;
             let button_top = px(8.0);
@@ -1320,21 +1418,11 @@ impl MenuBar {
                     rgba(226, 237, 251, 43)
                 }),
             )?;
-            let refresh_icon = gfx.text_brush_sized("↻", scale, 16.0, true, ink)?;
-            add_visual(
-                c,
-                &content,
-                &refresh_icon.brush.cast()?,
-                button_left + px(10.0),
-                button_top + (button_height - refresh_icon.height) / 2.0,
-                refresh_icon.width,
-                refresh_icon.height,
-            )?;
             add_visual(
                 c,
                 &content,
                 &button_label.brush.cast()?,
-                button_left + px(29.0),
+                button_left + px(10.0),
                 button_top + (button_height - button_label.height) / 2.0,
                 button_label.width,
                 button_label.height,
@@ -1449,6 +1537,13 @@ impl MenuBar {
 
 impl Drop for MenuBar {
     fn drop(&mut self) {
+        USAGE_HOOK_WINDOW.store(0, Ordering::Relaxed);
+        if let Some(hook) = self.outside_click_hook.take() {
+            // SAFETY: Do not leave a callback pointing at a destroyed window.
+            unsafe {
+                let _ = UnhookWindowsHookEx(hook);
+            }
+        }
         // Give the reserved strip back before the window goes away.
         self.appbar = None;
         // SAFETY: Our own window, destroyed once.

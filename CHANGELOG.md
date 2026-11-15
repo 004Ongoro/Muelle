@@ -23,6 +23,9 @@ copia la sección de la versión que se publica a la release de GitHub.
 - Fixed: the menu bar could miss an update and showed no app name until the
   first window switch.
 - Menu bar: the battery shows a charging bolt.
+- Menu bar: a "^" button opens the Windows hidden icons (the notification area:
+  antivirus, OneDrive, apps running in the background), which was out of reach
+  while the taskbar is hidden.
 - Settings has a clearer layout: Dock, Windows, Menu bar and System sections
   with proper icons, titled groups, and a window you can resize from any edge
   or maximize.
@@ -54,6 +57,9 @@ copia la sección de la versión que se publica a la release de GitHub.
 - Corregido: la barra superior podía perder una actualización y no mostraba el
   nombre de la app hasta el primer cambio de ventana.
 - Barra superior: la batería muestra un rayo mientras carga.
+- Barra superior: un botón «^» abre los iconos ocultos de Windows (el área de
+  notificación: antivirus, OneDrive, apps en segundo plano), que no se podían
+  alcanzar con la barra de tareas oculta.
 - Ajustes más claro: secciones Dock, Ventanas, Barra superior y Sistema con
   iconos propios, grupos con título y una ventana que se puede redimensionar
   desde cualquier borde o maximizar.

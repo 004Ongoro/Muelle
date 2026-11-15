@@ -1,26 +1,28 @@
+use std::time::{Duration, Instant};
+
 use thiserror::Error;
 use windows::{
     Win32::{
-        Foundation::{CloseHandle, HANDLE, HWND, LPARAM, WPARAM},
+        Foundation::{CloseHandle, HANDLE, HWND, LPARAM, RECT, WPARAM},
         Security::{GetTokenInformation, TOKEN_ELEVATION, TOKEN_QUERY, TokenElevation},
         System::Threading::{OpenProcess, OpenProcessToken, PROCESS_QUERY_LIMITED_INFORMATION},
         UI::{
             Input::KeyboardAndMouse::{
                 INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBD_EVENT_FLAGS, KEYBDINPUT,
-                KEYEVENTF_KEYUP, SendInput, VIRTUAL_KEY, VK_A, VK_LCONTROL, VK_LWIN, VK_N, VK_S,
-                VK_TAB, VK_V, VK_W,
+                KEYEVENTF_KEYUP, SendInput, VIRTUAL_KEY, VK_A, VK_B, VK_LCONTROL, VK_LWIN, VK_N,
+                VK_RETURN, VK_S, VK_TAB, VK_V, VK_W,
             },
             Shell::ShellExecuteW,
             WindowsAndMessaging::{
                 ASFW_ANY, AllowSetForegroundWindow, FindWindowW, GetForegroundWindow,
-                GetWindowThreadProcessId, HWND_TOP, IsIconic, IsWindowVisible, PostMessageW,
-                SW_MINIMIZE, SW_RESTORE, SW_SHOWNORMAL, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
-                SetForegroundWindow, SetWindowPos, ShowWindow, ShowWindowAsync, SwitchToThisWindow,
-                WM_CLOSE,
+                GetWindowRect, GetWindowThreadProcessId, HWND_TOP, IsIconic, IsWindowVisible,
+                PostMessageW, SW_MINIMIZE, SW_RESTORE, SW_SHOWNORMAL, SWP_NOACTIVATE, SWP_NOMOVE,
+                SWP_NOSIZE, SWP_NOZORDER, SetForegroundWindow, SetWindowPos, ShowWindow,
+                ShowWindowAsync, SwitchToThisWindow, WM_CLOSE,
             },
         },
     },
-    core::{HSTRING, w},
+    core::{HSTRING, PCWSTR, w},
 };
 
 #[derive(Debug, Error)]
@@ -206,6 +208,91 @@ pub fn open_widgets() {
 /// The sound output page of quick settings (Windows 11 22H2+): Win+Ctrl+V.
 pub fn open_sound() {
     tap(&[VK_LWIN, VK_LCONTROL, VK_V]);
+}
+
+/// How long the taskbar takes to put the focus on its notification area.
+const HIDDEN_ICONS_DELAY: Duration = Duration::from_millis(250);
+/// How long the flyout is kept under the arrow while Windows finishes
+/// opening it (it may place it again during its animation).
+const HIDDEN_ICONS_HOLD: Duration = Duration::from_millis(1200);
+/// Space between the menu bar and the flyout, in physical pixels.
+const HIDDEN_ICONS_GAP: i32 = 6;
+/// The hidden-icons flyout: Windows 11, then Windows 10.
+const OVERFLOW_CLASSES: [PCWSTR; 2] = [
+    w!("TopLevelWindowForOverflowXamlIsland"),
+    w!("NotifyIconOverflowWindow"),
+];
+
+/// The notification area's hidden icons, the taskbar's "^" button: Win+B
+/// moves the focus to that button and Enter opens it. The taskbar itself
+/// stays invisible while Muelle runs; only its flyout shows. Windows offers
+/// no other way: the button is not exposed while the taskbar is hidden.
+///
+/// Windows opens the flyout at the bottom of the screen, above where the
+/// taskbar would be, so it is then moved under the arrow that opened it:
+/// `anchor` is the arrow's centre and the bottom of the menu bar.
+pub fn open_hidden_icons(anchor: (i32, i32)) {
+    tap(&[VK_LWIN, VK_B]);
+    // The rest waits on its own short-lived thread so the dock never sleeps.
+    std::thread::spawn(move || {
+        std::thread::sleep(HIDDEN_ICONS_DELAY);
+        tap(&[VK_RETURN]);
+        let until = Instant::now() + HIDDEN_ICONS_HOLD;
+        while Instant::now() < until {
+            if let Some(flyout) = open_overflow() {
+                keep_under(flyout, anchor);
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    });
+}
+
+/// The hidden-icons flyout, if it is open.
+fn open_overflow() -> Option<HWND> {
+    OVERFLOW_CLASSES.iter().find_map(|&class| {
+        // SAFETY: Read-only window lookups.
+        unsafe {
+            FindWindowW(class, None)
+                .ok()
+                .filter(|&window| IsWindowVisible(window).as_bool())
+        }
+    })
+}
+
+/// Moves `flyout` (keeping its size) so it hangs centred under `anchor`,
+/// inside the primary monitor. Does nothing once it is there.
+fn keep_under(flyout: HWND, (center, top): (i32, i32)) {
+    let Some(monitor) = crate::system::primary_monitor() else {
+        return;
+    };
+    let mut rect = RECT::default();
+    // SAFETY: `rect` is a valid out parameter.
+    if unsafe { GetWindowRect(flyout, &mut rect) }.is_err() {
+        return;
+    }
+    let width = rect.right - rect.left;
+    let screen = monitor.screen;
+    let left = (center - width / 2).clamp(
+        screen.left + HIDDEN_ICONS_GAP,
+        (screen.right - HIDDEN_ICONS_GAP - width).max(screen.left),
+    );
+    let top = top + HIDDEN_ICONS_GAP;
+    if (rect.left, rect.top) == (left, top) {
+        return;
+    }
+    // SAFETY: Moves a window of the same user session; its size and
+    // z-order stay as Windows set them.
+    unsafe {
+        let _ = SetWindowPos(
+            flyout,
+            None,
+            left,
+            top,
+            0,
+            0,
+            SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+        );
+    }
 }
 
 pub fn reveal(path: &str) -> Result<(), LaunchError> {
