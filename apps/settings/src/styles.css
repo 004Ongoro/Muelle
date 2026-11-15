@@ -276,35 +276,44 @@ input:focus-visible {
   padding: 8px 14px;
 }
 
-.row + .row {
+.row + .row,
+.row-sub + .row {
   border-top: 1px solid var(--line);
 }
 
-.row-nested {
+/* An option that depends on the row above: indented under it, with a divider
+   that starts at the indent, and folded away while that row is off. */
+.row-sub {
+  display: grid;
+  grid-template-rows: 1fr;
+  transition:
+    grid-template-rows 0.24s cubic-bezier(0.3, 0.7, 0.2, 1),
+    opacity 0.2s ease;
+}
+
+.row-sub[data-open="false"] {
+  grid-template-rows: 0fr;
+  opacity: 0;
+}
+
+.row-sub-clip {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.row-sub .row {
   position: relative;
-  padding-left: 34px;
-  background: var(--hover);
+  padding-left: 30px;
 }
 
-.row-nested::before,
-.row-nested::after {
+.row-sub .row::before {
   position: absolute;
-  content: "";
-  border-color: var(--line);
-}
-
-.row-nested::before {
   top: 0;
-  bottom: 50%;
-  left: 21px;
-  border-left: 1px solid;
-}
-
-.row-nested::after {
-  top: 50%;
-  left: 21px;
-  width: 10px;
-  border-top: 1px solid;
+  right: 0;
+  left: 30px;
+  height: 1px;
+  content: "";
+  background: var(--line);
 }
 
 .row-text {
@@ -433,6 +442,7 @@ input:focus-visible {
 @media (prefers-reduced-motion: reduce) {
   .toggle,
   .toggle-knob,
+  .row-sub,
   .update-progress span {
     transition: none;
   }

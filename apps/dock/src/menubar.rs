@@ -107,6 +107,8 @@ struct Look {
     screen: RECT,
     scale: f32,
     light: bool,
+    /// See `system::transparency_enabled`.
+    glass: bool,
     app_name: String,
     clock: String,
     battery: Option<Battery>,
@@ -376,6 +378,7 @@ impl MenuBar {
             screen: monitor.screen,
             scale: monitor.scale,
             light: system::uses_light_theme(),
+            glass: system::transparency_enabled(),
             app_name: self.app_name.clone(),
             clock: system::clock_text(),
             battery: system::battery(),
@@ -403,17 +406,22 @@ impl MenuBar {
             Y: height,
         })?;
         let layers = root.Children()?;
-        let tint = if look.light {
-            rgba(255, 255, 255, 110)
-        } else {
-            rgba(24, 24, 26, 120)
+        // Without transparency the bar is solid, as macOS draws it with
+        // "Reduce transparency".
+        let tint = match (look.light, look.glass) {
+            (true, true) => rgba(255, 255, 255, 110),
+            (false, true) => rgba(24, 24, 26, 120),
+            (true, false) => rgba(236, 236, 238, 255),
+            (false, false) => rgba(36, 36, 38, 255),
         };
-        let fills = [
-            c.CreateHostBackdropBrush()?
-                .cast::<windows::UI::Composition::CompositionBrush>()?,
-            c.CreateColorBrushWithColor(tint)?.cast()?,
-        ];
-        for brush in &fills {
+        let backdrop = if look.glass {
+            Some(c.CreateHostBackdropBrush()?.cast()?)
+        } else {
+            None
+        };
+        let fills: [windows::UI::Composition::CompositionBrush; 1] =
+            [c.CreateColorBrushWithColor(tint)?.cast()?];
+        for brush in backdrop.iter().chain(&fills) {
             let fill = c.CreateSpriteVisual()?;
             fill.SetRelativeSizeAdjustment(Vector2 { X: 1.0, Y: 1.0 })?;
             fill.SetBrush(brush)?;

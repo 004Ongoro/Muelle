@@ -41,7 +41,7 @@ use muelle_shell::{
     recycle_bin::{self, BinWatch},
     system::{
         animations_enabled, downloads_folder, primary_monitor, set_window_transitions,
-        uses_light_theme,
+        transparency_enabled, uses_light_theme,
     },
     taskbar,
     tracker::{self, TrackedWindow, WindowTracker, normalize_id},
@@ -106,6 +106,9 @@ const HSHELL_FLASH: usize = 0x8006;
 const SPI_SETWORKAREA: usize = 0x002F;
 const WM_POWERBROADCAST: u32 = 0x0218;
 const PBT_APMRESUMEAUTOMATIC: usize = 0x0012;
+/// Sent when the charger is plugged in or out, and when energy saver turns
+/// on or off.
+const PBT_APMPOWERSTATUSCHANGE: usize = 0x000A;
 
 const WINDOW_CLASS: PCWSTR = muelle_shell::dock_link::DOCK_WINDOW_CLASS;
 const APPBAR_CALLBACK: u32 = WM_APP + 1;
@@ -317,6 +320,7 @@ struct StageKey {
     screen: RECT,
     scale: f32,
     light: bool,
+    glass: bool,
     bin_full: bool,
     auto_hide: bool,
     icon_size: u32,
@@ -622,6 +626,9 @@ impl App {
             screen: monitor.screen,
             scale: monitor.scale,
             light: uses_light_theme(),
+            // A backdrop brush made while Windows had transparency off stays
+            // black after it comes back, so this rebuilds the dock both ways.
+            glass: transparency_enabled(),
             bin_full: self.bin_full,
             auto_hide: self.config.auto_hide,
             icon_size: self.config.icon_size,
@@ -640,7 +647,7 @@ impl App {
             ..Metrics::DEFAULT
         }
         .scaled(scale);
-        let theme = Theme::for_system(key.light);
+        let theme = Theme::for_system(key.light, key.glass);
         let px = |logical: f32| (logical * scale).round();
 
         self.entries = key.entries.clone();
@@ -2078,6 +2085,10 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) ->
         }
         WM_SETTINGCHANGE if w.0 == SPI_SETWORKAREA => {}
         WM_SETTINGCHANGE | WM_DISPLAYCHANGE | WM_DPICHANGED => {
+            // SAFETY: `hwnd` is our window; scheduling the same timer resets it.
+            unsafe { SetTimer(Some(hwnd), REFRESH_TIMER, REFRESH_DELAY_MS, None) };
+        }
+        WM_POWERBROADCAST if w.0 == PBT_APMPOWERSTATUSCHANGE => {
             // SAFETY: `hwnd` is our window; scheduling the same timer resets it.
             unsafe { SetTimer(Some(hwnd), REFRESH_TIMER, REFRESH_DELAY_MS, None) };
         }

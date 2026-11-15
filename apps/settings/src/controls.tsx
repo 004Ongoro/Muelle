@@ -7,18 +7,37 @@ export function Card({ children }: { children: ReactNode }) {
 interface RowProps {
   label: string;
   hint?: string;
-  nested?: boolean;
   children: ReactNode;
 }
 
-export function Row({ label, hint, nested = false, children }: RowProps) {
+export function Row({ label, hint, children }: RowProps) {
   return (
-    <div className={nested ? "row row-nested" : "row"}>
+    <div className="row">
       <div className="row-text">
         <span className="row-label">{label}</span>
         {hint ? <span className="row-hint">{hint}</span> : null}
       </div>
       <div className="row-control">{children}</div>
+    </div>
+  );
+}
+
+interface SubRowProps extends RowProps {
+  /** Whether the option it depends on is on; the row folds away while it is off. */
+  open: boolean;
+}
+
+/**
+ * An option that only makes sense while the row above it is on. It stays
+ * mounted so it can fold open and shut, and is `inert` while folded so the
+ * keyboard and screen readers skip it.
+ */
+export function SubRow({ open, ...row }: SubRowProps) {
+  return (
+    <div className="row-sub" data-open={open} inert={!open}>
+      <div className="row-sub-clip">
+        <Row {...row} />
+      </div>
     </div>
   );
 }

@@ -24,7 +24,8 @@ use windows::{
                 D2D1_EXTEND_MODE_CLAMP, D2D1_INTERPOLATION_MODE,
                 D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC,
                 D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR, D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES,
-                D2D1_ROUNDED_RECT, D2D1CreateDevice, ID2D1Device, ID2D1DeviceContext,
+                D2D1_PRIMITIVE_BLEND_COPY, D2D1_PRIMITIVE_BLEND_SOURCE_OVER, D2D1_ROUNDED_RECT,
+                D2D1CreateDevice, ID2D1Device, ID2D1DeviceContext,
             },
             Direct3D::D3D_DRIVER_TYPE_WARP,
             Direct3D11::{
@@ -587,6 +588,37 @@ impl Gfx {
                     },
                     &fill,
                 );
+                if charging {
+                    // A bolt over the middle of the body, as on a Mac, with a
+                    // clear gap cut around it so it reads over the level.
+                    let bolt = dc.GetFactory()?.CreatePathGeometry()?;
+                    let sink = bolt.Open()?;
+                    let (bolt_width, bolt_height) = (height * 0.62, height * 1.04);
+                    let left = (body_right - bolt_width) / 2.0;
+                    let top = (height - bolt_height) / 2.0;
+                    let at = |x: f32, y: f32| Vector2 {
+                        X: left + x * bolt_width,
+                        Y: top + y * bolt_height,
+                    };
+                    sink.BeginFigure(at(0.62, 0.0), D2D1_FIGURE_BEGIN_FILLED);
+                    for (x, y) in [
+                        (0.08, 0.58),
+                        (0.46, 0.58),
+                        (0.36, 1.0),
+                        (0.92, 0.40),
+                        (0.54, 0.40),
+                    ] {
+                        sink.AddLine(at(x, y));
+                    }
+                    sink.EndFigure(D2D1_FIGURE_END_CLOSED);
+                    sink.Close()?;
+                    let clear = dc.CreateSolidColorBrush(&TRANSPARENT, None)?;
+                    dc.SetPrimitiveBlend(D2D1_PRIMITIVE_BLEND_COPY);
+                    dc.DrawGeometry(&bolt, &clear, 2.0 * stroke, None);
+                    dc.SetPrimitiveBlend(D2D1_PRIMITIVE_BLEND_SOURCE_OVER);
+                    let ink = dc.CreateSolidColorBrush(&ink.color(), None)?;
+                    dc.FillGeometry(&bolt, &ink, None);
+                }
             }
             Ok(())
         })?;

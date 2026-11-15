@@ -23,6 +23,8 @@ use crate::gfx::{Gfx, LabelBrush};
 #[derive(Clone, Copy)]
 pub struct Theme {
     pub light: bool,
+    /// Blur what is behind the dock; without it the tint is drawn opaque.
+    glass: bool,
     tint: Color,
     separator: Color,
     shadow: Color,
@@ -30,11 +32,19 @@ pub struct Theme {
 }
 
 impl Theme {
-    pub fn for_system(light: bool) -> Self {
+    /// `glass` is false while Windows has transparency off (or energy saver
+    /// on): the dock is then solid gray, as macOS draws it with "Reduce
+    /// transparency".
+    pub fn for_system(light: bool, glass: bool) -> Self {
         if light {
             Self {
                 light,
-                tint: rgba(255, 255, 255, 46),
+                glass,
+                tint: if glass {
+                    rgba(255, 255, 255, 46)
+                } else {
+                    rgba(226, 226, 228, 255)
+                },
                 separator: rgba(0, 0, 0, 56),
                 shadow: rgba(0, 0, 0, 56),
                 indicator: rgba(0, 0, 0, 170),
@@ -42,7 +52,12 @@ impl Theme {
         } else {
             Self {
                 light,
-                tint: rgba(28, 28, 30, 82),
+                glass,
+                tint: if glass {
+                    rgba(28, 28, 30, 82)
+                } else {
+                    rgba(44, 44, 46, 255)
+                },
                 separator: rgba(255, 255, 255, 64),
                 shadow: rgba(0, 0, 0, 96),
                 indicator: rgba(255, 255, 255, 215),
@@ -194,12 +209,16 @@ impl Scene {
         stops
             .Append(&c.CreateColorGradientStopWithOffsetAndColor(0.55, rgba(255, 255, 255, 0))?)?;
 
-        let fills: [CompositionBrush; 3] = [
-            c.CreateHostBackdropBrush()?.cast()?,
+        let backdrop: Option<CompositionBrush> = if theme.glass {
+            Some(c.CreateHostBackdropBrush()?.cast()?)
+        } else {
+            None
+        };
+        let fills = [
             c.CreateColorBrushWithColor(theme.tint)?.cast()?,
             sheen.cast()?,
         ];
-        for brush in &fills {
+        for brush in backdrop.iter().chain(&fills) {
             let fill = c.CreateSpriteVisual()?;
             fill.SetRelativeSizeAdjustment(v2(1.0, 1.0))?;
             fill.SetBrush(brush)?;

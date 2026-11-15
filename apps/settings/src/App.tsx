@@ -18,7 +18,7 @@ import {
   saveConfig,
   setAutostart,
 } from "./config";
-import { Card, Row, Segmented, Slider, Toggle } from "./controls";
+import { Card, Row, Segmented, Slider, SubRow, Toggle } from "./controls";
 import { UpdateBanner } from "./UpdateBanner";
 import en from "./i18n/en.json";
 import es from "./i18n/es.json";
@@ -240,7 +240,7 @@ export function App() {
                     onChange={(magnification) => update({ magnification })}
                   />
                 </Row>
-                <Row label={t.magnifiedSize} nested>
+                <SubRow label={t.magnifiedSize} open={config.magnification}>
                   <Slider
                     label={t.magnifiedSize}
                     value={config.magnifiedSize}
@@ -248,10 +248,9 @@ export function App() {
                     max={MAX_MAGNIFIED_SIZE}
                     before={t.small}
                     after={t.large}
-                    disabled={!config.magnification}
                     onChange={(magnifiedSize) => update({ magnifiedSize })}
                   />
-                </Row>
+                </SubRow>
               </Card>
               <Card>
                 <Row label={t.autoHide} hint={t.autoHideHint}>
@@ -268,15 +267,17 @@ export function App() {
                     onChange={(menuBar) => update({ menuBar })}
                   />
                 </Row>
-                {config.menuBar ? (
-                  <Row label={t.menuBarAutoHide} hint={t.menuBarAutoHideHint} nested>
-                    <Toggle
-                      label={t.menuBarAutoHide}
-                      checked={config.menuBarAutoHide}
-                      onChange={(menuBarAutoHide) => update({ menuBarAutoHide })}
-                    />
-                  </Row>
-                ) : null}
+                <SubRow
+                  label={t.menuBarAutoHide}
+                  hint={t.menuBarAutoHideHint}
+                  open={config.menuBar}
+                >
+                  <Toggle
+                    label={t.menuBarAutoHide}
+                    checked={config.menuBarAutoHide}
+                    onChange={(menuBarAutoHide) => update({ menuBarAutoHide })}
+                  />
+                </SubRow>
                 <Row label={t.genie} hint={t.genieHint}>
                   <Toggle
                     label={t.genie}
