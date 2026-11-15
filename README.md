@@ -11,7 +11,9 @@ Muelle replaces the Windows taskbar with a customizable dock and an optional
 macOS-style menu bar. It is built for Windows 11 and is still under active
 development.
 
-<img width="1919" height="1008" alt="Frame 1116606777 (1)" src="https://github.com/user-attachments/assets/b6c44203-c425-43fb-adf5-e2edd2f02257" />
+<img width="1500" height="436" alt="Frame 1116606780" src="https://github.com/user-attachments/assets/3c91b488-214d-453d-a8c2-a9e0dc7f245e" />
+
+<img width="1000" height="243" alt="ezgif-2421a892c23dc19b" src="https://github.com/user-attachments/assets/83d43043-c6a2-469f-bb87-053e5be868f1" />
 
 ## Features
 
