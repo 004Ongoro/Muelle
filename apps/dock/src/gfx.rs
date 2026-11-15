@@ -34,7 +34,9 @@ use windows::{
             DirectWrite::{
                 DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL,
                 DWRITE_FONT_WEIGHT_MEDIUM, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_WEIGHT_SEMI_BOLD,
-                DWRITE_TEXT_METRICS, DWriteCreateFactory, IDWriteFactory,
+                DWRITE_MEASURING_MODE_NATURAL, DWRITE_PARAGRAPH_ALIGNMENT_CENTER,
+                DWRITE_TEXT_ALIGNMENT_CENTER, DWRITE_TEXT_METRICS, DWriteCreateFactory,
+                IDWriteFactory,
             },
             Dxgi::{Common::DXGI_FORMAT_B8G8R8A8_UNORM, IDXGIDevice},
         },
@@ -417,6 +419,59 @@ impl Gfx {
             brush,
             width,
             height,
+        })
+    }
+
+    /// Symbols from Segoe Fluent Icons, the Windows 11 system icon font, centered
+    /// in a square. Layers are drawn in order with their opacity, so a dim full
+    /// Wi-Fi fan can sit behind the bars actually received.
+    pub fn glyph_brush(&self, layers: &[(char, f32)], scale: f32, ink: Ink) -> Result<LabelBrush> {
+        let side = (18.0 * scale).round();
+        // SAFETY: The format lives for the drawing below.
+        let format = unsafe {
+            let format = self.dwrite.CreateTextFormat(
+                w!("Segoe Fluent Icons"),
+                None,
+                DWRITE_FONT_WEIGHT_NORMAL,
+                DWRITE_FONT_STYLE_NORMAL,
+                DWRITE_FONT_STRETCH_NORMAL,
+                15.0 * scale,
+                w!(""),
+            )?;
+            format.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER)?;
+            format.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER)?;
+            format
+        };
+        let brush = self.draw(side as u32, side as u32, |dc| {
+            let area = D2D_RECT_F {
+                left: 0.0,
+                top: 0.0,
+                right: side,
+                bottom: side,
+            };
+            // SAFETY: The brush, format and text live for each drawing call.
+            unsafe {
+                let ink = dc.CreateSolidColorBrush(&ink.color(), None)?;
+                for &(glyph, opacity) in layers {
+                    let mut units = [0u16; 2];
+                    let text = glyph.encode_utf16(&mut units);
+                    ink.SetOpacity(opacity);
+                    dc.DrawText(
+                        text,
+                        &format,
+                        &area,
+                        &ink,
+                        D2D1_DRAW_TEXT_OPTIONS_NONE,
+                        DWRITE_MEASURING_MODE_NATURAL,
+                    );
+                }
+            }
+            Ok(())
+        })?;
+        Ok(LabelBrush {
+            brush,
+            width: side,
+            height: side,
         })
     }
 

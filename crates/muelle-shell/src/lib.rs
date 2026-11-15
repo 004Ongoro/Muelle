@@ -10,6 +10,7 @@ pub mod pins;
 pub mod power;
 pub mod recycle_bin;
 pub mod screen;
+pub mod status;
 pub mod system;
 pub mod taskbar;
 pub mod tracker;

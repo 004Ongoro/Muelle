@@ -10,11 +10,17 @@
 //!
 //! With auto-hide on, the bar reserves no space and stays off screen; a thin
 //! strip along the top edge reveals it while the pointer is there.
+//!
+//! Status items, right to left as on a Mac: clock, control center, search,
+//! network, volume, battery, then Task View and Widgets. Search, Task View and
+//! Widgets appear only if the user has them on the Windows taskbar. Network
+//! and volume changes arrive as `STATUS_CHANGED`; nothing polls.
 
 use anyhow::Result;
 use muelle_shell::{
     appbar::{AppBar, Edge},
     launcher,
+    status::{self, AudioWatch, Network, NetworkWatch, TaskbarButtons, Volume},
     system::{self, Battery, Monitor},
 };
 use windows::{
@@ -33,8 +39,8 @@ use windows::{
         UI::WindowsAndMessaging::{
             CreateWindowExW, DefWindowProcW, DestroyWindow, HWND_TOPMOST, IDC_ARROW, LoadCursorW,
             RegisterClassW, SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_SHOWWINDOW, SetTimer, SetWindowPos,
-            WM_APP, WM_LBUTTONUP, WM_MOUSEMOVE, WM_TIMER, WNDCLASSW, WS_EX_NOACTIVATE,
-            WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+            WM_APP, WM_LBUTTONUP, WM_MOUSEMOVE, WM_SETTINGCHANGE, WM_TIMER, WNDCLASSW,
+            WS_EX_NOACTIVATE, WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
         },
     },
     core::{BOOL, Interface, w},
@@ -61,11 +67,38 @@ const WM_POWERBROADCAST: u32 = 0x0218;
 const WM_MOUSELEAVE: u32 = 0x02A3;
 /// AppBar notifications need a message id; the bar ignores them.
 const APPBAR_CALLBACK: u32 = WM_APP + 20;
+/// Posted by the network and audio watches.
+const STATUS_CHANGED: u32 = WM_APP + 21;
+
+/// Segoe Fluent Icons code points.
+mod glyph {
+    pub const WIFI: [char; 4] = ['\u{E872}', '\u{E873}', '\u{E874}', '\u{E701}'];
+    pub const WIFI_FULL: char = '\u{E701}';
+    pub const ETHERNET: char = '\u{E839}';
+    pub const OFFLINE: char = '\u{F384}';
+    pub const VOLUME: [char; 4] = ['\u{E992}', '\u{E993}', '\u{E994}', '\u{E995}'];
+    pub const MUTE: char = '\u{E74F}';
+    pub const SEARCH: char = '\u{E721}';
+    pub const TASK_VIEW: char = '\u{E7C4}';
+    pub const WIDGETS: char = '\u{F246}';
+}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Action {
     QuickSettings,
     Notifications,
+    Sound,
+    Search,
+    TaskView,
+    Widgets,
+}
+
+/// Network, volume and taskbar buttons, read only when Windows reports a change.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct Status {
+    network: Network,
+    volume: Option<Volume>,
+    buttons: TaskbarButtons,
 }
 
 /// What the bar was last drawn for.
@@ -77,6 +110,7 @@ struct Look {
     app_name: String,
     clock: String,
     battery: Option<Battery>,
+    status: Status,
 }
 
 pub struct MenuBar {
@@ -94,6 +128,10 @@ pub struct MenuBar {
     /// Current visual tree and where the full bar goes on screen.
     root: Option<ContainerVisual>,
     bounds: RECT,
+    status: Status,
+    /// Held for their callbacks; dropping them unsubscribes.
+    _network: Option<NetworkWatch>,
+    audio: Option<AudioWatch>,
 }
 
 unsafe extern "system" fn bar_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LRESULT {
@@ -104,8 +142,9 @@ unsafe extern "system" fn bar_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -
         }
         WM_MOUSEMOVE => app::menu_bar_hover(true),
         WM_MOUSELEAVE => app::menu_bar_hover(false),
-        // The minute changed, or the charger was plugged or unplugged.
-        WM_TIMER | WM_POWERBROADCAST => app::menu_bar_tick(),
+        // The minute changed, the charger was plugged or unplugged, the
+        // network or volume changed, or a Windows setting (taskbar buttons).
+        WM_TIMER | WM_POWERBROADCAST | STATUS_CHANGED | WM_SETTINGCHANGE => app::menu_bar_tick(),
         // SAFETY: Standard forwarding of unhandled messages.
         _ => return unsafe { DefWindowProcW(hwnd, msg, w, l) },
     }
@@ -178,7 +217,15 @@ impl MenuBar {
             revealed: false,
             root: None,
             bounds: RECT::default(),
+            status: Status {
+                network: Network::Offline,
+                volume: None,
+                buttons: TaskbarButtons::default(),
+            },
+            _network: NetworkWatch::new(hwnd.0 as isize, STATUS_CHANGED),
+            audio: AudioWatch::new(hwnd.0 as isize, STATUS_CHANGED),
         };
+        bar.update_status();
         bar.refresh(gfx)?;
         bar.schedule_next_minute();
         Ok(bar)
@@ -273,10 +320,19 @@ impl MenuBar {
         Ok(())
     }
 
-    /// The minute changed or the power state did: redraw what differs.
+    /// The minute changed, or something the bar shows did: redraw what differs.
     pub fn tick(&mut self, gfx: &Gfx) -> Result<()> {
+        self.update_status();
         self.schedule_next_minute();
         self.refresh(gfx)
+    }
+
+    fn update_status(&mut self) {
+        self.status = Status {
+            network: status::network(),
+            volume: self.audio.as_mut().and_then(AudioWatch::volume),
+            buttons: status::taskbar_buttons(),
+        };
     }
 
     /// One wake-up per minute, aligned to the minute, instead of polling.
@@ -303,6 +359,10 @@ impl MenuBar {
         match hit.map(|(_, _, action)| *action) {
             Some(Action::QuickSettings) => launcher::open_quick_settings(),
             Some(Action::Notifications) => launcher::open_notifications(),
+            Some(Action::Sound) => launcher::open_sound(),
+            Some(Action::Search) => launcher::open_search(),
+            Some(Action::TaskView) => launcher::open_task_view(),
+            Some(Action::Widgets) => launcher::open_widgets(),
             None => {}
         }
     }
@@ -319,6 +379,7 @@ impl MenuBar {
             app_name: self.app_name.clone(),
             clock: system::clock_text(),
             battery: system::battery(),
+            status: self.status,
         };
         if self.look.as_ref() == Some(&look) {
             return Ok(());
@@ -384,9 +445,11 @@ impl MenuBar {
             place(&layers, &name, px(SIDE_MARGIN))?;
         }
 
-        // Right side, from the edge inward: clock, control center, battery.
+        // Right side, from the edge inward.
         let slop = px(HIT_SLOP);
         let mut right = width - px(SIDE_MARGIN);
+        let status = look.status;
+        let symbol = |layers: &[(char, f32)]| gfx.glyph_brush(layers, scale, ink);
         let mut items: Vec<(LabelBrush, Action)> = vec![
             (
                 gfx.text_brush(&look.clock, scale, false, ink)?,
@@ -394,11 +457,38 @@ impl MenuBar {
             ),
             (gfx.control_center_brush(scale, ink)?, Action::QuickSettings),
         ];
+        if status.buttons.search {
+            items.push((symbol(&[(glyph::SEARCH, 1.0)])?, Action::Search));
+        }
+        let network = match status.network {
+            // The full fan stays faint behind the bars received, as on a Mac.
+            Network::Wifi { bars } => vec![
+                (glyph::WIFI_FULL, 0.3),
+                (glyph::WIFI[usize::from(bars.clamp(1, 4)) - 1], 1.0),
+            ],
+            Network::Ethernet => vec![(glyph::ETHERNET, 1.0)],
+            Network::Offline => vec![(glyph::OFFLINE, 1.0)],
+        };
+        items.push((symbol(&network)?, Action::QuickSettings));
+        if let Some(volume) = status.volume {
+            let speaker = if volume.muted {
+                glyph::MUTE
+            } else {
+                glyph::VOLUME[usize::from(volume.level.min(3))]
+            };
+            items.push((symbol(&[(speaker, 1.0)])?, Action::Sound));
+        }
         if let Some(battery) = look.battery {
             items.push((
                 gfx.battery_brush(battery.percent, battery.charging, scale, ink)?,
                 Action::QuickSettings,
             ));
+        }
+        if status.buttons.task_view {
+            items.push((symbol(&[(glyph::TASK_VIEW, 1.0)])?, Action::TaskView));
+        }
+        if status.buttons.widgets {
+            items.push((symbol(&[(glyph::WIDGETS, 1.0)])?, Action::Widgets));
         }
         for (item, action) in &items {
             let left = right - item.width;

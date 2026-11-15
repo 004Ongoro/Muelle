@@ -5,7 +5,8 @@ use windows::{
         UI::{
             Input::KeyboardAndMouse::{
                 INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBD_EVENT_FLAGS, KEYBDINPUT,
-                KEYEVENTF_KEYUP, SendInput, VIRTUAL_KEY, VK_A, VK_LWIN, VK_N,
+                KEYEVENTF_KEYUP, SendInput, VIRTUAL_KEY, VK_A, VK_LCONTROL, VK_LWIN, VK_N, VK_S,
+                VK_TAB, VK_V, VK_W,
             },
             Shell::ShellExecuteW,
             WindowsAndMessaging::{
@@ -123,6 +124,26 @@ pub fn open_quick_settings() {
 /// Opens the Windows 11 notification center and calendar: Win+N.
 pub fn open_notifications() {
     tap(&[VK_LWIN, VK_N]);
+}
+
+/// Windows Search, as the taskbar's search button: Win+S.
+pub fn open_search() {
+    tap(&[VK_LWIN, VK_S]);
+}
+
+/// Task View (open windows and virtual desktops): Win+Tab.
+pub fn open_task_view() {
+    tap(&[VK_LWIN, VK_TAB]);
+}
+
+/// The Widgets board: Win+W.
+pub fn open_widgets() {
+    tap(&[VK_LWIN, VK_W]);
+}
+
+/// The sound output page of quick settings (Windows 11 22H2+): Win+Ctrl+V.
+pub fn open_sound() {
+    tap(&[VK_LWIN, VK_LCONTROL, VK_V]);
 }
 
 pub fn reveal(path: &str) -> Result<(), LaunchError> {

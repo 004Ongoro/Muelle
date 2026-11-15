@@ -73,10 +73,20 @@ jobs:
           Copy-Item "$nsis/$setup.sig" upload/
           Copy-Item "$nsis/$setup" upload/Muelle-Setup.exe
 
+          # The release text is this version's section of CHANGELOG.md (English
+          # and Spanish), between its heading and the next one.
+          $lines = Get-Content CHANGELOG.md
+          $start = [array]::IndexOf($lines, "## [$env:VERSION]")
+          if ($start -lt 0) { throw "CHANGELOG.md has no section for $env:VERSION" }
+          $rest = $lines[($start + 1)..($lines.Count - 1)]
+          $end = ($rest | Select-String -Pattern '^## \[' | Select-Object -First 1).LineNumber
+          $section = if ($end) { $rest[0..($end - 2)] } else { $rest }
+          $section | Set-Content -Encoding utf8NoBOM notes.md
+
       - name: Create draft release
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create $env:GITHUB_REF_NAME (Get-ChildItem upload).FullName `
-            --draft --generate-notes --title "Muelle $env:GITHUB_REF_NAME"
+            --draft --notes-file notes.md --title "Muelle $env:GITHUB_REF_NAME"

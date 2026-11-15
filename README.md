@@ -5,6 +5,8 @@
   **A lightweight, macOS-inspired dock for Windows 11.**
 
   Smooth magnification, live window previews, and an optional Genie-style minimize effect.
+
+  **English** · [Español](README.es.md)
 </div>
 
 Muelle replaces the Windows taskbar with a customizable dock and an optional
@@ -18,8 +20,11 @@ development.
 - Glass-style dock with smooth, cursor-based icon magnification.
 - Launch, pin, reorder, and manage apps, including recent apps and open windows.
 - Live minimized-window previews.
+- Click the app already in front to minimize it, as on the Windows taskbar.
 - Drag and drop files onto apps, Downloads, or the Recycle Bin.
-- Optional auto-hide and a top menu bar with the clock and system shortcuts.
+- Optional auto-hide.
+- A top menu bar with the app in front, clock, network, volume and battery, plus
+  the Search, Task View and Widgets buttons if you have them on the Windows taskbar.
 - Separate Settings app with live changes, Spanish and English, and a
   configurable Genie-style minimize animation.
 - A watchdog restores the Windows taskbar if the dock exits unexpectedly.
@@ -129,10 +134,10 @@ administrator rights and shows no wizard: it installs to
 `%LOCALAPPDATA%\Programs\Muelle`, turns on start with Windows and opens the dock.
 Uninstalling (Settings → Apps) quits the dock and gives the Windows taskbar back.
 
-Pushing a tag that matches the version (for example `v0.1.0`) builds the
+Pushing a tag that matches the version (for example `v0.1.1`) builds the
 installer on GitHub Actions and attaches it to a draft release, together with
-`Muelle-Setup.exe` (the website's download link) and `latest.json` (read by the
-updater in Settings). The repository needs the secrets
+`Muelle-Setup.exe` (the website's download link), `latest.json` (read by the
+updater in Settings) and that version's notes from `CHANGELOG.md`. The repository needs the secrets
 `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. Publish the
 draft to make it the download and the update.
 
