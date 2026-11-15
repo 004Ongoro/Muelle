@@ -36,6 +36,12 @@ fn get_config() -> Config {
         .unwrap_or_default()
 }
 
+/// The defaults live in `muelle-config`; the window asks for them to reset.
+#[tauri::command]
+fn default_config() -> Config {
+    Config::default()
+}
+
 #[tauri::command]
 fn set_config(config: Config) -> Result<Config, String> {
     let config = merged_with_disk(config.sanitized());
@@ -108,6 +114,7 @@ fn main() {
         .manage(PendingUpdate::default())
         .invoke_handler(tauri::generate_handler![
             get_config,
+            default_config,
             set_config,
             get_autostart,
             set_autostart,

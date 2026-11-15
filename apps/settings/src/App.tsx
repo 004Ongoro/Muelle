@@ -2,11 +2,13 @@ import { getVersion } from "@tauri-apps/api/app";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  type ActiveAppClick,
   type Config,
   type Language,
   ICON_SIZE,
   MAX_MAGNIFIED_SIZE,
   checkUpdate,
+  defaultConfig,
   getAutostart,
   installUpdate,
   loadConfig,
@@ -31,6 +33,8 @@ type Texts = typeof es;
 
 /** Dragging a slider saves at most this often; the dock redraws on each save. */
 const SAVE_DELAY_MS = 60;
+/** How long the reset button stays armed after the first click. */
+const RESET_CONFIRM_MS = 4000;
 
 function textsFor(language: Language): Texts {
   const spanish =
@@ -45,6 +49,7 @@ export function App() {
   const [failed, setFailed] = useState(false);
   const [version, setVersion] = useState("");
   const [updateState, setUpdateState] = useState<UpdateState>({ kind: "checking" });
+  const [confirmingReset, setConfirmingReset] = useState(false);
   const pending = useRef<Config | null>(null);
   const timer = useRef<number | undefined>(undefined);
 
@@ -112,6 +117,20 @@ export function App() {
     // On success the installer replaces this app and this process exits.
     installUpdate().catch(() => setUpdateState({ kind: "error" }));
   }, []);
+
+  // Two clicks: the first arms the button, the second resets. Pinned and
+  // recent apps stay; they belong to the user, not to the settings.
+  const reset = useCallback(() => {
+    if (!confirmingReset) {
+      setConfirmingReset(true);
+      window.setTimeout(() => setConfirmingReset(false), RESET_CONFIRM_MS);
+      return;
+    }
+    setConfirmingReset(false);
+    defaultConfig()
+      .then(({ pinned: _pinned, recent: _recent, ...defaults }) => update(defaults))
+      .catch(() => setFailed(true));
+  }, [confirmingReset, update]);
 
   if (!config) return <div className="window" />;
   const t = textsFor(config.language);
@@ -216,6 +235,40 @@ export function App() {
                   />
                 </Row>
               </Card>
+              <Card>
+                <Row label={t.showIndicators}>
+                  <Toggle
+                    label={t.showIndicators}
+                    checked={config.showIndicators}
+                    onChange={(showIndicators) => update({ showIndicators })}
+                  />
+                </Row>
+                <Row label={t.showRecents} hint={t.showRecentsHint}>
+                  <Toggle
+                    label={t.showRecents}
+                    checked={config.showRecents}
+                    onChange={(showRecents) => update({ showRecents })}
+                  />
+                </Row>
+                <Row label={t.bounceOnOpen}>
+                  <Toggle
+                    label={t.bounceOnOpen}
+                    checked={config.bounceOnOpen}
+                    onChange={(bounceOnOpen) => update({ bounceOnOpen })}
+                  />
+                </Row>
+                <Row label={t.activeAppClick} hint={t.activeAppClickHint}>
+                  <Segmented<ActiveAppClick>
+                    label={t.activeAppClick}
+                    value={config.activeAppClick}
+                    options={[
+                      { value: "minimize", label: t.activeAppMinimize },
+                      { value: "nothing", label: t.activeAppNothing },
+                    ]}
+                    onChange={(activeAppClick) => update({ activeAppClick })}
+                  />
+                </Row>
+              </Card>
             </>
           ) : (
             <>
@@ -252,6 +305,17 @@ export function App() {
                     {t.updatesCheck}
                   </button>
                 )}
+              </Row>
+            </Card>
+            <Card>
+              <Row label={t.reset} hint={confirmingReset ? t.resetConfirmHint : t.resetHint}>
+                <button
+                  type="button"
+                  className={confirmingReset ? "push push-danger" : "push"}
+                  onClick={reset}
+                >
+                  {confirmingReset ? t.resetConfirm : t.resetButton}
+                </button>
               </Row>
             </Card>
             </>

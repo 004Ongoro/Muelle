@@ -52,7 +52,25 @@ pub struct Config {
     pub menu_bar: bool,
     /// Keep the menu bar off screen until the pointer touches the top edge.
     pub menu_bar_auto_hide: bool,
+    /// What clicking the icon of the app already in front does.
+    pub active_app_click: ActiveAppClick,
+    /// The dot under apps that have windows open.
+    pub show_indicators: bool,
+    /// The section of recently used apps that are not pinned.
+    pub show_recents: bool,
+    /// Icons bounce while the app they open is starting.
+    pub bounce_on_open: bool,
     pub language: Language,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ActiveAppClick {
+    /// As the Windows taskbar does.
+    #[default]
+    Minimize,
+    /// As macOS does.
+    Nothing,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -103,6 +121,10 @@ impl Default for Config {
             genie: false,
             menu_bar: true,
             menu_bar_auto_hide: false,
+            active_app_click: ActiveAppClick::Minimize,
+            show_indicators: true,
+            show_recents: true,
+            bounce_on_open: true,
             language: Language::Auto,
         }
     }
@@ -191,6 +213,31 @@ mod tests {
         save(&path, &Config::default()).ok();
         fs::write(&path, "{}").ok();
         assert_eq!(load(&path).ok(), Some(Some(Config::default())));
+    }
+
+    #[test]
+    fn load_should_give_older_files_the_new_behavior_defaults() {
+        let path = scratch("before-behavior");
+        save(&path, &Config::default()).ok();
+        fs::write(&path, r#"{"version":1,"iconSize":56}"#).ok();
+        let config = load(&path).ok().flatten().unwrap_or_default();
+        assert_eq!(config.icon_size, 56);
+        assert_eq!(config.active_app_click, ActiveAppClick::Minimize);
+        assert!(config.show_indicators && config.show_recents && config.bounce_on_open);
+    }
+
+    #[test]
+    fn load_should_read_the_behavior_settings() {
+        let path = scratch("behavior");
+        save(&path, &Config::default()).ok();
+        fs::write(
+            &path,
+            r#"{"activeAppClick":"nothing","showRecents":false,"bounceOnOpen":false}"#,
+        )
+        .ok();
+        let config = load(&path).ok().flatten().unwrap_or_default();
+        assert_eq!(config.active_app_click, ActiveAppClick::Nothing);
+        assert!(!config.show_recents && !config.bounce_on_open);
     }
 
     #[test]

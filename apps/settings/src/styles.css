@@ -270,6 +270,11 @@ input:focus-visible {
   opacity: 0.5;
 }
 
+.push-danger {
+  background: #ff453a;
+  color: #fff;
+}
+
 .push-primary {
   background: var(--accent);
   color: #fff;

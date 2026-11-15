@@ -4,13 +4,15 @@ use windows::{
         Foundation::{HWND, LPARAM, WPARAM},
         UI::{
             Input::KeyboardAndMouse::{
-                INPUT, INPUT_0, INPUT_KEYBOARD, KEYBD_EVENT_FLAGS, KEYBDINPUT, KEYEVENTF_KEYUP,
-                SendInput, VIRTUAL_KEY, VK_A, VK_LWIN, VK_N,
+                INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBD_EVENT_FLAGS, KEYBDINPUT,
+                KEYEVENTF_KEYUP, SendInput, VIRTUAL_KEY, VK_A, VK_LWIN, VK_N,
             },
             Shell::ShellExecuteW,
             WindowsAndMessaging::{
-                HWND_TOP, IsIconic, PostMessageW, SW_RESTORE, SW_SHOWNORMAL, SWP_NOACTIVATE,
-                SWP_NOMOVE, SWP_NOSIZE, SetForegroundWindow, SetWindowPos, ShowWindow, WM_CLOSE,
+                ASFW_ANY, AllowSetForegroundWindow, GetForegroundWindow, HWND_TOP, IsIconic,
+                IsWindowVisible, PostMessageW, SW_MINIMIZE, SW_RESTORE, SW_SHOWNORMAL,
+                SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SetForegroundWindow, SetWindowPos,
+                ShowWindow, ShowWindowAsync, SwitchToThisWindow, WM_CLOSE,
             },
         },
     },
@@ -24,7 +26,18 @@ pub struct LaunchError {
     code: isize,
 }
 
+/// The dock never takes the focus, so Windows may refuse the foreground to the
+/// app it starts and open it behind other windows. The click that asked for it
+/// was the dock's, which lets the dock hand that right on.
+fn allow_foreground() {
+    // SAFETY: No pointers; failure only means Windows keeps its default.
+    unsafe {
+        let _ = AllowSetForegroundWindow(ASFW_ANY);
+    }
+}
+
 pub fn open(id: &str) -> Result<(), LaunchError> {
+    allow_foreground();
     // SAFETY: The strings live for the duration of the call.
     let result = unsafe {
         ShellExecuteW(
@@ -51,6 +64,7 @@ pub fn open(id: &str) -> Result<(), LaunchError> {
 /// Opens `files` with the executable `app`.
 pub fn open_with(app: &str, files: &[String]) -> Result<(), LaunchError> {
     let arguments: Vec<String> = files.iter().map(|file| format!("\"{file}\"")).collect();
+    allow_foreground();
     // SAFETY: The strings live for the duration of the call.
     let result = unsafe {
         ShellExecuteW(
@@ -113,6 +127,7 @@ pub fn open_notifications() {
 
 pub fn reveal(path: &str) -> Result<(), LaunchError> {
     let arguments = HSTRING::from(format!("/select,\"{path}\""));
+    allow_foreground();
     // SAFETY: The strings live for the duration of the call.
     let result = unsafe {
         ShellExecuteW(
@@ -175,7 +190,46 @@ pub fn activate(windows: &[isize]) {
         };
         if IsIconic(front).as_bool() {
             let _ = ShowWindow(front, SW_RESTORE);
+            // Windows refuses ShowWindow on an app running as administrator
+            // (Task Manager, for one). SwitchToThisWindow, what Alt+Tab uses,
+            // restores it anyway and also brings it to the front.
+            if IsIconic(front).as_bool() {
+                SwitchToThisWindow(front, true);
+            }
         }
-        let _ = SetForegroundWindow(front);
+        bring_to_front(front);
+    }
+}
+
+/// Gives `hwnd` the focus. Windows only lets the process that received the
+/// last input do this; when it refuses (the click was some time ago, or
+/// another app grabbed the input since), an empty mouse input makes the dock
+/// that process again, and the second attempt succeeds.
+unsafe fn bring_to_front(hwnd: HWND) {
+    // SAFETY: Calls on another window; they fail without effect if it is gone.
+    unsafe {
+        if SetForegroundWindow(hwnd).as_bool() && GetForegroundWindow() == hwnd {
+            return;
+        }
+        let nudge = INPUT {
+            r#type: INPUT_MOUSE,
+            ..Default::default()
+        };
+        SendInput(&[nudge], size_of::<INPUT>() as i32);
+        let _ = SetForegroundWindow(hwnd);
+    }
+}
+
+/// Minimizes an app's windows, as clicking the active app's taskbar button
+/// does. Asynchronous, so an app that is not responding cannot block the dock.
+pub fn minimize(windows: &[isize]) {
+    for &raw in windows {
+        let hwnd = HWND(raw as *mut _);
+        // SAFETY: Calls on another window; they fail without effect if it is gone.
+        unsafe {
+            if IsWindowVisible(hwnd).as_bool() && !IsIconic(hwnd).as_bool() {
+                let _ = ShowWindowAsync(hwnd, SW_MINIMIZE);
+            }
+        }
     }
 }

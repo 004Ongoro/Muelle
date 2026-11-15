@@ -22,7 +22,7 @@ use std::{
 };
 
 use anyhow::{Context, Result};
-use muelle_config::Config;
+use muelle_config::{ActiveAppClick, Config};
 use muelle_core::{
     bounce,
     layout::{ItemKind, Layout, Metrics, layout},
@@ -230,6 +230,7 @@ enum Outside {
     Open(String),
     OpenStart,
     Activate(Vec<isize>),
+    Minimize(Vec<isize>),
     Reveal(String),
     EmptyBin,
     OpenWith(String, Vec<String>),
@@ -319,6 +320,7 @@ struct StageKey {
     auto_hide: bool,
     icon_size: u32,
     max_scale: f32,
+    indicators: bool,
     entries: Vec<Entry>,
 }
 
@@ -530,7 +532,7 @@ impl App {
             .map(|app| icon(&app.id, Role::App, app.running))
             .collect();
         entries.insert(0, icon(START_ID, Role::Start, false));
-        if !self.roster.recent().is_empty() {
+        if self.config.show_recents && !self.roster.recent().is_empty() {
             entries.push(separator());
             entries.extend(
                 self.roster
@@ -623,6 +625,7 @@ impl App {
             auto_hide: self.config.auto_hide,
             icon_size: self.config.icon_size,
             max_scale: self.config.max_scale(),
+            indicators: self.config.show_indicators,
             entries: self.current_entries(),
         };
         if self.stage.as_ref().is_some_and(|stage| stage.key == key) {
@@ -698,7 +701,7 @@ impl App {
                 SlotContent {
                     icon: asset.and_then(|asset| asset.icon.as_ref()),
                     label: asset.and_then(|asset| asset.label.as_ref()),
-                    running: entry.running,
+                    running: entry.running && self.config.show_indicators,
                     badge,
                 }
             })
@@ -1379,7 +1382,8 @@ impl App {
     }
 
     /// On icon click, launches a closed app or brings its windows to the
-    /// foreground. Does nothing if the app is already in front, as in macOS.
+    /// foreground. Clicking the app that is already in front minimizes it, as
+    /// the Windows taskbar does; the next click brings it back.
     fn on_click(&mut self) -> Result<Option<Outside>> {
         let Some(entry) = self.hovered.and_then(|index| self.entries.get(index)) else {
             return Ok(None);
@@ -1394,7 +1398,12 @@ impl App {
                 self.start_bounce(id.clone(), None);
                 Some(Outside::Open(id))
             }
-            Role::App if windows.contains(&tracker::foreground_window()) => None,
+            Role::App if windows.contains(&tracker::foreground_window()) => {
+                match self.config.active_app_click {
+                    ActiveAppClick::Minimize => Some(Outside::Minimize(windows)),
+                    ActiveAppClick::Nothing => None,
+                }
+            }
             Role::App => self.activating(windows),
             Role::Start => Some(Outside::OpenStart),
             Role::Window => window_of(&id).and_then(|hwnd| self.activating(vec![hwnd])),
@@ -1627,7 +1636,12 @@ impl App {
         self.refresh()
     }
 
+    /// `until: None` is the bounce of an app being opened, which the user can
+    /// turn off; a request for attention always bounces.
     fn start_bounce(&mut self, id: String, until: Option<f32>) {
+        if until.is_none() && !self.config.bounce_on_open {
+            return;
+        }
         self.bounces.entry(id).or_insert(Bounce {
             start: Instant::now(),
             until,
@@ -1976,6 +1990,7 @@ fn run_outside(outside: Outside) {
         Outside::Open(id) => report(launcher::open(&id)),
         Outside::OpenStart => launcher::open_start_menu(),
         Outside::Activate(windows) => launcher::activate(&windows),
+        Outside::Minimize(windows) => launcher::minimize(&windows),
         Outside::Reveal(path) => report(launcher::reveal(&path)),
         Outside::OpenWith(app, files) => report(launcher::open_with(&app, &files)),
         Outside::Recycle(paths) => files::recycle(main_window(), &paths),

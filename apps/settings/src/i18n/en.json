@@ -28,5 +28,18 @@
   "updatesInstalling": "Downloading and installing…",
   "updatesError": "Could not check. Check your connection.",
   "updatesCheck": "Check",
-  "updatesInstall": "Update"
+  "updatesInstall": "Update",
+  "showIndicators": "Show indicators for open apps",
+  "showRecents": "Show recent apps",
+  "showRecentsHint": "The last three you opened that are not pinned.",
+  "bounceOnOpen": "Animate opening apps",
+  "activeAppClick": "Clicking the active app",
+  "activeAppClickHint": "Minimize is what the Windows taskbar does; do nothing is what macOS does.",
+  "activeAppMinimize": "Minimize",
+  "activeAppNothing": "Do nothing",
+  "reset": "Restore defaults",
+  "resetHint": "Back to the out-of-the-box look and behavior. Your pinned apps stay.",
+  "resetConfirmHint": "Click again to confirm.",
+  "resetButton": "Restore",
+  "resetConfirm": "Confirm"
 }

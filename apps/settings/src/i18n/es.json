@@ -28,5 +28,18 @@
   "updatesInstalling": "Descargando e instalando…",
   "updatesError": "No se pudo comprobar. Revisa la conexión.",
   "updatesCheck": "Buscar",
-  "updatesInstall": "Actualizar"
+  "updatesInstall": "Actualizar",
+  "showIndicators": "Mostrar indicadores de las apps abiertas",
+  "showRecents": "Mostrar apps recientes",
+  "showRecentsHint": "Las tres últimas que abriste sin tenerlas fijadas.",
+  "bounceOnOpen": "Animar al abrir apps",
+  "activeAppClick": "Al hacer clic en la app activa",
+  "activeAppClickHint": "Minimizar es lo que hace la barra de tareas de Windows; no hacer nada, lo que hace macOS.",
+  "activeAppMinimize": "Minimizar",
+  "activeAppNothing": "No hacer nada",
+  "reset": "Restablecer valores",
+  "resetHint": "Vuelve al aspecto y comportamiento de fábrica. Tus apps fijadas se mantienen.",
+  "resetConfirmHint": "Pulsa otra vez para confirmar.",
+  "resetButton": "Restablecer",
+  "resetConfirm": "Confirmar"
 }
