@@ -2,6 +2,8 @@ import { prefersReducedMotion } from "@/lib/motion";
 
 /** The preview desk is smaller than a screen, so the dock is drawn at this share of its size. */
 const PREVIEW_SCALE = 0.7;
+/** Horizontal room the dock needs besides its icons: gaps, padding, border and a margin to the desk edge. */
+const DOCK_CHROME = 72;
 /** Width of the magnified area around the pointer, in preview pixels. */
 const SIGMA = 46;
 /** How close to an edge the pointer must be to reveal an auto-hidden bar. */
@@ -54,14 +56,17 @@ export function initCustomize(root: HTMLElement) {
   let nearTop = false;
 
   const layoutDock = () => {
-    const size = value("iconSize") * PREVIEW_SCALE;
-    const peak = value("magnifiedSize") * PREVIEW_SCALE;
+    // Narrow desks (phones) shrink the dock so even the largest icon size fits.
+    const largest = icons.length * Number(ranges.get("iconSize")?.max ?? 0);
+    const scale = Math.min(PREVIEW_SCALE, (preview.clientWidth - DOCK_CHROME) / (largest || 1));
+    const size = value("iconSize") * scale;
+    const peak = value("magnifiedSize") * scale;
     const magnify = isOn("magnification") && pointerX !== null && !prefersReducedMotion();
     const centers = icons.map((_, index) => {
       // Centres of the resting row: the magnified widths are derived from these.
       const gap = 6;
       const rowWidth = icons.length * size + (icons.length - 1) * gap;
-      const left = (dock.parentElement?.clientWidth ?? 0) / 2 - rowWidth / 2;
+      const left = preview.clientWidth / 2 - rowWidth / 2;
       return left + index * (size + gap) + size / 2;
     });
     icons.forEach((icon, index) => {

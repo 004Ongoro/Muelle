@@ -593,6 +593,8 @@
   bottom: 10px;
   left: 50%;
   display: flex;
+  /* Without it the box is capped at half the desk and the icons spill out. */
+  width: max-content;
   align-items: flex-end;
   gap: 6px;
   padding: 6px 8px;
@@ -611,6 +613,7 @@
 
 .preview-dock img {
   display: block;
+  flex: none;
   /* The JS sets each size; this only smooths it. */
   transition:
     width 0.12s ease-out,
