@@ -3,6 +3,7 @@ import { Image } from "astro:assets";
 import wallpaper from "@/assets/wallpapers/desktop-02.jpg";
 import Section from "@/components/layout/Section.astro";
 import SectionIntro from "@/components/showcase/SectionIntro.astro";
+import Icon from "@/components/ui/Icon.astro";
 import {
   customizeIntro,
   previewIcons,
@@ -15,6 +16,10 @@ import "@/styles/showcase.css";
 const t = settingsText.en;
 const tx = (key: SettingsKey) => ({ "data-t": key });
 const checked = (on: boolean) => (on ? "true" : "false");
+// Use names your Icon component knows.
+const paneIcons = { dock: "app-window", system: "gear-six" } as const;
+// `<` is escaped so no text can ever close the script tag early.
+const textJson = JSON.stringify(settingsText).replace(/</g, "\\u003c");
 ---
 
 <Section id="customize">
@@ -26,11 +31,11 @@ const checked = (on: boolean) => (on ? "true" : "false");
         <div class="mac-lights" aria-hidden="true"><i></i><i></i><i></i></div>
         <nav class="settings-nav">
           <button type="button" data-pane="dock" aria-current="page">
-            <span class="settings-glyph" aria-hidden="true">▭</span>
+            <span class="settings-glyph" aria-hidden="true"><Icon name={paneIcons.dock} size={16} /></span>
             <span {...tx("dock")}>{t.dock}</span>
           </button>
           <button type="button" data-pane="system">
-            <span class="settings-glyph" aria-hidden="true">⚙</span>
+            <span class="settings-glyph" aria-hidden="true"><Icon name={paneIcons.system} size={16} /></span>
             <span {...tx("system")}>{t.system}</span>
           </button>
         </nav>
@@ -50,6 +55,7 @@ const checked = (on: boolean) => (on ? "true" : "false");
                   class="mac-range"
                   aria-label={t.size}
                   data-setting="iconSize"
+                  data-label="size"
                   min={d.iconSizeMin}
                   max={d.iconSizeMax}
                   value={d.iconSize}
@@ -139,12 +145,12 @@ const checked = (on: boolean) => (on ? "true" : "false");
             </div>
             <div class="settings-row">
               <span class="settings-label" {...tx("language")}>{t.language}</span>
-              <span class="mac-seg" role="radiogroup" aria-label={t.language}>
-                <button type="button" role="radio" aria-checked="true" data-lang="auto" {...tx("languageAuto")}
+              <span class="mac-seg" role="radiogroup" aria-label={t.language} data-label="language">
+                <button type="button" role="radio" aria-checked="false" data-lang="auto" {...tx("languageAuto")}
                   >{t.languageAuto}</button
                 >
                 <button type="button" role="radio" aria-checked="false" data-lang="es">Español</button>
-                <button type="button" role="radio" aria-checked="false" data-lang="en">English</button>
+                <button type="button" role="radio" aria-checked="true" data-lang="en">English</button>
               </span>
             </div>
           </div>
@@ -152,7 +158,7 @@ const checked = (on: boolean) => (on ? "true" : "false");
             <div class="settings-row">
               <span class="settings-text">
                 <span class="settings-label" {...tx("updates")}>{t.updates}</span>
-                <span class="settings-hint" data-update-status>{t.updatesCurrent}</span>
+                <span class="settings-hint" data-update-status aria-live="polite">{t.updatesCurrent}</span>
               </span>
               <button type="button" class="mac-button" data-update {...tx("updatesCheck")}>{t.updatesCheck}</button>
             </div>
@@ -165,14 +171,14 @@ const checked = (on: boolean) => (on ? "true" : "false");
       <Image src={wallpaper} alt="" class="preview-wall" widths={[480, 960]} sizes="(min-width: 1024px) 480px, 100vw" />
       <div class="preview-bar" data-preview-bar>
         <b>File Explorer</b>
-        <span class="tabular-nums" data-clock>9:41</span>
+        <span class="tabular-nums" data-clock>9:41 AM</span>
       </div>
       <div class="preview-dock" data-preview-dock>
         {previewIcons.map((icon) => <Image src={icon} alt="" width={128} height={128} />)}
       </div>
     </div>
 
-    <script type="application/json" is:inline data-settings-text set:html={JSON.stringify(settingsText)} />
+    <script type="application/json" is:inline data-settings-text set:html={textJson} />
   </div>
 </Section>
 

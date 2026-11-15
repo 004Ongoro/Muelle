@@ -1,4 +1,3 @@
-/** Phosphor glyphs used by the site, kept in sync with `components/ui/IconSprite.astro`. */
 export type IconName =
   | "anchor"
   | "github"
@@ -9,4 +8,6 @@ export type IconName =
   | "copy"
   | "check"
   | "menu"
-  | "close";
+  | "close"
+  | "app-window"
+  | "gear-six";

@@ -1,23 +1,31 @@
-// The landing is written in English, so the mock clock keeps that language even on a Spanish system.
 const timeFormat = new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit" });
 const dateFormat = new Intl.DateTimeFormat("en-US", { weekday: "short", day: "numeric", month: "short" });
 
-/** Keeps the fake menu bar clock in step with the machine, aligned to the half minute. */
+let started = false;
+
+/** Keeps every fake menu bar clock in step with the machine, ticking on the minute. */
 export function initClock() {
-  const clocks = document.querySelectorAll<HTMLElement>("[data-clock]");
-  const dates = document.querySelectorAll<HTMLElement>("[data-date]");
-  if (!clocks.length && !dates.length) return;
+  if (started) return;
+  started = true;
 
   const update = () => {
     const now = new Date();
-    clocks.forEach((node) => {
+    document.querySelectorAll<HTMLElement>("[data-clock]").forEach((node) => {
       node.textContent = timeFormat.format(now);
     });
-    dates.forEach((node) => {
-      node.textContent = dateFormat.format(now);
+    document.querySelectorAll<HTMLElement>("[data-date]").forEach((node) => {
+      node.textContent = dateFormat.format(now).replace(",", "");
     });
   };
 
-  update();
-  window.setInterval(update, 30_000);
+  const tick = () => {
+    update();
+    window.setTimeout(tick, 60_000 - (Date.now() % 60_000) + 50);
+  };
+  tick();
+
+  // Timers are throttled in background tabs: catch up the moment the tab is visible again.
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) update();
+  });
 }

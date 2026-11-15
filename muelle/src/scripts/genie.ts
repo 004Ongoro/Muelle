@@ -1,14 +1,3 @@
-/**
- * Genie minimize, the same effect the Muelle app draws (`crates/muelle-core/src/genie.rs`):
- * the sides of the window bend into a funnel that ends at the dock slot, and the image
- * slides down through it, vanishing as it enters the slot.
- *
- * The window is copied once from the DOM into a canvas (same boxes, fonts, colours and
- * icons), cut into thin strips, and each strip is stretched between the funnel's sides.
- * It plays on a timer, like the app: when the dock comes fully into view while scrolling,
- * from the yellow traffic light, or from the dock slot to restore.
- */
-
 import { gsap } from "@/lib/motion";
 
 const MINIMIZE_SECONDS = 0.6;
@@ -19,6 +8,8 @@ const MAX_DPR = 2;
 const THUMB_SIZE = 52;
 /** Resting width of a dock item, needed to measure the slot without the magnification. */
 const DOCK_REST = 52;
+/** Resize and font events arrive in bursts; the scene is rebuilt once they settle. */
+const REBUILD_DELAY_MS = 120;
 
 /** Same curve parameters as the app. */
 const BEND_END = 0.5;
@@ -46,7 +37,7 @@ interface Scene {
 export function initGenie(root: HTMLElement, reduceMotion: boolean) {
   const canvas = root.querySelector<HTMLCanvasElement>("[data-genie]");
   const note = root.querySelector<HTMLElement>("[data-note]");
-  const slot = document.querySelector<HTMLElement>("[data-dock-thumb]");
+  const slot = root.querySelector<HTMLElement>("[data-dock-thumb]");
   const thumb = slot?.querySelector<HTMLCanvasElement>("canvas");
   const restore = slot?.querySelector<HTMLButtonElement>("[data-dock-restore]");
   const dock = root.querySelector<HTMLElement>(".dock");
@@ -59,6 +50,7 @@ export function initGenie(root: HTMLElement, reduceMotion: boolean) {
   let slotValue = -1;
   let flyingBefore = false;
   let minimizedBefore = false;
+  let version = 0;
 
   const paint = (progress: number) => {
     const hidden = progress > 0;
@@ -89,11 +81,17 @@ export function initGenie(root: HTMLElement, reduceMotion: boolean) {
   };
 
   const build = async () => {
+    // Builds are async and can overlap; only the newest one may write the scene.
+    const mine = ++version;
     dpr = Math.min(window.devicePixelRatio || 1, MAX_DPR);
     const rootRect = root.getBoundingClientRect();
     const noteRect = note.getBoundingClientRect();
     const slotRect = measureSlot(root, slot);
 
+    // A canvas is a replaced element: `inset-0` does not stretch it, so without an
+    // explicit CSS size it draws at its backing-store size and the drawing is scaled by dpr.
+    canvas.style.width = `${rootRect.width}px`;
+    canvas.style.height = `${rootRect.height}px`;
     canvas.width = Math.round(rootRect.width * dpr);
     canvas.height = Math.round(rootRect.height * dpr);
 
@@ -104,6 +102,8 @@ export function initGenie(root: HTMLElement, reduceMotion: boolean) {
     const copying = copyElement(note, dpr);
     note.style.visibility = visibility;
     const source = await copying;
+    if (mine !== version) return;
+
     scene = {
       window: {
         left: noteRect.left - rootRect.left,
@@ -128,11 +128,15 @@ export function initGenie(root: HTMLElement, reduceMotion: boolean) {
   // Below 900 px the dock scrolls sideways and its slot sits off screen, so the
   // window simply stays where it is.
   const wideEnough = window.matchMedia("(min-width: 900px)");
-  if (reduceMotion || !wideEnough.matches) return;
 
   const play = (target: 0 | 1) => {
-    if (state.progress === target) return;
+    if (!wideEnough.matches || state.progress === target) return;
     gsap.killTweensOf(state);
+    if (reduceMotion) {
+      state.progress = target;
+      paint(target);
+      return;
+    }
     gsap.to(state, {
       progress: target,
       duration: (target ? MINIMIZE_SECONDS : RESTORE_SECONDS) * Math.abs(target - state.progress),
@@ -151,6 +155,7 @@ export function initGenie(root: HTMLElement, reduceMotion: boolean) {
   let frame = 0;
   const onScroll = () => {
     frame = 0;
+    if (reduceMotion || !wideEnough.matches) return;
     const rect = dock.getBoundingClientRect();
     const inView = rect.bottom <= window.innerHeight && rect.top >= 0;
     const below = rect.top > window.innerHeight;
@@ -175,9 +180,24 @@ export function initGenie(root: HTMLElement, reduceMotion: boolean) {
     { passive: true },
   );
 
+  wideEnough.addEventListener("change", (event) => {
+    if (event.matches) {
+      dockInView = null;
+      onScroll();
+    } else {
+      gsap.killTweensOf(state);
+      state.progress = 0;
+      paint(0);
+    }
+  });
+
+  let timer = 0;
   const refresh = () => {
-    build();
-    onScroll();
+    window.clearTimeout(timer);
+    timer = window.setTimeout(() => {
+      build();
+      onScroll();
+    }, REBUILD_DELAY_MS);
   };
   window.addEventListener("resize", refresh, { passive: true });
   document.fonts.ready.then(refresh);
@@ -327,12 +347,15 @@ async function copyElement(element: HTMLElement, dpr: number): Promise<HTMLCanva
       context.letterSpacing = style.letterSpacing === "normal" ? "0px" : style.letterSpacing;
       context.fillStyle = style.color;
       context.textBaseline = "alphabetic";
-      const metrics = context.measureText(child.textContent);
-      context.fillText(
-        child.textContent.trim(),
-        textRect.left - box.left,
-        textRect.top - box.top + metrics.fontBoundingBoxAscent,
-      );
+      const raw = child.textContent.trim();
+      const text =
+        style.textTransform === "uppercase"
+          ? raw.toUpperCase()
+          : style.textTransform === "lowercase"
+            ? raw.toLowerCase()
+            : raw;
+      const metrics = context.measureText(text);
+      context.fillText(text, textRect.left - box.left, textRect.top - box.top + metrics.fontBoundingBoxAscent);
     }
   }
 

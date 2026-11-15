@@ -4,11 +4,17 @@ import { prefersReducedMotion } from "@/lib/motion";
 const PREVIEW_SCALE = 0.7;
 /** Horizontal room the dock needs besides its icons: gaps, padding, border and a margin to the desk edge. */
 const DOCK_CHROME = 72;
-/** Width of the magnified area around the pointer, in preview pixels. */
+/** Width of the magnified area around the pointer, in preview pixels at `PREVIEW_SCALE`. */
 const SIGMA = 46;
 /** How close to an edge the pointer must be to reveal an auto-hidden bar. */
 const EDGE = 34;
+/** Extra reach that keeps a revealed dock open while the pointer travels over it. */
+const DOCK_REACH = 60;
 const CHECK_MS = 1100;
+/** How long the dock stays magnified after a magnification setting changes. */
+const DEMO_MS = 1400;
+/** Gap between preview icons; it must match the gap of `.preview-dock` in the stylesheet. */
+const ICON_GAP = 6;
 
 type Strings = Record<string, string>;
 
@@ -54,31 +60,56 @@ export function initCustomize(root: HTMLElement) {
   let pointerX: number | null = null;
   let nearBottom = false;
   let nearTop = false;
+  // Stands in for the pointer while a magnification setting is being changed, so the
+  // slider gives feedback even though the pointer is over the Settings window.
+  let demoX: number | null = null;
+  let demoTimer = 0;
 
   const layoutDock = () => {
     // Narrow desks (phones) shrink the dock so even the largest icon size fits.
     const largest = icons.length * Number(ranges.get("iconSize")?.max ?? 0);
     const scale = Math.min(PREVIEW_SCALE, (preview.clientWidth - DOCK_CHROME) / (largest || 1));
+    const sigma = SIGMA * (scale / PREVIEW_SCALE);
     const size = value("iconSize") * scale;
     const peak = value("magnifiedSize") * scale;
-    const magnify = isOn("magnification") && pointerX !== null && !prefersReducedMotion();
-    const centers = icons.map((_, index) => {
-      // Centres of the resting row: the magnified widths are derived from these.
-      const gap = 6;
-      const rowWidth = icons.length * size + (icons.length - 1) * gap;
-      const left = preview.clientWidth / 2 - rowWidth / 2;
-      return left + index * (size + gap) + size / 2;
-    });
+    const focusX = pointerX ?? demoX;
+    const magnify = isOn("magnification") && focusX !== null && !prefersReducedMotion();
+
+    // Centres of the resting row: the magnified widths are derived from these.
+    const rowWidth = icons.length * size + (icons.length - 1) * ICON_GAP;
+    const left = preview.clientWidth / 2 - rowWidth / 2;
     icons.forEach((icon, index) => {
       let width = size;
-      if (magnify && pointerX !== null) {
-        const distance = pointerX - centers[index];
-        width = size + (Math.max(peak, size) - size) * Math.exp(-(distance * distance) / (2 * SIGMA * SIGMA));
+      if (magnify && focusX !== null) {
+        const center = left + index * (size + ICON_GAP) + size / 2;
+        const distance = focusX - center;
+        width = size + (Math.max(peak, size) - size) * Math.exp(-(distance * distance) / (2 * sigma * sigma));
       }
       icon.style.width = `${width}px`;
       icon.style.height = `${width}px`;
     });
     dock.style.setProperty("--rest", `${size}px`);
+  };
+
+  // Pointer moves arrive faster than frames; one layout per frame is enough.
+  let queued = 0;
+  const schedule = () => {
+    if (queued) return;
+    queued = requestAnimationFrame(() => {
+      queued = 0;
+      layoutDock();
+    });
+  };
+
+  const demoMagnify = () => {
+    window.clearTimeout(demoTimer);
+    demoX = isOn("magnification") ? preview.clientWidth / 2 : null;
+    layoutDock();
+    if (demoX === null) return;
+    demoTimer = window.setTimeout(() => {
+      demoX = null;
+      layoutDock();
+    }, DEMO_MS);
   };
 
   const applyBars = () => {
@@ -93,18 +124,21 @@ export function initCustomize(root: HTMLElement) {
   preview.addEventListener("pointermove", (event) => {
     const rect = preview.getBoundingClientRect();
     const y = event.clientY - rect.top;
-    nearBottom = rect.height - y < EDGE + (isOn("autoHide") ? 0 : 60);
+    // Once revealed, the dock stays open over its whole height: otherwise it would hide
+    // while the pointer climbs towards its icons.
+    const reach = !isOn("autoHide") || nearBottom ? EDGE + DOCK_REACH : EDGE;
+    nearBottom = rect.height - y < reach;
     nearTop = y < EDGE;
     pointerX = nearBottom ? event.clientX - rect.left : null;
     applyBars();
-    layoutDock();
+    schedule();
   });
   preview.addEventListener("pointerleave", () => {
     pointerX = null;
     nearBottom = false;
     nearTop = false;
     applyBars();
-    layoutDock();
+    schedule();
   });
 
   /* ---- Controls ------------------------------------------------------- */
@@ -113,8 +147,9 @@ export function initCustomize(root: HTMLElement) {
     const magnified = ranges.get("magnifiedSize");
     if (!magnified) return;
     // As in the app: the magnified size never goes below the icon size.
-    magnified.min = String(value("iconSize"));
-    if (Number(magnified.value) < value("iconSize")) magnified.value = String(value("iconSize"));
+    const floor = Math.min(value("iconSize"), Number(magnified.max));
+    magnified.min = String(floor);
+    if (Number(magnified.value) < floor) magnified.value = String(floor);
     magnified.disabled = !isOn("magnification");
     paintRange(magnified);
   };
@@ -124,7 +159,8 @@ export function initCustomize(root: HTMLElement) {
     input.addEventListener("input", () => {
       paintRange(input);
       syncMagnified();
-      layoutDock();
+      if (input.dataset.setting === "magnifiedSize") demoMagnify();
+      else layoutDock();
     });
   });
 
@@ -133,7 +169,8 @@ export function initCustomize(root: HTMLElement) {
       button.setAttribute("aria-checked", String(!isOn(button.dataset.setting ?? "")));
       syncMagnified();
       applyBars();
-      layoutDock();
+      if (button.dataset.setting === "magnification") demoMagnify();
+      else layoutDock();
     });
   });
 
@@ -160,13 +197,14 @@ export function initCustomize(root: HTMLElement) {
   const setLanguage = (choice: string) => {
     const resolved = choice === "auto" ? (navigator.language.toLowerCase().startsWith("es") ? "es" : "en") : choice;
     strings = texts[resolved === "es" ? "es" : "en"];
+    scene.lang = resolved === "es" ? "es" : "en";
     scene.querySelectorAll<HTMLElement>("[data-t]").forEach((node) => {
       const text = strings[node.dataset.t ?? ""];
       if (text) node.textContent = text;
     });
-    scene.querySelectorAll<HTMLElement>("[aria-label]").forEach((node) => {
-      const key = node.dataset.setting;
-      if (key && strings[key]) node.setAttribute("aria-label", strings[key]);
+    scene.querySelectorAll<HTMLElement>("[data-label], [data-setting]").forEach((node) => {
+      const key = node.dataset.label ?? node.dataset.setting ?? "";
+      if (strings[key]) node.setAttribute("aria-label", strings[key]);
     });
     if (status) status.textContent = strings.updatesCurrent;
     scene.querySelectorAll<HTMLButtonElement>("[data-lang]").forEach((button) => {

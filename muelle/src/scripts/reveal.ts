@@ -5,6 +5,22 @@ const STAGGER = 0.08;
 /** Four steps is all the eye notices; a full twenty-item stagger feels slow. */
 const STAGGER_STEPS = 4;
 
+let wave = 0;
+let resetFrame = 0;
+
+/** Items that enter in the same frame form one wave and stagger among themselves. */
+const nextDelay = () => {
+  const delay = (wave % STAGGER_STEPS) * STAGGER;
+  wave += 1;
+  if (!resetFrame) {
+    resetFrame = requestAnimationFrame(() => {
+      wave = 0;
+      resetFrame = 0;
+    });
+  }
+  return delay;
+};
+
 /**
  * Fades in the elements marked `data-r` once. Each element gets its own trigger:
  * a batch defers elements that are already on screen at load, which leaves them
@@ -19,7 +35,7 @@ export function initReveal(root: HTMLElement) {
 
   gsap.set(items, { opacity: 0, y: 32 });
 
-  items.forEach((item, index) => {
+  items.forEach((item) => {
     ScrollTrigger.create({
       trigger: item,
       start: "top 92%",
@@ -29,7 +45,7 @@ export function initReveal(root: HTMLElement) {
           opacity: 1,
           y: 0,
           duration: DURATION,
-          delay: (index % STAGGER_STEPS) * STAGGER,
+          delay: nextDelay(),
           ease: "power3.out",
         }),
     });
