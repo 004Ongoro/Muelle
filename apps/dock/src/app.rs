@@ -67,11 +67,12 @@ use windows::{
                 ReleaseCapture, SetCapture, TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent,
             },
             WindowsAndMessaging::{
-                CreateWindowExW, DefWindowProcW, DispatchMessageW, EVENT_SYSTEM_MINIMIZESTART,
-                FindWindowW, GetCursorPos, GetMessageW, GetSystemMetrics, HWND_TOPMOST, IDC_ARROW,
-                KillTimer, LoadCursorW, MSG, OBJID_WINDOW, PM_REMOVE, PeekMessageW, PostMessageW,
-                PostQuitMessage, RegisterClassW, RegisterShellHookWindow, RegisterWindowMessageW,
-                SM_CXDRAG, SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_SHOWWINDOW, SetTimer, SetWindowPos,
+                CreateWindowExW, DefWindowProcW, DispatchMessageW, EVENT_SYSTEM_MINIMIZEEND,
+                EVENT_SYSTEM_MINIMIZESTART, FindWindowW, GetCursorPos, GetMessageW,
+                GetSystemMetrics, HWND_TOPMOST, IDC_ARROW, KillTimer, LoadCursorW, MSG,
+                OBJID_WINDOW, PM_REMOVE, PeekMessageW, PostMessageW, PostQuitMessage,
+                RegisterClassW, RegisterShellHookWindow, RegisterWindowMessageW, SM_CXDRAG,
+                SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_SHOWWINDOW, SetTimer, SetWindowPos,
                 WINDOW_EX_STYLE, WINEVENT_OUTOFCONTEXT, WINEVENT_SKIPOWNPROCESS, WM_APP,
                 WM_CAPTURECHANGED, WM_CLOSE, WM_DESTROY, WM_DISPLAYCHANGE, WM_DPICHANGED,
                 WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_QUIT, WM_RBUTTONUP,
@@ -905,10 +906,13 @@ impl App {
         {
             return Ok(());
         }
+        // The window has already vanished (its system transition is off):
+        // the stand-in goes up before anything else, or the desktop shows.
+        self.show_stand_ins(&[hwnd]);
         self.minimized.push(hwnd);
         self.thumbnails.sync(&self.minimized);
         self.refresh()?;
-        self.start_flights(&[hwnd]);
+        self.aim_flights();
         Ok(())
     }
 
@@ -991,6 +995,27 @@ impl App {
     }
 
     fn start_flights(&mut self, windows: &[isize]) {
+        self.show_stand_ins(windows);
+        self.aim_flights();
+    }
+
+    /// Gives each new minimize flight its slot, now that the dock shows it.
+    fn aim_flights(&mut self) {
+        let slots: Vec<(usize, Option<RECT>)> = self
+            .flights
+            .iter()
+            .enumerate()
+            .filter(|(_, flight)| flight.needs_aim())
+            .map(|(index, flight)| (index, self.minimized_slot(flight.hwnd, flight.aspect())))
+            .collect();
+        for (index, slot) in slots {
+            if let (Some(slot), Some(flight)) = (slot, self.flights.get_mut(index)) {
+                flight.aim(&self.gfx, slot);
+            }
+        }
+    }
+
+    fn show_stand_ins(&mut self, windows: &[isize]) {
         // Respect "Animation effects" being turned off in Windows settings.
         // One genie at a time: minimizing everything at once (Win+D) would
         // otherwise take a screen snapshot per window.
@@ -1004,10 +1029,7 @@ impl App {
             let Some(from) = tracker::normal_rect(hwnd) else {
                 continue;
             };
-            let aspect = (from.right - from.left) as f32 / (from.bottom - from.top).max(1) as f32;
-            if let Some(to) = self.minimized_slot(hwnd, aspect)
-                && let Some(flight) = Flight::start(&self.gfx, hwnd, from, to, screen)
-            {
+            if let Some(flight) = Flight::start(&self.gfx, hwnd, from, screen) {
                 self.flights.push(flight);
                 self.last_frame = Instant::now();
             }
@@ -1898,8 +1920,16 @@ unsafe extern "system" fn on_win_event(
     _thread: u32,
     _time: u32,
 ) {
-    if event == EVENT_SYSTEM_MINIMIZESTART && object == OBJID_WINDOW.0 {
+    if object != OBJID_WINDOW.0 {
+        return;
+    }
+    if event == EVENT_SYSTEM_MINIMIZESTART {
         with_app("minimizar", |app| app.on_minimize_start(hwnd.0 as isize));
+    } else if event == EVENT_SYSTEM_MINIMIZEEND {
+        // Restored from outside the dock (Alt+Tab, the app itself): no shell
+        // hook reports it, and a window the dock still thought minimized kept
+        // its thumbnail and skipped the genie on its next minimize.
+        with_app("restaurar", App::sync);
     }
 }
 
@@ -2290,7 +2320,7 @@ pub fn run() -> Result<()> {
         // Delivered through this thread's message loop; no code runs in other processes.
         let minimize_hook = SetWinEventHook(
             EVENT_SYSTEM_MINIMIZESTART,
-            EVENT_SYSTEM_MINIMIZESTART,
+            EVENT_SYSTEM_MINIMIZEEND,
             None,
             Some(on_win_event),
             0,

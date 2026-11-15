@@ -9,9 +9,17 @@
 //!    changes on screen);
 //! 2. a frame later that rectangle is copied from the screen: a snapshot, as
 //!    macOS also uses for its genie;
-//! 3. the snapshot becomes one composition surface shared by thin horizontal
+//! 3. the strips cut from it go up, still, under the stand-in, which stays for
+//!    two more frames: composition commits asynchronously while DWM drops a
+//!    thumbnail on the very next frame, and removing it at once left a frame
+//!    with neither, a visible flash;
+//! 4. the snapshot is one composition surface shared by thin horizontal
 //!    strips (plain composition visuals) that follow the genie curves
 //!    (`muelle_core::genie`).
+//!
+//! The stand-in goes up before the dock even knows where the window will land
+//! (`Flight::start`, then `Flight::aim`): the window has already vanished, and
+//! every millisecond until the stand-in shows is a flash of the desktop.
 //!
 //! The dock does not move the strips itself. Each strip gets two expression
 //! animations (offset and scale) that read two shared values, `bend` and
@@ -81,6 +89,8 @@ const OVERLAP_ROWS: f32 = 1.0;
 /// Frames the thumbnail stays up before the screen is copied, so DWM has
 /// certainly presented it.
 const FRAMES_BEFORE_SNAPSHOT: u32 = 2;
+/// Frames the still strips and the stand-in overlap before the stand-in goes.
+const HANDOVER_FRAMES: u32 = 2;
 /// The dock's own thumbnail fades in over the last part of the animation.
 const LANDING_START: f32 = 0.8;
 /// How long the last frame of a restore stays up, so the real window has
@@ -114,6 +124,13 @@ struct Piece {
 enum Phase {
     /// The stand-in thumbnail is on screen; counting frames until the snapshot.
     Standing { thumbnail: isize, frames: u32 },
+    /// The strips are up and still under the stand-in, until they are
+    /// certainly on screen.
+    Handover {
+        thumbnail: isize,
+        frames: u32,
+        drive: CompositionPropertySet,
+    },
     Flying {
         start: Instant,
         /// Kept alive: the strips' animations read it.
@@ -130,9 +147,11 @@ pub struct Flight {
     /// Kept alive: it owns the overlay's visual tree.
     _target: DesktopWindowTarget,
     root: ContainerVisual,
-    /// Overlay origin on screen.
-    origin: (i32, i32),
+    /// The monitor the overlay covers.
+    screen: RECT,
     genie: Genie,
+    /// The dock slot is known (a minimize learns it a little after it starts).
+    aimed: bool,
     phase: Phase,
     /// Out of the dock instead of into it.
     restoring: bool,
@@ -294,7 +313,10 @@ fn cut(
 /// The expressions are `Genie::frame` written for the compositor: a strip's
 /// top is its resting row plus `shift`, its bottom stops at the slot, and its
 /// sides follow the cosine funnel scaled by `bend`.
-fn fly(
+/// Ties every strip to two shared values, `bend` and `shift`, set to the
+/// first frame of the flight (the window, or the slot when `reverse`); the
+/// strips stay still until [`launch`] animates those values.
+fn bind(
     gfx: &Gfx,
     genie: &Genie,
     pieces: &[Piece],
@@ -348,8 +370,15 @@ fn fly(
         piece.visual.StartAnimation(h!("Offset"), &offset)?;
         piece.visual.StartAnimation(h!("Scale"), &scale)?;
     }
+    Ok(drive)
+}
 
-    // Last, so every strip is already listening when the values start moving.
+/// Starts the flight bound by [`bind`]: the compositor animates `bend` and
+/// `shift` for `DURATION_SECONDS` at the display's refresh rate.
+fn launch(gfx: &Gfx, genie: &Genie, drive: &CompositionPropertySet, reverse: bool) -> Result<()> {
+    let compositor = &gfx.compositor;
+    let travel = (genie.slot.bottom - genie.window.top).max(0.0);
+    let at = |progress: f32| if reverse { 1.0 - progress } else { progress };
     let linear = compositor.CreateLinearEasingFunction()?;
     let duration = TimeSpan {
         Duration: (DURATION_SECONDS * 1e7) as i64,
@@ -370,7 +399,7 @@ fn fly(
     };
     animate(h!("bend"), Genie::bend, 1.0)?;
     animate(h!("shift"), Genie::slide, travel)?;
-    Ok(drive)
+    Ok(())
 }
 
 /// Nothing is drawn below the slot: strips vanish as they enter it.
@@ -393,9 +422,10 @@ fn local(rect: RECT, screen: RECT) -> Edges {
 }
 
 impl Flight {
-    /// Flies a window that is being minimized into the dock. `from` and `to`
-    /// are screen rectangles; `screen` is the monitor the overlay covers.
-    pub fn start(gfx: &Gfx, hwnd: isize, from: RECT, to: RECT, screen: RECT) -> Option<Self> {
+    /// Puts up the stand-in of a window that is being minimized, where it was
+    /// (`from`, a screen rectangle; `screen` is the monitor the overlay
+    /// covers). The flight takes off once [`Flight::aim`] gives it its slot.
+    pub fn start(gfx: &Gfx, hwnd: isize, from: RECT, screen: RECT) -> Option<Self> {
         // Only what is on screen can be copied from it.
         let visible = intersect(from, screen);
         if is_empty(visible) {
@@ -430,20 +460,19 @@ impl Flight {
             let _ = ShowWindow(overlay, SW_SHOWNOACTIVATE);
             thumbnail
         };
-        let genie = Genie {
-            window: local(visible, screen),
-            slot: local(to, screen),
-        };
-        // Without the clip the flight still works; strips would only show a
-        // little below the slot.
-        let _ = clip_at_slot(gfx, &root, &genie, screen);
+        let window = local(visible, screen);
         Some(Self {
             hwnd,
             overlay,
             _target: target,
             root,
-            origin: (screen.left, screen.top),
-            genie,
+            screen,
+            // Until `aim`, the slot is the window itself.
+            genie: Genie {
+                window,
+                slot: window,
+            },
+            aimed: false,
             phase: Phase::Standing {
                 thumbnail,
                 frames: 0,
@@ -478,7 +507,8 @@ impl Flight {
         let size = (image.width as f32, image.height as f32);
         let drive = clip_at_slot(gfx, &root, &genie, screen)
             .and_then(|()| cut(gfx, &root, image, height))
-            .and_then(|pieces| fly(gfx, &genie, &pieces, size, true));
+            .and_then(|pieces| bind(gfx, &genie, &pieces, size, true))
+            .and_then(|drive| launch(gfx, &genie, &drive, true).map(|()| drive));
         let Ok(drive) = drive else {
             // SAFETY: Our own window, destroyed once.
             unsafe {
@@ -491,8 +521,9 @@ impl Flight {
             overlay,
             _target: target,
             root,
-            origin: (screen.left, screen.top),
+            screen,
             genie,
+            aimed: true,
             phase: Phase::Flying {
                 start: Instant::now(),
                 _drive: drive,
@@ -516,21 +547,45 @@ impl Flight {
                 if *frames <= FRAMES_BEFORE_SNAPSHOT {
                     return true;
                 }
+                // No slot to fly to: the window just stays minimized.
+                if !self.aimed {
+                    return false;
+                }
                 let thumbnail = *thumbnail;
                 let Ok(drive) = self.take_off(gfx) else {
                     return false;
                 };
-                // The clock starts once the strips are up: copying the screen
-                // takes tens of milliseconds that must not eat the animation.
-                self.phase = Phase::Flying {
-                    start: Instant::now(),
-                    _drive: drive,
+                self.phase = Phase::Handover {
+                    thumbnail,
+                    frames: 0,
+                    drive,
                 };
-                // The strips now show the same image: the stand-in can go.
+                true
+            }
+            Phase::Handover {
+                thumbnail,
+                frames,
+                drive,
+            } => {
+                *frames += 1;
+                if *frames <= HANDOVER_FRAMES {
+                    return true;
+                }
+                let (thumbnail, drive) = (*thumbnail, drive.clone());
+                if launch(gfx, &self.genie, &drive, false).is_err() {
+                    return false;
+                }
+                // The strips have been on screen for a while, showing the same
+                // image: the stand-in can go. The clock starts now, so copying
+                // the screen does not eat the animation.
                 // SAFETY: `thumbnail` came from DwmRegisterThumbnail and is released once.
                 unsafe {
                     let _ = DwmUnregisterThumbnail(thumbnail);
                 }
+                self.phase = Phase::Flying {
+                    start: Instant::now(),
+                    _drive: drive,
+                };
                 true
             }
             // The compositor is flying the strips; only the end is ours.
@@ -549,6 +604,27 @@ impl Flight {
             }
             Phase::Settling { until } => now < *until,
         }
+    }
+
+    /// Gives a minimize its dock slot (a screen rectangle).
+    pub fn aim(&mut self, gfx: &Gfx, slot: RECT) {
+        self.genie.slot = local(slot, self.screen);
+        self.aimed = true;
+        // Without the clip the flight still works; strips would only show a
+        // little below the slot.
+        let _ = clip_at_slot(gfx, &self.root, &self.genie, self.screen);
+    }
+
+    #[must_use]
+    pub fn needs_aim(&self) -> bool {
+        !self.aimed
+    }
+
+    /// Width of the flying window divided by its height.
+    #[must_use]
+    pub fn aspect(&self) -> f32 {
+        let window = self.genie.window;
+        (window.right - window.left) / (window.bottom - window.top).max(1.0)
     }
 
     /// `true`, once, when the real window has to be restored: the restore
@@ -583,20 +659,20 @@ impl Flight {
     }
 
     /// Copies the window's rectangle from the screen, cuts it into strips and
-    /// starts them flying.
+    /// ties them to the genie, still at the window's place.
     fn take_off(&mut self, gfx: &Gfx) -> Result<CompositionPropertySet> {
         let edges = self.genie.window;
         let window = RECT {
-            left: edges.left as i32 + self.origin.0,
-            top: edges.top as i32 + self.origin.1,
-            right: edges.right as i32 + self.origin.0,
-            bottom: edges.bottom as i32 + self.origin.1,
+            left: edges.left as i32 + self.screen.left,
+            top: edges.top as i32 + self.screen.top,
+            right: edges.right as i32 + self.screen.left,
+            bottom: edges.bottom as i32 + self.screen.top,
         };
         let image =
             screen::capture(window).ok_or_else(|| anyhow::anyhow!("screen capture failed"))?;
         let pieces = cut(gfx, &self.root, &image, image.height)?;
         let size = (image.width as f32, image.height as f32);
-        let drive = fly(gfx, &self.genie, &pieces, size, false)?;
+        let drive = bind(gfx, &self.genie, &pieces, size, false)?;
         self.captured = Some((image, window));
         Ok(drive)
     }
@@ -607,7 +683,9 @@ impl Drop for Flight {
         // SAFETY: The handles were created in `start` or `restore` and are
         // released once.
         unsafe {
-            if let Phase::Standing { thumbnail, .. } = self.phase {
+            if let Phase::Standing { thumbnail, .. } | Phase::Handover { thumbnail, .. } =
+                self.phase
+            {
                 let _ = DwmUnregisterThumbnail(thumbnail);
             }
             let _ = DestroyWindow(self.overlay);

@@ -15,6 +15,8 @@ copia la sección de la versión que se publica a la release de GitHub.
   System while an update waits.
 - Smoother Genie effect: the system compositor now runs the whole animation
   at the display's refresh rate, and it no longer skips its first frames.
+- Genie: no more flash when minimizing, and a window restored with Alt+Tab or
+  from the app itself animates again the next time it is minimized.
 - Fixed: the Dock section of Settings could not scroll to its last options.
 - Fixed: opening Settings twice opened two windows; it now brings the open one
   to the front.
@@ -29,6 +31,8 @@ copia la sección de la versión que se publica a la release de GitHub.
   una insignia en Sistema mientras haya una pendiente.
 - Efecto genio más fluido: el compositor del sistema ejecuta toda la animación
   a la frecuencia del monitor y ya no se salta sus primeros fotogramas.
+- Genio: ya no hay destello al minimizar, y una ventana restaurada con Alt+Tab o
+  desde la propia app vuelve a animarse la siguiente vez que se minimiza.
 - Corregido: la sección Dock de Ajustes no dejaba bajar hasta las últimas opciones.
 - Corregido: abrir Ajustes dos veces abría dos ventanas; ahora trae al frente la abierta.
 - Corregido: con una app de administrador delante (Administrador de tareas, una

@@ -2,7 +2,7 @@
 
 > Muelle is a free, MIT-licensed dock for Windows 11 written in Rust. It hides the Windows taskbar and replaces it with a macOS-style dock: icons that grow under the cursor, minimized windows as live thumbnails, drag and drop onto apps, and an optional top menu bar. A small guardian process gives the taskbar back if the dock quits or crashes.
 
-Muelle is not an Electron or Tauri app: the dock is a native Win32 process that draws through the Windows composition engine, which is why it idles at about 17 MB of private memory with no timers and no idle CPU. The Tauri part is only the Settings window and the installer.
+Muelle is not an Electron or Tauri app: the dock is a native Win32 process that draws through the Windows composition engine. One idle snapshot in Windows Task Manager showed 3.1 MB for the grouped Muelle processes; this point-in-time reading can vary by system and session. It excludes the separate Settings window and its WebView2 runtime.
 
 ## Pages
 
@@ -27,7 +27,8 @@ The installer is not code-signed yet, so Windows SmartScreen may ask for confirm
 ## Facts
 
 - Platform: Windows 11 (single monitor is the supported case).
-- Idle cost: about 17 MB of private memory, 0% CPU, no periodic timers.
+- Idle memory: 3.1 MB shown for the grouped Muelle processes in one Windows Task Manager snapshot; this is not a guaranteed value and excludes Settings/WebView2.
+- Idle CPU: 0% in that snapshot; the dock uses no periodic timers while idle.
 - Installer: about 2.4 MB, one step, no wizard and no admin rights.
 - Uninstall or quit: the Windows taskbar comes back, and uninstalling leaves Windows as it was.
 - Not affiliated with Apple or Microsoft; the visual language is inspired by macOS, the icons and code are original.
