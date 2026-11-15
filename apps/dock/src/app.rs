@@ -2311,14 +2311,16 @@ pub fn run() -> Result<()> {
         let visual = create(WS_EX_LAYERED | WS_EX_TRANSPARENT)?;
         let input = create(WINDOW_EX_STYLE::default())?;
 
-        // Without this, the system backdrop brush appears black.
+        // Without this, the system backdrop brush appears black. Windows 10
+        // does not know the attribute; the dock then draws solid glass
+        // (`system::transparency_enabled`), so the error is not fatal.
         let enable = BOOL::from(true);
-        DwmSetWindowAttribute(
+        let _ = DwmSetWindowAttribute(
             visual,
             DWMWA_USE_HOSTBACKDROPBRUSH,
             (&raw const enable).cast(),
             size_of::<BOOL>() as u32,
-        )?;
+        );
 
         let target = gfx
             .compositor

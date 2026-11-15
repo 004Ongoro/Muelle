@@ -8,6 +8,19 @@ copia la sección de la versión que se publica a la release de GitHub.
 
 ## [Unreleased]
 
+### English
+
+- Windows 10 support (version 1903 or later). The dock used to close right
+  after starting there. On Windows 10 the dock and menu bar are solid instead
+  of glass, since it has no backdrop blur for desktop apps.
+
+### Español
+
+- Soporte para Windows 10 (versión 1903 o posterior). Antes el dock se cerraba
+  nada más arrancar ahí. En Windows 10 el dock y la barra superior son sólidos
+  en lugar de cristal, porque no ofrece desenfoque de fondo a las apps de
+  escritorio.
+
 ## [0.1.5]
 
 ### English

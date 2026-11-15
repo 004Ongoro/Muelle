@@ -368,7 +368,7 @@ impl Gfx {
         // SAFETY: Strings and structures passed to each call remain alive for its duration.
         let (layout, metrics) = unsafe {
             let format = self.dwrite.CreateTextFormat(
-                w!("Segoe UI Variable Text"),
+                text_font(),
                 None,
                 DWRITE_FONT_WEIGHT_MEDIUM,
                 DWRITE_FONT_STYLE_NORMAL,
@@ -552,7 +552,7 @@ impl Gfx {
         // SAFETY: Strings and structures passed to each call remain alive for its duration.
         let (layout, metrics) = unsafe {
             let format = self.dwrite.CreateTextFormat(
-                w!("Segoe UI Variable Text"),
+                text_font(),
                 None,
                 weight,
                 DWRITE_FONT_STYLE_NORMAL,
@@ -591,7 +591,7 @@ impl Gfx {
         })
     }
 
-    /// Symbols from Segoe Fluent Icons, the Windows 11 system icon font, centered
+    /// Symbols from the system icon font (see `icon_font`), centered
     /// in a square. Layers are drawn in order with their opacity, so a dim full
     /// Wi-Fi fan can sit behind the bars actually received.
     pub fn glyph_brush(&self, layers: &[(char, f32)], scale: f32, ink: Ink) -> Result<LabelBrush> {
@@ -599,7 +599,7 @@ impl Gfx {
         // SAFETY: The format lives for the drawing below.
         let format = unsafe {
             let format = self.dwrite.CreateTextFormat(
-                w!("Segoe Fluent Icons"),
+                icon_font(),
                 None,
                 DWRITE_FONT_WEIGHT_NORMAL,
                 DWRITE_FONT_STYLE_NORMAL,
@@ -835,6 +835,26 @@ fn draw_image(
         dc.DrawBitmap(&bitmap, Some(&dest), 1.0, interpolation, None, None);
     }
     Ok(())
+}
+
+/// The interface font: Segoe UI Variable on Windows 11, Segoe UI on
+/// Windows 10, which does not have it.
+fn text_font() -> windows::core::PCWSTR {
+    if muelle_shell::system::is_windows_11() {
+        w!("Segoe UI Variable Text")
+    } else {
+        w!("Segoe UI")
+    }
+}
+
+/// The system icon font. Windows 10 has Segoe MDL2 Assets instead of Segoe
+/// Fluent Icons; the symbols the menu bar uses share the same code points.
+fn icon_font() -> windows::core::PCWSTR {
+    if muelle_shell::system::is_windows_11() {
+        w!("Segoe Fluent Icons")
+    } else {
+        w!("Segoe MDL2 Assets")
+    }
 }
 
 const fn rgb(r: f32, g: f32, b: f32, a: f32) -> D2D1_COLOR_F {

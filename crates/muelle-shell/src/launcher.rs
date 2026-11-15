@@ -185,9 +185,14 @@ pub fn open_quick_settings() {
     tap(&[VK_LWIN, VK_A]);
 }
 
-/// Opens the Windows 11 notification center and calendar: Win+N.
+/// Opens the notification center and calendar: Win+N on Windows 11. Windows
+/// 10 keeps notifications in the Action Center, which is Win+A there.
 pub fn open_notifications() {
-    tap(&[VK_LWIN, VK_N]);
+    if crate::system::is_windows_11() {
+        tap(&[VK_LWIN, VK_N]);
+    } else {
+        tap(&[VK_LWIN, VK_A]);
+    }
 }
 
 /// Windows Search, as the taskbar's search button: Win+S.
@@ -206,8 +211,14 @@ pub fn open_widgets() {
 }
 
 /// The sound output page of quick settings (Windows 11 22H2+): Win+Ctrl+V.
+/// Windows 10 has no shortcut for its volume flyout, so it opens the sound
+/// page of Settings instead.
 pub fn open_sound() {
-    tap(&[VK_LWIN, VK_LCONTROL, VK_V]);
+    if crate::system::is_windows_11() {
+        tap(&[VK_LWIN, VK_LCONTROL, VK_V]);
+    } else {
+        let _ = open("ms-settings:sound");
+    }
 }
 
 /// How long the taskbar takes to put the focus on its notification area.

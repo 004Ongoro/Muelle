@@ -7,7 +7,7 @@
     ],
     "publisher": "Muelle",
     "homepage": "https://github.com/crafter-station/Muelle",
-    "shortDescription": "Dock estilo macOS para Windows 11",
+    "shortDescription": "Dock estilo macOS para Windows",
     "category": "Utility",
     "externalBin": [
       "binaries/muelle"

@@ -2,7 +2,7 @@
 
 <img width="50%" alt="Muelle" src="https://github.com/user-attachments/assets/8c715a53-a0df-4780-9dd4-09ce3ccd9043" />
 
-  **Un dock ligero, inspirado en macOS, para Windows 11.**
+  **Un dock ligero, inspirado en macOS, para Windows 10 y 11.**
 
   Ampliación suave, miniaturas de ventanas en vivo y un efecto genio opcional al minimizar.
 
@@ -10,7 +10,7 @@
 </div>
 
 Muelle sustituye la barra de tareas de Windows por un dock personalizable y una
-barra superior opcional al estilo de macOS. Está hecho para Windows 11 y sigue
+barra superior opcional al estilo de macOS. Está hecho para Windows 10 y 11 y sigue
 en desarrollo activo.
 
 <img width="1919" height="1008" alt="Muelle en Windows 11" src="https://github.com/user-attachments/assets/b6c44203-c425-43fb-adf5-e2edd2f02257" />
@@ -41,7 +41,7 @@ dibujar su animación; las devuelve al cerrarse.
 ## Instalar
 
 **[Descargar Muelle-Setup.exe](https://github.com/crafter-station/Muelle/releases/latest/download/Muelle-Setup.exe)**
-(Windows 11, 64 bits) o elige una versión en
+(Windows 10 versión 1903 o posterior, o Windows 11; 64 bits) o elige una versión en
 [Releases](https://github.com/crafter-station/Muelle/releases).
 
 1. Ejecuta `Muelle-Setup.exe`. Se instala solo para tu usuario: sin permisos de
@@ -63,7 +63,9 @@ instaladas → Muelle → Desinstalar; la barra vuelve y no queda nada en marcha
 
 ### Requisitos
 
-- Windows 11
+- Windows 10 (versión 1903 o posterior) o Windows 11. En Windows 10 el dock y la
+  barra superior son sólidos en lugar de cristal: Windows 10 no ofrece desenfoque
+  de fondo a las apps de escritorio.
 - Rust con la toolchain MSVC y las Build Tools de C++ de Visual Studio
 - Node.js y pnpm
 
@@ -148,7 +150,8 @@ descarga y la actualización.
 
 ## Estado
 
-El dock, Ajustes y el instalador funcionan en Windows 11. Algunas funciones e
+El dock, Ajustes y el instalador funcionan en Windows 11. El soporte de Windows 10
+es nuevo; avisa si algo se ve mal ahí. Algunas funciones e
 interacciones aún se están verificando.
 
 ## Política de firma de código

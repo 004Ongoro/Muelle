@@ -2,7 +2,7 @@
   
 <img width="50%" alt="Frame 1116606779" src="https://github.com/user-attachments/assets/8c715a53-a0df-4780-9dd4-09ce3ccd9043" />
 
-  **A lightweight, macOS-inspired dock for Windows 11.**
+  **A lightweight, macOS-inspired dock for Windows 10 and 11.**
 
   Muelle replaces the Windows taskbar with a customizable dock and an optional
   macOS-style menu bar.
@@ -46,7 +46,7 @@ restored when Muelle exits.
 ## Install
 
 **[Download Muelle-Setup.exe](https://github.com/crafter-station/Muelle/releases/latest/download/Muelle-Setup.exe)**
-(Windows 11, 64-bit) or pick a version from
+(Windows 10 version 1903 or later, or Windows 11; 64-bit) or pick a version from
 [Releases](https://github.com/crafter-station/Muelle/releases).
 
 1. Run `Muelle-Setup.exe`. It installs for your user only: no administrator
@@ -76,7 +76,9 @@ session; it excludes Settings and its WebView2 runtime.
 
 ### Prerequisites
 
-- Windows 11
+- Windows 10 (version 1903 or later) or Windows 11. On Windows 10 the dock and
+  menu bar are solid instead of glass: Windows 10 has no backdrop blur for
+  desktop apps.
 - Rust with the MSVC toolchain and Visual Studio C++ Build Tools
 - Node.js and pnpm
 
@@ -161,7 +163,8 @@ draft to make it the download and the update.
 
 ## Current status
 
-The dock, Settings app and installer work on Windows 11. Some features and
+The dock, Settings app and installer work on Windows 11. Windows 10 support is
+new; please report anything that looks wrong there. Some features and
 interactions are still being verified.
 
 ## Code signing policy

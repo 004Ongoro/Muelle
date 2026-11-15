@@ -204,7 +204,7 @@ export const download = {
   tagline: site.tagline,
   meta: [
     `Version ${site.version}`,
-    "Windows 11 · 64-bit",
+    "Windows 10 & 11 · 64-bit",
     `${figures.installer.value} ${figures.installer.unit}`,
     `Free · ${site.license}`,
   ],
@@ -217,7 +217,7 @@ export const download = {
   ],
   source: {
     summary: "Build it from source",
-    note: "Needs Windows 11, Rust (MSVC) and the Visual Studio C++ build tools.",
+    note: "Needs Windows 10 (1903+) or 11, Rust (MSVC) and the Visual Studio C++ build tools.",
     commands: [`git clone ${site.repository}`, "cd Muelle", "cargo run --release -p muelle"],
   },
 } as const;

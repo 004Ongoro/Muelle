@@ -5,7 +5,9 @@ use windows::{
         Foundation::{POINT, RECT},
         Graphics::Gdi::{GetMonitorInfoW, MONITOR_DEFAULTTOPRIMARY, MONITORINFO, MonitorFromPoint},
         System::Com::CoTaskMemFree,
-        System::Registry::{HKEY_CURRENT_USER, RRF_RT_REG_DWORD, RegGetValueW},
+        System::Registry::{
+            HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, RRF_RT_REG_DWORD, RRF_RT_REG_SZ, RegGetValueW,
+        },
         UI::{
             HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI},
             Shell::{FOLDERID_Downloads, KF_FLAG_DEFAULT, SHGetKnownFolderPath},
@@ -27,9 +29,16 @@ pub fn uses_light_theme() -> bool {
 /// effects" is on and energy saver is off (it turns them off). Otherwise the
 /// system backdrop brush stops blurring and shows up black, so glass has to
 /// be drawn solid.
+///
+/// On Windows 10 there is no backdrop brush for desktop windows at all
+/// (`DWMWA_USE_HOSTBACKDROPBRUSH` arrived with Windows 11), so it is always
+/// `false` there.
 #[must_use]
 pub fn transparency_enabled() -> bool {
     use windows::Win32::System::Power::{GetSystemPowerStatus, SYSTEM_POWER_STATUS};
+    if !is_windows_11() {
+        return false;
+    }
     const SAVER_ON: u8 = 1;
     let mut status = SYSTEM_POWER_STATUS::default();
     // SAFETY: `status` is a valid structure the call fills in.
@@ -37,6 +46,40 @@ pub fn transparency_enabled() -> bool {
         && status.SystemStatusFlag & SAVER_ON != 0;
     // Missing means never changed, and the default is on.
     !saver && personalize(w!("EnableTransparency")) != Some(0)
+}
+
+/// `true` on Windows 11 (build 22000 or later), `false` on Windows 10.
+/// Read once: the version does not change while the dock runs.
+#[must_use]
+pub fn is_windows_11() -> bool {
+    static WINDOWS_11: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *WINDOWS_11.get_or_init(|| windows_build().is_none_or(|build| build >= 22000))
+}
+
+/// The Windows build number, e.g. 26100. Windows reports "10.0" for both
+/// Windows 10 and 11; only the build tells them apart.
+fn windows_build() -> Option<u32> {
+    let mut buffer = [0u16; 16];
+    let mut size = size_of_val(&buffer) as u32;
+    // SAFETY: `buffer` and `size` describe a valid buffer for the string.
+    unsafe {
+        RegGetValueW(
+            HKEY_LOCAL_MACHINE,
+            w!("SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion"),
+            w!("CurrentBuildNumber"),
+            RRF_RT_REG_SZ,
+            None,
+            Some(buffer.as_mut_ptr().cast()),
+            Some(&mut size),
+        )
+    }
+    .ok()
+    .ok()?;
+    let len = buffer
+        .iter()
+        .position(|&unit| unit == 0)
+        .unwrap_or(buffer.len());
+    String::from_utf16_lossy(&buffer[..len]).parse().ok()
 }
 
 /// A DWORD from the user's personalization settings.
