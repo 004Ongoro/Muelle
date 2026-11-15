@@ -93,7 +93,9 @@ fn run_dock() -> Result<()> {
 
     // Start the watchdog first so it can restore the taskbar if anything fails later.
     guard::spawn()?;
+    // Moves an older `Run` autostart to the faster logon task, off the UI thread.
+    std::thread::spawn(autostart::migrate_legacy);
     let result = app::run();
-    taskbar::give_back();
+    taskbar::give_back_on_exit();
     result
 }

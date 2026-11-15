@@ -20,8 +20,9 @@ use anyhow::Result;
 use muelle_shell::{
     appbar::{AppBar, Edge},
     launcher,
-    status::{self, AudioWatch, Network, NetworkWatch, TaskbarButtons, Volume},
+    status::{self, AudioWatch, Network, NetworkWatch, Privacy, TaskbarButtons, Volume},
     system::{self, Battery, Monitor},
+    watch::RegistryWatch,
 };
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicIsize, Ordering};
 use windows::{
@@ -46,8 +47,9 @@ use windows::{
             RegisterClassW, SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_SHOWWINDOW, SetCursor, SetTimer,
             SetWindowPos, SetWindowsHookExW, UnhookWindowsHookEx, WH_MOUSE_LL, WM_APP,
             WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MOUSEMOVE, WM_NCHITTEST,
-            WM_RBUTTONDOWN, WM_SETCURSOR, WM_SETTINGCHANGE, WM_TIMER, WM_XBUTTONDOWN, WNDCLASSW,
-            WS_EX_NOACTIVATE, WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+            WM_RBUTTONDOWN, WM_SETCURSOR, WM_SETTINGCHANGE, WM_TIMECHANGE, WM_TIMER,
+            WM_XBUTTONDOWN, WNDCLASSW, WS_EX_NOACTIVATE, WS_EX_NOREDIRECTIONBITMAP,
+            WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
         },
     },
     core::{BOOL, Interface, w},
@@ -88,6 +90,8 @@ const STATUS_CHANGED: u32 = WM_APP + 21;
 const TICK: u32 = WM_APP + 22;
 const USAGE_CHANGED: u32 = WM_APP + 23;
 const DISMISS_USAGE: u32 = WM_APP + 24;
+/// Posted when an app starts or stops using the microphone, camera or location.
+const PRIVACY_CHANGED: u32 = WM_APP + 25;
 /// `wParam` of WM_SETTINGCHANGE when the work area changes, which every
 /// AppBar reservation (the dock's, this bar's) causes.
 const SPI_SETWORKAREA: usize = 0x002F;
@@ -102,6 +106,9 @@ static PANEL_BOTTOM: AtomicI32 = AtomicI32::new(0);
 /// The hook exists only while the usage panel is open.
 static USAGE_HOOK_WINDOW: AtomicIsize = AtomicIsize::new(0);
 
+/// Width of the show-desktop strip at the right edge, in logical pixels.
+const SHOW_DESKTOP_EDGE: f32 = 5.0;
+
 /// Segoe Fluent Icons code points.
 mod glyph {
     pub const WIFI: [char; 4] = ['\u{E872}', '\u{E873}', '\u{E874}', '\u{E701}'];
@@ -115,6 +122,9 @@ mod glyph {
     pub const WIDGETS: char = '\u{F246}';
     /// The taskbar's "show hidden icons" arrow.
     pub const HIDDEN_ICONS: char = '\u{E70E}';
+    pub const MICROPHONE: char = '\u{E720}';
+    pub const CAMERA: char = '\u{E722}';
+    pub const LOCATION: char = '\u{E81D}';
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -126,6 +136,11 @@ enum Action {
     TaskView,
     Widgets,
     HiddenIcons,
+    InputLanguage,
+    ShowDesktop,
+    Microphone,
+    Camera,
+    Location,
 }
 
 /// Network, volume and taskbar buttons, read only when Windows reports a change.
@@ -134,6 +149,7 @@ struct Status {
     network: Network,
     volume: Option<Volume>,
     buttons: TaskbarButtons,
+    privacy: Privacy,
 }
 
 /// What the bar was last drawn for.
@@ -146,6 +162,8 @@ struct Look {
     glass: bool,
     app_name: String,
     clock: String,
+    /// The input language indicator, when more than one is installed.
+    input: Option<String>,
     battery: Option<Battery>,
     status: Status,
     usage: Snapshot,
@@ -180,6 +198,8 @@ pub struct MenuBar {
     outside_click_hook: Option<HHOOK>,
     /// Held for their callbacks; dropping them unsubscribes.
     _network: Option<NetworkWatch>,
+    /// Hears when apps start or stop using the microphone, camera or location.
+    privacy_watch: Option<RegistryWatch>,
     audio: Option<AudioWatch>,
 }
 
@@ -196,6 +216,7 @@ unsafe extern "system" fn bar_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -
         }
         WM_MOUSELEAVE => app::menu_bar_hover(false),
         DISMISS_USAGE => app::menu_bar_dismiss_usage(),
+        PRIVACY_CHANGED => app::menu_bar_privacy_changed(),
         WM_SETCURSOR => {
             let mut point = POINT::default();
             // SAFETY: The point is a valid output for the current pointer location.
@@ -233,7 +254,9 @@ unsafe extern "system" fn bar_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -
         // Some of these are sent while the dock is busy reserving space, and
         // updating then was dropped. From the message loop the dock is never
         // busy, and a burst of them makes a single update.
-        WM_TIMER | WM_POWERBROADCAST | STATUS_CHANGED | USAGE_CHANGED | WM_SETTINGCHANGE => {
+        // WM_TIMECHANGE: the clock or time zone was changed.
+        WM_TIMER | WM_POWERBROADCAST | WM_TIMECHANGE | STATUS_CHANGED | USAGE_CHANGED
+        | WM_SETTINGCHANGE => {
             if !TICK_PENDING.swap(true, Ordering::Relaxed) {
                 // SAFETY: Posting to our own live window.
                 unsafe {
@@ -762,6 +785,7 @@ impl MenuBar {
                 network: Network::Offline,
                 volume: None,
                 buttons: TaskbarButtons::default(),
+                privacy: Privacy::default(),
             },
             usage: usage_enabled.then(|| UsageMonitor::new(hwnd.0 as isize, USAGE_CHANGED)),
             expanded: false,
@@ -771,6 +795,7 @@ impl MenuBar {
             refresh_button: None,
             outside_click_hook: None,
             _network: NetworkWatch::new(hwnd.0 as isize, STATUS_CHANGED),
+            privacy_watch: status::watch_privacy(hwnd.0 as isize, PRIVACY_CHANGED),
             audio: AudioWatch::new(hwnd.0 as isize, STATUS_CHANGED),
         };
         bar.update_status();
@@ -931,6 +956,14 @@ impl MenuBar {
     }
 
     /// The minute changed, or something the bar shows did: redraw what differs.
+    /// An app started or stopped using the microphone, camera or location.
+    pub fn privacy_changed(&mut self, gfx: &Gfx) -> Result<()> {
+        if let Some(watch) = &mut self.privacy_watch {
+            watch.arm();
+        }
+        self.tick(gfx)
+    }
+
     pub fn tick(&mut self, gfx: &Gfx) -> Result<()> {
         self.update_status();
         self.schedule_next_minute();
@@ -942,6 +975,7 @@ impl MenuBar {
             network: status::network(),
             volume: self.audio.as_mut().and_then(AudioWatch::volume),
             buttons: status::taskbar_buttons(),
+            privacy: status::privacy(),
         };
     }
 
@@ -1023,6 +1057,18 @@ impl MenuBar {
             Some(Action::TaskView) => launcher::open_task_view(),
             Some(Action::Widgets) => launcher::open_widgets(),
             Some(Action::HiddenIcons) => launcher::open_hidden_icons(anchor),
+            Some(Action::InputLanguage) => launcher::open_input_switcher(),
+            Some(Action::ShowDesktop) => launcher::show_desktop(),
+            // Windows' own pages list which apps use each device.
+            Some(Action::Microphone) => {
+                let _ = launcher::open("ms-settings:privacy-microphone");
+            }
+            Some(Action::Camera) => {
+                let _ = launcher::open("ms-settings:privacy-webcam");
+            }
+            Some(Action::Location) => {
+                let _ = launcher::open("ms-settings:privacy-location");
+            }
             None => {}
         }
         Ok(())
@@ -1056,6 +1102,7 @@ impl MenuBar {
             glass: system::transparency_enabled(),
             app_name: self.app_name.clone(),
             clock: system::clock_text(),
+            input: system::input_language(),
             battery: system::battery(),
             status: self.status,
             usage: self
@@ -1158,6 +1205,18 @@ impl MenuBar {
             ),
             (gfx.control_center_brush(scale, ink)?, Action::QuickSettings),
         ];
+        // Privacy indicators, as the Windows tray shows them: something is
+        // using the microphone, camera or location right now.
+        let privacy = status.privacy;
+        for (on, glyph, action) in [
+            (privacy.microphone, glyph::MICROPHONE, Action::Microphone),
+            (privacy.camera, glyph::CAMERA, Action::Camera),
+            (privacy.location, glyph::LOCATION, Action::Location),
+        ] {
+            if on {
+                items.push((symbol(&[(glyph, 1.0)])?, action));
+            }
+        }
         if status.buttons.search {
             items.push((symbol(&[(glyph::SEARCH, 1.0)])?, Action::Search));
         }
@@ -1185,6 +1244,12 @@ impl MenuBar {
                 Action::QuickSettings,
             ));
         }
+        if let Some(language) = &look.input {
+            items.push((
+                gfx.text_brush(language, scale, false, ink)?,
+                Action::InputLanguage,
+            ));
+        }
         // The notification area (antivirus, OneDrive, apps in the background)
         // lives only in the hidden taskbar; this arrow opens its flyout.
         items.push((symbol(&[(glyph::HIDDEN_ICONS, 1.0)])?, Action::HiddenIcons));
@@ -1194,6 +1259,14 @@ impl MenuBar {
         if status.buttons.widgets {
             items.push((symbol(&[(glyph::WIDGETS, 1.0)])?, Action::Widgets));
         }
+        // The last pixels of the right edge show the desktop, like the
+        // corner of the Windows taskbar: easy to hit by throwing the pointer
+        // there. First in the list, so it wins over the clock next to it.
+        self.zones.push((
+            width - px(SHOW_DESKTOP_EDGE),
+            width + 1.0,
+            Action::ShowDesktop,
+        ));
         for (item, action) in &items {
             let left = right - item.width;
             place(&layers, item, left)?;

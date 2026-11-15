@@ -306,3 +306,105 @@ pub fn taskbar_buttons() -> TaskbarButtons {
         widgets: dword(ADVANCED, "TaskbarDa").unwrap_or(1) != 0,
     }
 }
+
+/* ---------------------------------------------------------------- Privacy */
+
+/// Where Windows records which apps use the microphone, camera and
+/// location, and when: the source of its own privacy icons in the tray.
+pub const CONSENT_STORE: windows::core::PCWSTR = windows::core::w!(
+    r"Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore"
+);
+
+/// Which sensitive devices some app is using right now.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Privacy {
+    pub microphone: bool,
+    pub camera: bool,
+    pub location: bool,
+}
+
+/// Reads [`CONSENT_STORE`]. Call it when [`watch_privacy`] reports a change,
+/// not on a timer.
+#[must_use]
+pub fn privacy() -> Privacy {
+    Privacy {
+        microphone: capability_in_use("microphone"),
+        camera: capability_in_use("webcam"),
+        location: capability_in_use("location"),
+    }
+}
+
+/// Tells a window, by posting it `message`, when an app starts or stops
+/// using the microphone, camera or location.
+#[must_use]
+pub fn watch_privacy(hwnd: isize, message: u32) -> Option<crate::watch::RegistryWatch> {
+    crate::watch::RegistryWatch::new(CONSENT_STORE, true, hwnd, message)
+}
+
+/// An app is using `capability` while its key has a start time and no stop
+/// time. Store apps have a key each; desktop programs sit under `NonPackaged`.
+fn capability_in_use(capability: &str) -> bool {
+    use windows::Win32::System::Registry::{
+        HKEY, HKEY_CURRENT_USER, KEY_READ, RRF_RT_REG_QWORD, RegCloseKey, RegEnumKeyExW,
+        RegGetValueW, RegOpenKeyExW,
+    };
+    use windows::core::{HSTRING, PCWSTR, PWSTR, w};
+
+    let in_use = |parent: HKEY, path: &str| -> bool {
+        let mut key = HKEY::default();
+        // SAFETY: Read-only registry walk; every opened key is closed.
+        unsafe {
+            if RegOpenKeyExW(parent, &HSTRING::from(path), None, KEY_READ, &mut key).is_err() {
+                return false;
+            }
+            let mut found = false;
+            let mut index = 0;
+            loop {
+                let mut name = [0u16; 512];
+                let mut len = name.len() as u32;
+                if RegEnumKeyExW(
+                    key,
+                    index,
+                    Some(PWSTR(name.as_mut_ptr())),
+                    &mut len,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+                .is_err()
+                {
+                    break;
+                }
+                index += 1;
+                let read = |value: PCWSTR| {
+                    let mut time = 0u64;
+                    let mut size = size_of::<u64>() as u32;
+                    RegGetValueW(
+                        key,
+                        PCWSTR(name.as_ptr()),
+                        value,
+                        RRF_RT_REG_QWORD,
+                        None,
+                        Some((&raw mut time).cast()),
+                        Some(&mut size),
+                    )
+                    .is_ok()
+                    .then_some(time)
+                };
+                if read(w!("LastUsedTimeStart")).is_some_and(|start| start != 0)
+                    && read(w!("LastUsedTimeStop")) == Some(0)
+                {
+                    found = true;
+                    break;
+                }
+            }
+            let _ = RegCloseKey(key);
+            found
+        }
+    };
+    let base = format!(
+        r"Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\{capability}"
+    );
+    in_use(HKEY_CURRENT_USER, &base) || in_use(HKEY_CURRENT_USER, &format!(r"{base}\NonPackaged"))
+}

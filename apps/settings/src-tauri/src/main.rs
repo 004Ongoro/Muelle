@@ -18,6 +18,7 @@ fn merged_with_disk(config: Config) -> Config {
         Ok(Some(disk)) => Config {
             pinned: disk.pinned,
             recent: disk.recent,
+            taskbar_pins: disk.taskbar_pins,
             ..config
         },
         _ => config,

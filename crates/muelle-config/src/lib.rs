@@ -38,6 +38,10 @@ pub struct Config {
     pub version: u32,
     pub pinned: Vec<String>,
     pub recent: Vec<String>,
+    /// The apps pinned to the Windows taskbar when the dock last looked, to
+    /// bring pins and unpins made there (even while Muelle was closed) to the
+    /// dock. `None` until it first looks.
+    pub taskbar_pins: Option<Vec<String>>,
     #[serde(alias = "auto_hide")]
     pub auto_hide: bool,
     /// Icon side at rest, in logical pixels.
@@ -110,6 +114,7 @@ impl Default for Config {
             version: CURRENT_VERSION,
             pinned: Vec::new(),
             recent: Vec::new(),
+            taskbar_pins: None,
             auto_hide: false,
             icon_size: 48,
             magnification: true,

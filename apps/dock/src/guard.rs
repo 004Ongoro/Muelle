@@ -40,7 +40,7 @@ pub fn run(pid: u32) -> Result<()> {
         let _ = CloseHandle(process);
     }
     // If the dock exited cleanly, it already restored the taskbar; repeating this is harmless.
-    taskbar::give_back();
+    taskbar::give_back_on_exit();
     // The dock turns off window transitions while it runs (genie effect); if
     // it died without restoring them, do it here.
     for window in WindowTracker::default().list() {

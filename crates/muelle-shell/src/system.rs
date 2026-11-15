@@ -48,6 +48,34 @@ pub fn transparency_enabled() -> bool {
     !saver && personalize(w!("EnableTransparency")) != Some(0)
 }
 
+/// The input language of the window in front as two capital letters
+/// ("ES", "EN"), or `None` with a single language installed: the Windows
+/// taskbar only shows its language indicator when there is a choice.
+#[must_use]
+pub fn input_language() -> Option<String> {
+    use windows::Win32::{
+        Globalization::LCIDToLocaleName,
+        UI::{
+            Input::KeyboardAndMouse::{GetKeyboardLayout, GetKeyboardLayoutList},
+            WindowsAndMessaging::{GetForegroundWindow, GetWindowThreadProcessId},
+        },
+    };
+    // SAFETY: Read-only queries; `name` is a valid buffer for the locale name.
+    unsafe {
+        if GetKeyboardLayoutList(None) < 2 {
+            return None;
+        }
+        // Each thread has its own layout: the one that matters is in front.
+        let thread = GetWindowThreadProcessId(GetForegroundWindow(), None);
+        let language = (GetKeyboardLayout(thread).0 as usize & 0xFFFF) as u32;
+        let mut name = [0u16; 85];
+        let len = usize::try_from(LCIDToLocaleName(language, Some(&mut name), 0)).ok()?;
+        let tag = String::from_utf16_lossy(name.get(..len.checked_sub(1)?)?);
+        let code = tag.split('-').next()?.to_uppercase();
+        (!code.is_empty()).then_some(code)
+    }
+}
+
 /// `true` on Windows 11 (build 22000 or later), `false` on Windows 10.
 /// Read once: the version does not change while the dock runs.
 #[must_use]

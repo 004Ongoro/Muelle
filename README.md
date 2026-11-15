@@ -31,7 +31,8 @@ Smooth magnification, live window previews, and an optional Genie-style minimize
 - Click the app already in front to minimize it, as on the Windows taskbar.
 - Drag and drop files onto apps, Downloads, or the Recycle Bin.
 - Optional auto-hide.
-- A top menu bar with the app in front, clock, network, volume and battery, plus
+- A top menu bar with the app in front, clock, network, volume and battery, the
+  input language, microphone/camera/location in use, the hidden tray icons, plus
   the Search, Task View and Widgets buttons if you have them on the Windows taskbar.
 - A curved island in the menu bar for usage limits from Claude Code, Codex,
   GitHub Copilot, Cursor, OpenCode Go, Gemini CLI, and Antigravity. Gemini Pro
@@ -54,13 +55,16 @@ restored when Muelle exits.
 1. Run `Muelle-Setup.exe`. It installs for your user only: no administrator
    rights, no wizard, about two seconds.
 2. Muelle is new, so Windows SmartScreen may not recognize it yet and say it
-   protected your PC. Choose **More info → Run anyway**. See the
-   [code signing policy](#code-signing-policy).
+   protected your PC. Choose **More info → Run anyway**.
 3. Open **Muelle** from the Start menu, then choose **Dock** to
    personalize the dock and top menu bar.
 
 You can also open Settings by right-clicking the dock and choosing *Muelle
 Settings…*. It checks for updates and installs them for you.
+
+**Start with Windows:** Muelle starts from a task that runs when you sign in,
+named *Muelle (your user name)* in Task Scheduler. Turn it off in Settings →
+System.
 
 **Get the taskbar back:** right-click the dock and choose *Quit Muelle*. To
 remove it completely, go to Windows Settings → Apps → Installed apps → Muelle →

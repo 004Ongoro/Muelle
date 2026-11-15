@@ -43,6 +43,12 @@
 
 !macro NSIS_HOOK_PREUNINSTALL
   !insertmacro MUELLE_STOP_DOCK
+  ; Removes the logon task (and an older Run entry), which would otherwise
+  ; keep pointing at the deleted muelle.exe. Updates keep it.
+  ${If} $UpdateMode <> 1
+  ${AndIf} ${FileExists} "$INSTDIR\muelle.exe"
+    ExecWait '"$INSTDIR\muelle.exe" --autostart off'
+  ${EndIf}
 !macroend
 
 !macro NSIS_HOOK_POSTUNINSTALL
@@ -50,6 +56,8 @@
     SetShellVarContext current
     ; The icon cache is always disposable.
     RmDir /r "$LOCALAPPDATA\Muelle"
+    ; Where Muelle remembers that it starts with Windows.
+    DeleteRegKey HKCU "Software\Muelle"
     ${If} $DeleteAppDataCheckboxState = 1
       RmDir /r "$APPDATA\Muelle"
     ${EndIf}

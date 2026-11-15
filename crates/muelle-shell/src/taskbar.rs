@@ -56,6 +56,22 @@ pub fn take_over() {
     }
 }
 
+/// What the dock and its watchdog do when the dock stops: give the taskbar
+/// back, except while Windows shuts down, restarts or signs out with Muelle
+/// set to start again. Then the taskbar stays auto-hidden for the next
+/// sign-in; given back, Windows showed it in full at every start until the
+/// dock took it over again. Turning autostart off, quitting or uninstalling
+/// still gives it back.
+pub fn give_back_on_exit() {
+    use windows::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_SHUTTINGDOWN};
+    // SAFETY: Read-only system query.
+    let session_ending = unsafe { GetSystemMetrics(SM_SHUTTINGDOWN) } != 0;
+    if session_ending && crate::autostart::is_enabled() {
+        return;
+    }
+    give_back();
+}
+
 /// Restores the taskbar to its state before `take_over`. Has no effect if the
 /// dock did not take it over.
 pub fn give_back() {

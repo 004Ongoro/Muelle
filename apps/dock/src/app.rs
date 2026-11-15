@@ -36,7 +36,7 @@ use muelle_shell::{
     icon_cache::IconCache,
     launcher,
     names::display_name,
-    pins::{link_target, taskbar_pins},
+    pins::{app_exists, link_target, taskbar_pins, taskbar_pins_if_readable, unpin_from_taskbar},
     power,
     recycle_bin::{self, BinWatch},
     system::{
@@ -64,18 +64,19 @@ use windows::{
         UI::{
             Accessibility::{HWINEVENTHOOK, SetWinEventHook, UnhookWinEvent},
             Input::KeyboardAndMouse::{
-                ReleaseCapture, SetCapture, TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent,
+                GetKeyState, ReleaseCapture, SetCapture, TME_LEAVE, TRACKMOUSEEVENT,
+                TrackMouseEvent, VK_CONTROL, VK_SHIFT,
             },
             WindowsAndMessaging::{
-                CreateWindowExW, DefWindowProcW, DispatchMessageW, EVENT_SYSTEM_MINIMIZEEND,
-                EVENT_SYSTEM_MINIMIZESTART, FindWindowW, GetCursorPos, GetMessageW,
-                GetSystemMetrics, HWND_TOPMOST, IDC_ARROW, KillTimer, LoadCursorW, MSG,
-                OBJID_WINDOW, PM_REMOVE, PeekMessageW, PostMessageW, PostQuitMessage,
-                RegisterClassW, RegisterShellHookWindow, RegisterWindowMessageW, SM_CXDRAG,
-                SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_SHOWWINDOW, SetTimer, SetWindowPos,
+                CreateWindowExW, DefWindowProcW, DispatchMessageW, EVENT_OBJECT_CLOAKED,
+                EVENT_OBJECT_UNCLOAKED, EVENT_SYSTEM_MINIMIZEEND, EVENT_SYSTEM_MINIMIZESTART,
+                FindWindowW, GetCursorPos, GetMessageW, GetSystemMetrics, HWND_TOPMOST, IDC_ARROW,
+                KillTimer, LoadCursorW, MSG, OBJID_WINDOW, PM_REMOVE, PeekMessageW, PostMessageW,
+                PostQuitMessage, RegisterClassW, RegisterShellHookWindow, RegisterWindowMessageW,
+                SM_CXDRAG, SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_SHOWWINDOW, SetTimer, SetWindowPos,
                 WINDOW_EX_STYLE, WINEVENT_OUTOFCONTEXT, WINEVENT_SKIPOWNPROCESS, WM_APP,
                 WM_CAPTURECHANGED, WM_CLOSE, WM_DESTROY, WM_DISPLAYCHANGE, WM_DPICHANGED,
-                WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_QUIT, WM_RBUTTONUP,
+                WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONUP, WM_MOUSEMOVE, WM_QUIT, WM_RBUTTONUP,
                 WM_SETTINGCHANGE, WM_TIMER, WNDCLASSW, WS_EX_LAYERED, WS_EX_NOACTIVATE,
                 WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT,
                 WS_POPUP,
@@ -103,6 +104,8 @@ const HSHELL_RUDEAPPACTIVATED: usize = 0x8004;
 const HSHELL_FLASH: usize = 0x8006;
 /// A window's title or icon changed.
 const HSHELL_REDRAW: usize = 6;
+/// The keyboard language changed.
+const HSHELL_LANGUAGE: usize = 8;
 /// `wParam` of WM_SETTINGCHANGE when the work area changes. The dock's own
 /// reservation causes this, so handling it would create a loop.
 const SPI_SETWORKAREA: usize = 0x002F;
@@ -124,6 +127,8 @@ const DRAG_CANCELLED: u32 = WM_APP + 5;
 /// Runs a file drop after OLE's `Drop` returns, so the drag source is not
 /// blocked while files are copied or an app starts.
 const DROP_RUN: u32 = WM_APP + 6;
+/// Posted when apps are pinned to or unpinned from the Windows taskbar.
+const PINS_CHANGED: u32 = WM_APP + 7;
 
 const ICON_SOURCE_SIZE: u32 = 256;
 /// Magnification range, in icons on either side of the cursor.
@@ -165,6 +170,9 @@ const BIN_TIMER: usize = 5;
 const BIN_DELAY_MS: u32 = 300;
 const HIDE_TIMER: usize = 6;
 const HIDE_DELAY_MS: u32 = 300;
+/// Explorer writes a pin change in a few steps; read it once they settle.
+const PINS_TIMER: usize = 7;
+const PINS_DELAY_MS: u32 = 400;
 
 /// Auto-hide slide speed (about 250 ms).
 const SLIDE_OMEGA: f32 = 24.0;
@@ -189,6 +197,9 @@ const CMD_QUIT_APP: u32 = 4;
 const CMD_EMPTY_BIN: u32 = 5;
 const CMD_QUIT_DOCK: u32 = 6;
 const CMD_TOGGLE_HIDING: u32 = 7;
+const CMD_IMPORT_PINS: u32 = 10;
+const CMD_RUN_AS_ADMIN: u32 = 11;
+const CMD_SHOW_DESKTOP: u32 = 12;
 const CMD_WINDOW: u32 = 100;
 const MENU_WINDOWS: usize = 12;
 const MENU_TITLE_CHARS: usize = 60;
@@ -202,6 +213,7 @@ static CONFIG_CHANGED: OnceLock<u32> = OnceLock::new();
 static MAIN_WINDOW: AtomicIsize = AtomicIsize::new(0);
 static DROP_WINDOW: AtomicIsize = AtomicIsize::new(0);
 static MINIMIZE_HOOK: AtomicIsize = AtomicIsize::new(0);
+static CLOAK_HOOK: AtomicIsize = AtomicIsize::new(0);
 
 #[derive(Clone, PartialEq)]
 struct Entry {
@@ -249,6 +261,10 @@ enum Outside {
     Menu(MenuRequest),
     QuitDock,
     OpenSettings,
+    OpenAsAdmin(String),
+    /// Unpin from the Windows taskbar too (see `pins::unpin_from_taskbar`).
+    UnpinFromTaskbar(String),
+    ShowDesktop,
 }
 
 struct MenuRequest {
@@ -366,6 +382,8 @@ struct App {
     downloads: Option<String>,
     bin_full: bool,
     _bin_watch: Option<BinWatch>,
+    /// Hears pins and unpins on the Windows taskbar.
+    pin_watch: Option<muelle_shell::watch::RegistryWatch>,
     assets: HashMap<String, Asset>,
     /// Scale, theme and icon pixel size the cached assets were drawn for.
     assets_for: (f32, bool, u32),
@@ -421,8 +439,10 @@ fn load_config() -> Config {
     match muelle_config::load(&path) {
         Ok(Some(config)) => config,
         Ok(None) => {
+            let pins = taskbar_pins();
             let config = Config {
-                pinned: taskbar_pins(),
+                pinned: pins.clone(),
+                taskbar_pins: Some(pins),
                 ..Config::default()
             };
             if let Err(error) = muelle_config::save(&path, &config) {
@@ -1458,6 +1478,26 @@ impl App {
         };
         let windows = self.windows_of(&id);
 
+        // As on the Windows taskbar: Shift+click opens another window of the
+        // app, Ctrl+Shift+click opens it as administrator.
+        if role == Role::App {
+            // SAFETY: Read-only keyboard state queries.
+            let (shift, ctrl) = unsafe {
+                (
+                    GetKeyState(i32::from(VK_SHIFT.0)) < 0,
+                    GetKeyState(i32::from(VK_CONTROL.0)) < 0,
+                )
+            };
+            if shift {
+                self.start_bounce(id.clone(), None);
+                return Ok(Some(if ctrl {
+                    Outside::OpenAsAdmin(id)
+                } else {
+                    Outside::Open(id)
+                }));
+            }
+        }
+
         Ok(match role {
             Role::App if windows.is_empty() => {
                 self.start_bounce(id.clone(), None);
@@ -1471,6 +1511,19 @@ impl App {
             Role::Window => window_of(&id).and_then(|hwnd| self.activating(vec![hwnd])),
             Role::Folder | Role::Trash => Some(Outside::Open(id)),
         })
+    }
+
+    /// Middle click on an app opens another window of it, as on the Windows
+    /// taskbar.
+    fn on_middle_click(&mut self) -> Result<Option<Outside>> {
+        let Some(entry) = self.hovered.and_then(|index| self.entries.get(index)) else {
+            return Ok(None);
+        };
+        let (Some(id), Role::App) = (entry.id.clone(), entry.role) else {
+            return Ok(None);
+        };
+        self.start_bounce(id.clone(), None);
+        Ok(Some(Outside::Open(id)))
     }
 
     /// Right-click prepares the menu for the item under the cursor, or the dock
@@ -1513,6 +1566,8 @@ impl App {
                 };
                 let items = vec![
                     MenuItem::action(CMD_TOGGLE_HIDING, hiding),
+                    MenuItem::action(CMD_SHOW_DESKTOP, text().show_desktop),
+                    MenuItem::action(CMD_IMPORT_PINS, text().import_pins),
                     MenuItem::action(CMD_SETTINGS, text().settings),
                     MenuItem::Separator,
                     MenuItem::action(CMD_QUIT_DOCK, text().quit_dock),
@@ -1566,6 +1621,7 @@ impl App {
                     });
                 }
                 if is_file {
+                    items.push(MenuItem::action(CMD_RUN_AS_ADMIN, t.run_as_admin));
                     items.push(MenuItem::action(CMD_REVEAL, t.show_in_explorer));
                 }
                 if !windows.is_empty() {
@@ -1602,6 +1658,8 @@ impl App {
             return match command {
                 CMD_QUIT_DOCK => Ok(Some(Outside::QuitDock)),
                 CMD_TOGGLE_HIDING => self.toggle_hiding().map(|()| None),
+                CMD_IMPORT_PINS => self.import_taskbar_pins().map(|()| None),
+                CMD_SHOW_DESKTOP => Ok(Some(Outside::ShowDesktop)),
                 CMD_SETTINGS => Ok(Some(Outside::OpenSettings)),
                 _ => Ok(None),
             };
@@ -1622,15 +1680,24 @@ impl App {
                 Some(Outside::Open(id))
             }
             CMD_TOGGLE_PIN => {
-                if self.roster.is_pinned(&id) {
+                // Unpinning here also unpins on the Windows taskbar, as there is
+                // only one taskbar for the user. Pinning cannot go the other way.
+                let on_taskbar = self
+                    .config
+                    .taskbar_pins
+                    .as_ref()
+                    .is_some_and(|pins| pins.contains(&id));
+                let unpinning = self.roster.is_pinned(&id);
+                if unpinning {
                     self.roster.unpin(&id);
                 } else {
                     self.roster.pin(&id);
                 }
                 save_settings(&self.roster, &self.config);
                 self.refresh()?;
-                None
+                (unpinning && on_taskbar).then_some(Outside::UnpinFromTaskbar(id))
             }
+            CMD_RUN_AS_ADMIN => Some(Outside::OpenAsAdmin(id)),
             CMD_REVEAL => Some(Outside::Reveal(id)),
             CMD_QUIT_APP => {
                 launcher::close(&windows);
@@ -1656,6 +1723,7 @@ impl App {
         let config = Config {
             pinned: self.config.pinned.clone(),
             recent: self.config.recent.clone(),
+            taskbar_pins: self.config.taskbar_pins.clone(),
             ..saved
         };
         if config == self.config {
@@ -1679,6 +1747,70 @@ impl App {
         self.apply_menu_bar_setting();
         self.update_menu_bar_app()?;
         self.calm_windows();
+        self.refresh()
+    }
+
+    /// Adds the apps pinned to the Windows taskbar that the dock does not
+    /// have yet, in the taskbar's order, after the dock's own pins. Nothing is
+    /// removed or reordered: the dock imports them by itself only the first
+    /// time it runs, and pins the user removed since then stay removed until
+    /// they ask for this.
+    /// Brings pins and unpins made on the Windows taskbar to the dock, as if
+    /// it were the taskbar: what was pinned there is pinned here, what was
+    /// unpinned there is unpinned here. Apps pinned only in the dock stay.
+    /// Windows offers no way to do the reverse (pin to the taskbar).
+    fn sync_taskbar_pins(&mut self) -> Result<()> {
+        let pruned = self.prune_missing_pins();
+        let Some(current) = taskbar_pins_if_readable() else {
+            if pruned {
+                save_settings(&self.roster, &self.config);
+                return self.refresh();
+            }
+            return Ok(());
+        };
+        let Some(previous) = self.config.taskbar_pins.replace(current.clone()) else {
+            // First look since this feature: remember, change nothing.
+            save_settings(&self.roster, &self.config);
+            return Ok(());
+        };
+        if previous == current {
+            if pruned {
+                save_settings(&self.roster, &self.config);
+                return self.refresh();
+            }
+            return Ok(());
+        }
+        for id in current.iter().filter(|id| !previous.contains(id)) {
+            self.roster.pin(id);
+        }
+        for id in previous.iter().filter(|id| !current.contains(id)) {
+            self.roster.unpin(id);
+        }
+        save_settings(&self.roster, &self.config);
+        self.refresh()
+    }
+
+    /// Unpins apps that were uninstalled, so no broken icon stays behind, as
+    /// the Windows taskbar drops them. Returns whether anything changed.
+    fn prune_missing_pins(&mut self) -> bool {
+        let missing: Vec<String> = self
+            .roster
+            .pinned()
+            .iter()
+            .filter(|id| !app_exists(id))
+            .cloned()
+            .collect();
+        for id in &missing {
+            self.roster.unpin(id);
+        }
+        !missing.is_empty()
+    }
+
+    fn import_taskbar_pins(&mut self) -> Result<()> {
+        for id in taskbar_pins() {
+            self.roster.pin(&id);
+        }
+        save_settings(&self.roster, &self.config);
         self.refresh()
     }
 
@@ -1972,6 +2104,14 @@ unsafe extern "system" fn on_win_event(
         // hook reports it, and a window the dock still thought minimized kept
         // its thumbnail and skipped the genie on its next minimize.
         with_app("restaurar", App::sync);
+    } else if event == EVENT_OBJECT_CLOAKED || event == EVENT_OBJECT_UNCLOAKED {
+        // Shows the windows of the virtual desktop in front, as the Windows
+        // taskbar does. A desktop switch cloaks many windows at once; the
+        // timer turns the burst into one re-read.
+        // SAFETY: A timer on our own window.
+        unsafe {
+            SetTimer(Some(main_window()), SYNC_TIMER, SYNC_DELAY_MS, None);
+        }
     }
 }
 
@@ -2011,6 +2151,22 @@ pub fn menu_bar_pointer_moved(x: f32) {
 pub fn menu_bar_dismiss_usage() {
     with_app("barra superior", |app| match &mut app.menubar {
         Some(bar) => bar.dismiss_usage(&app.gfx),
+        None => Ok(()),
+    });
+}
+
+/// Redraws the menu bar from what it reads on each draw (input language,
+/// clock), without asking the network or audio again.
+pub fn menu_bar_refresh() {
+    with_app("barra superior", |app| match &mut app.menubar {
+        Some(bar) => bar.refresh(&app.gfx),
+        None => Ok(()),
+    });
+}
+
+pub fn menu_bar_privacy_changed() {
+    with_app("barra superior", |app| match &mut app.menubar {
+        Some(bar) => bar.privacy_changed(&app.gfx),
         None => Ok(()),
     });
 }
@@ -2090,6 +2246,16 @@ fn run_outside(outside: Outside) {
             recycle_bin::empty(owner);
         }
         Outside::QuitDock => request_quit(),
+        Outside::OpenAsAdmin(id) => report(launcher::open_as_admin(&id)),
+        Outside::ShowDesktop => launcher::show_desktop(),
+        Outside::UnpinFromTaskbar(id) => {
+            // The shell command may load extensions: keep it off the UI thread.
+            thread::spawn(move || {
+                // SAFETY: COM for this short-lived thread only.
+                let _ = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
+                let _ = unpin_from_taskbar(&id);
+            });
+        }
         Outside::OpenSettings => {
             // The settings app is installed next to the dock.
             let settings = env::current_exe()
@@ -2118,6 +2284,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) ->
         WM_MOUSELEAVE => with_app("salida del ratón", App::on_mouse_leave),
         WM_LBUTTONDOWN => with_app("pulsación", App::on_press),
         WM_LBUTTONUP => with_app_then("clic", App::on_release),
+        WM_MBUTTONUP => with_app_then("clic central", App::on_middle_click),
         WM_CAPTURECHANGED => {
             // SAFETY: Posting a message to our own window.
             unsafe {
@@ -2147,6 +2314,23 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) ->
                 let _ = KillTimer(Some(hwnd), w.0);
             }
             query_bin_in_background();
+        }
+        PINS_CHANGED => {
+            with_app("apps fijadas", |app| {
+                if let Some(watch) = &mut app.pin_watch {
+                    watch.arm();
+                }
+                Ok(())
+            });
+            // SAFETY: `hwnd` is our window; scheduling the same timer resets it.
+            unsafe { SetTimer(Some(hwnd), PINS_TIMER, PINS_DELAY_MS, None) };
+        }
+        WM_TIMER if w.0 == PINS_TIMER => {
+            // SAFETY: `hwnd` is this live window on its owning UI thread.
+            unsafe {
+                let _ = KillTimer(Some(hwnd), w.0);
+            }
+            with_app("apps fijadas", App::sync_taskbar_pins);
         }
         WM_TIMER if w.0 == HIDE_TIMER => {
             // SAFETY: Same as above.
@@ -2203,6 +2387,8 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) ->
             // The dock shows no titles, so only a window it does not list yet
             // (an app that declares its identity late) needs a new look.
             HSHELL_REDRAW if is_tracked(l.0) => {}
+            // The input language indicator of the menu bar.
+            HSHELL_LANGUAGE => menu_bar_refresh(),
             code => {
                 if code == HSHELL_FLASH {
                     with_app("aviso de atención", |app| {
@@ -2347,6 +2533,7 @@ pub fn run() -> Result<()> {
             downloads: downloads_folder(),
             bin_full: false,
             _bin_watch: BinWatch::register(input, BIN_CHANGED),
+            pin_watch: muelle_shell::pins::watch(visual.0 as isize, PINS_CHANGED),
             assets: HashMap::new(),
             assets_for: (0.0, false, 0),
             remove_label: None,
@@ -2382,6 +2569,14 @@ pub fn run() -> Result<()> {
         let _ = SetConsoleCtrlHandler(None, false);
         let _ = SetConsoleCtrlHandler(Some(on_console_ctrl), true);
 
+        // Apps uninstalled while Muelle was closed leave the dock.
+        if app.prune_missing_pins() {
+            save_settings(&app.roster, &app.config);
+        }
+        // Pins and unpins made on the Windows taskbar while Muelle was closed.
+        if let Err(error) = app.sync_taskbar_pins() {
+            eprintln!("muelle: apps fijadas de la barra de Windows: {error:#}");
+        }
         app.sync()?;
         // `sync` recomposes only when the list changes; run it unconditionally at startup.
         if app.stage.is_none() {
@@ -2410,6 +2605,18 @@ pub fn run() -> Result<()> {
             WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS,
         );
         MINIMIZE_HOOK.store(minimize_hook.0 as isize, Ordering::Relaxed);
+        // Switching virtual desktops hides (cloaks) the windows of the one
+        // left and shows those of the one entered, and no shell hook says so.
+        let cloak_hook = SetWinEventHook(
+            EVENT_OBJECT_CLOAKED,
+            EVENT_OBJECT_UNCLOAKED,
+            None,
+            Some(on_win_event),
+            0,
+            0,
+            WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS,
+        );
+        CLOAK_HOOK.store(cloak_hook.0 as isize, Ordering::Relaxed);
         let target: IDropTarget = DropTarget.into();
         RegisterDragDrop(input, &target)?;
         DROP_WINDOW.store(input.0 as isize, Ordering::Relaxed);
@@ -2438,9 +2645,9 @@ pub fn run() -> Result<()> {
     // SAFETY: The drop target was registered on this window in this thread.
     unsafe {
         let _ = RevokeDragDrop(HWND(DROP_WINDOW.load(Ordering::Relaxed) as *mut _));
-        let _ = UnhookWinEvent(HWINEVENTHOOK(
-            MINIMIZE_HOOK.load(Ordering::Relaxed) as *mut _
-        ));
+        for hook in [&MINIMIZE_HOOK, &CLOAK_HOOK] {
+            let _ = UnhookWinEvent(HWINEVENTHOOK(hook.load(Ordering::Relaxed) as *mut _));
+        }
     }
     APP.with_borrow_mut(|app| {
         if let Some(app) = app {

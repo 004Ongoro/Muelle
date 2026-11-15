@@ -25,8 +25,10 @@ en desarrollo activo.
 - Clic en la app que ya está delante para minimizarla, como en la barra de Windows.
 - Arrastrar y soltar archivos sobre apps, Descargas o la Papelera.
 - Ocultación automática opcional.
-- Barra superior con la app en primer plano, hora, red, volumen y batería, además de
-  los botones de búsqueda, Vista de tareas y Widgets si los tienes en la barra de Windows.
+- Barra superior con la app en primer plano, hora, red, volumen y batería, el idioma
+  del teclado, el micrófono/cámara/ubicación en uso y los iconos ocultos de la bandeja,
+  además de los botones de búsqueda, Vista de tareas y Widgets si los tienes en la barra
+  de Windows.
 - Una isla curva en la barra superior con los límites de Claude Code, Codex,
   GitHub Copilot, Cursor, OpenCode Go, Gemini CLI y Antigravity. Las cuotas de
   Gemini Pro y Flash aparecen por separado cuando están disponibles.
@@ -54,6 +56,10 @@ dibujar su animación; las devuelve al cerrarse.
 
 Abre **Muelle** desde el menú Inicio (o clic derecho en el dock → *Ajustes de
 Muelle…*) para cambiar el dock. Ajustes también busca actualizaciones y las instala.
+
+**Inicio con Windows:** Muelle se inicia con una tarea que se ejecuta al iniciar
+sesión, llamada *Muelle (tu usuario)* en el Programador de tareas. Se desactiva en
+Ajustes → Sistema.
 
 **Recuperar la barra de tareas:** clic derecho en el dock → *Salir de Muelle*.
 Para quitarlo del todo: Configuración de Windows → Aplicaciones → Aplicaciones

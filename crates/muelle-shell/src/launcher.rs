@@ -9,8 +9,8 @@ use windows::{
         UI::{
             Input::KeyboardAndMouse::{
                 INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBD_EVENT_FLAGS, KEYBDINPUT,
-                KEYEVENTF_KEYUP, SendInput, VIRTUAL_KEY, VK_A, VK_B, VK_LCONTROL, VK_LWIN, VK_N,
-                VK_RETURN, VK_S, VK_TAB, VK_V, VK_W,
+                KEYEVENTF_KEYUP, SendInput, VIRTUAL_KEY, VK_A, VK_B, VK_D, VK_LCONTROL, VK_LWIN,
+                VK_N, VK_RETURN, VK_S, VK_SPACE, VK_TAB, VK_V, VK_W,
             },
             Shell::ShellExecuteW,
             WindowsAndMessaging::{
@@ -43,18 +43,20 @@ fn allow_foreground() {
 }
 
 pub fn open(id: &str) -> Result<(), LaunchError> {
+    shell_execute(w!("open"), id)
+}
+
+/// Opens `id` as administrator, with the UAC prompt, as the taskbar's
+/// "Run as administrator" and Ctrl+Shift+click do.
+pub fn open_as_admin(id: &str) -> Result<(), LaunchError> {
+    shell_execute(w!("runas"), id)
+}
+
+fn shell_execute(verb: PCWSTR, id: &str) -> Result<(), LaunchError> {
     allow_foreground();
     // SAFETY: The strings live for the duration of the call.
-    let result = unsafe {
-        ShellExecuteW(
-            None,
-            w!("open"),
-            &HSTRING::from(id),
-            None,
-            None,
-            SW_SHOWNORMAL,
-        )
-    };
+    let result =
+        unsafe { ShellExecuteW(None, verb, &HSTRING::from(id), None, None, SW_SHOWNORMAL) };
     // ShellExecute returns a value greater than 32 on success.
     let code = result.0 as isize;
     if code > 32 {
@@ -219,6 +221,18 @@ pub fn open_sound() {
     } else {
         let _ = open("ms-settings:sound");
     }
+}
+
+/// Shows the desktop, or brings the windows back: what the taskbar's corner
+/// button does (Win+D).
+pub fn show_desktop() {
+    tap(&[VK_LWIN, VK_D]);
+}
+
+/// The input language switcher, as clicking the taskbar's language
+/// indicator (Win+Space).
+pub fn open_input_switcher() {
+    tap(&[VK_LWIN, VK_SPACE]);
 }
 
 /// How long the taskbar takes to put the focus on its notification area.

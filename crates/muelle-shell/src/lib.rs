@@ -14,3 +14,4 @@ pub mod status;
 pub mod system;
 pub mod taskbar;
 pub mod tracker;
+pub mod watch;
