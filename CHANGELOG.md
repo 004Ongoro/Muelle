@@ -23,12 +23,23 @@ copia la sección de la versión que se publica a la release de GitHub.
 - Fixed: the menu bar could miss an update and showed no app name until the
   first window switch.
 - Menu bar: the battery shows a charging bolt.
+- Settings has a clearer layout: Dock, Windows, Menu bar and System sections
+  with proper icons, titled groups, and a window you can resize from any edge
+  or maximize.
+- Minimized windows now go into their app's icon by default: the genie flies
+  into the icon and back out of it, behind the dock. The thumbnails on the
+  right side of the dock are now an option: Settings → Windows → "Show
+  minimized windows".
+- Removed the "Clicking the active app" option: clicking the app in front
+  always minimizes it, as on the Windows taskbar.
 - The Muelle icon is sharp in the dock (its lotus outline was too thin at dock
   sizes and looked blurred), and the Start button shows the Windows logo.
 - Settings: options that depend on another fold away under it.
-- Settings → System: "Check for updates automatically" can be turned off; it
-  is the only network request Muelle makes. New privacy policy and code signing
-  policy pages on the website.
+- Settings → System: "Check for updates automatically" can be turned off. New
+  privacy policy and code signing policy pages on the website.
+- Menu bar: a curved island for Claude, Codex, GitHub Copilot, Cursor,
+  OpenCode Go, and Gemini or Antigravity usage, shown while each client is
+  running. It can be turned off in Settings → Menu bar.
 
 ### Español
 
@@ -43,13 +54,25 @@ copia la sección de la versión que se publica a la release de GitHub.
 - Corregido: la barra superior podía perder una actualización y no mostraba el
   nombre de la app hasta el primer cambio de ventana.
 - Barra superior: la batería muestra un rayo mientras carga.
+- Ajustes más claro: secciones Dock, Ventanas, Barra superior y Sistema con
+  iconos propios, grupos con título y una ventana que se puede redimensionar
+  desde cualquier borde o maximizar.
+- Las ventanas minimizadas ahora se guardan por defecto en el icono de su app:
+  el genio vuela hacia el icono y sale de él, por detrás del dock. Las
+  miniaturas a la derecha del dock pasan a ser una opción: Ajustes → Ventanas →
+  «Mostrar ventanas minimizadas».
+- Se quita la opción «Al hacer clic en la app activa»: clic en la app que está
+  delante siempre la minimiza, como en la barra de Windows.
 - El icono de Muelle se ve nítido en el dock (el contorno de la flor era
   demasiado fino a ese tamaño y parecía borroso), y el botón Inicio muestra el
   logo de Windows.
 - Ajustes: las opciones que dependen de otra se pliegan bajo ella.
 - Ajustes → Sistema: «Buscar actualizaciones automáticamente» se puede
-  desactivar; es la única conexión de red de Muelle. Nuevas páginas de política
-  de privacidad y de firma de código en la web.
+  desactivar. Nuevas páginas de política de privacidad y de firma de código en
+  la web.
+- Barra superior: una isla curva con el uso de Claude, Codex, GitHub Copilot,
+  Cursor, OpenCode Go y Gemini o Antigravity. Aparece mientras el cliente está
+  abierto y se desactiva en Ajustes → Barra superior.
 
 ## [0.1.4]
 

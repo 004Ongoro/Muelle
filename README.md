@@ -23,17 +23,22 @@ Smooth magnification, live window previews, and an optional Genie-style minimize
 
 - Glass-style dock with smooth, cursor-based icon magnification.
 - Launch, pin, reorder, and manage apps, including recent apps and open windows.
-- Live minimized-window previews.
+- Minimized windows fold into their app's icon with the Genie effect; turn on
+  Settings → Windows → *Show minimized windows* to keep them as live thumbnails
+  on the right side of the dock instead.
 - Click the app already in front to minimize it, as on the Windows taskbar.
 - Drag and drop files onto apps, Downloads, or the Recycle Bin.
 - Optional auto-hide.
 - A top menu bar with the app in front, clock, network, volume and battery, plus
   the Search, Task View and Widgets buttons if you have them on the Windows taskbar.
+- A curved island in the menu bar for Claude, Codex, GitHub Copilot, Cursor,
+  OpenCode Go, and Gemini or Antigravity usage. It appears when a supported
+  client is running; click it to see available limits and reset times.
 - Separate Settings app with live changes, Spanish and English, and a
   configurable Genie-style minimize animation.
 - A watchdog restores the Windows taskbar if the dock exits unexpectedly.
 
-The Genie effect is **on by default** and can be turned off in Settings → Dock.
+The Genie effect is **on by default** and can be turned off in Settings → Windows.
 While enabled, Muelle temporarily disables Windows window transitions for
 tracked windows so its minimize animation can run; those transitions are
 restored when Muelle exits.
@@ -169,7 +174,15 @@ and each signing request is approved by hand. Full policy and team roles:
 
 ## Privacy
 
-Muelle collects no data and has no telemetry. The only network request is the
-update check that Settings makes to GitHub Releases when it opens; turn it off in
-Settings → System → *Check for updates automatically*. The dock never connects to
-the network. Details: [muellee.vercel.app/privacy](https://muellee.vercel.app/privacy).
+Muelle collects no data, has no telemetry and never sends anything to the
+project. It makes two kinds of network requests, both optional:
+
+- **Update check:** Settings asks GitHub Releases for a newer version when it
+  opens. Turn it off in Settings → System → *Check for updates automatically*.
+- **AI provider usage:** while a supported client is running, Muelle reads its
+  existing local sign-in and asks that provider for available plan limits
+  every five minutes while visible, or when you press Refresh. Antigravity usage comes from its local service.
+  Credentials stay in memory and are never stored by Muelle. Turn it off in
+  Settings → Menu bar → *Show AI provider usage*.
+
+Details: [muellee.vercel.app/privacy](https://muellee.vercel.app/privacy).

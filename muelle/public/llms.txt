@@ -1,22 +1,24 @@
 # Muelle
 
-> Muelle is a free, MIT-licensed dock for Windows 11 written in Rust. It hides the Windows taskbar and replaces it with a macOS-style dock: icons that grow under the cursor, minimized windows as live thumbnails, drag and drop onto apps, and an optional top menu bar. A small guardian process gives the taskbar back if the dock quits or crashes.
+> Muelle is a free, MIT-licensed dock for Windows 11 written in Rust. It hides the Windows taskbar and replaces it with a macOS-style dock: icons that grow under the cursor, minimized windows that fold into their app's icon with the Genie effect (or, optionally, wait as live thumbnails), drag and drop onto apps, and an optional top menu bar that can show Claude and Codex plan usage. A small guardian process gives the taskbar back if the dock quits or crashes.
 
-Muelle is not an Electron or Tauri app: the dock is a native Win32 process that draws through the Windows composition engine. One idle snapshot in Windows Task Manager showed 3.1 MB for the grouped Muelle processes; this point-in-time reading can vary by system and session. It excludes the separate Settings window and its WebView2 runtime.
+Muelle is not an Electron app: the dock is a native Win32 process that draws through the Windows composition engine. Measured on the author's PC: about 17 MB of private memory and no CPU while idle. The separate Settings window (Tauri 2 + WebView2) only runs while it is open.
 
 ## Pages
 
-- [Home](https://muellee.vercel.app/): what Muelle is, how the dock behaves, features and screenshots.
-- [How it works](https://muellee.vercel.app/#how): the dock's behaviour step by step.
-- [Features](https://muellee.vercel.app/#features): glass material, magnification, live thumbnails, menu bar, safety.
-- [Install](https://muellee.vercel.app/#install): one-step installer, building from source, and how to get the taskbar back.
+- [Home](https://muellee.vercel.app/): what Muelle is and how it looks.
+- [The Dock](https://muellee.vercel.app/#dock): the parts of the dock and what each one does.
+- [AI usage](https://muellee.vercel.app/#ai-usage): the menu bar island with Claude and Codex plan usage.
+- [Settings](https://muellee.vercel.app/#customize): an interactive replica of the Settings app.
+- [Reversible](https://muellee.vercel.app/#safety): how the Windows taskbar comes back.
+- [Download](https://muellee.vercel.app/#download): installer and build from source.
+- [Privacy policy](https://muellee.vercel.app/privacy): what Muelle sends over the network and what stays on the PC.
+- [Code signing policy](https://muellee.vercel.app/code-signing-policy): how releases are built and signed.
 
 ## Download
 
 - [Muelle-Setup.exe](https://github.com/crafter-station/Muelle/releases/latest/download/Muelle-Setup.exe): Windows 11, 64-bit, per user, no administrator rights.
 - [All releases](https://github.com/crafter-station/Muelle/releases): version history and notes.
-
-The installer is not code-signed yet, so Windows SmartScreen may ask for confirmation (More info → Run anyway).
 
 ## Source
 
@@ -27,8 +29,9 @@ The installer is not code-signed yet, so Windows SmartScreen may ask for confirm
 ## Facts
 
 - Platform: Windows 11 (single monitor is the supported case).
-- Idle memory: 3.1 MB shown for the grouped Muelle processes in one Windows Task Manager snapshot; this is not a guaranteed value and excludes Settings/WebView2.
-- Idle CPU: 0% in that snapshot; the dock uses no periodic timers while idle.
+- Idle: about 17 MB of private memory and 0% CPU on the author's PC; no periodic timers while idle.
 - Installer: about 2.4 MB, one step, no wizard and no admin rights.
+- AI usage island: shown only while Claude Code or Codex is running; reads the sign-in those tools already keep locally and asks each provider for its own limits at most every five minutes. It can be turned off in Settings.
+- Network: Settings checks GitHub Releases for updates (can be turned off); the AI usage island talks only to Anthropic and OpenAI. Nothing else is sent anywhere.
 - Uninstall or quit: the Windows taskbar comes back, and uninstalling leaves Windows as it was.
-- Not affiliated with Apple or Microsoft; the visual language is inspired by macOS, the icons and code are original.
+- Not affiliated with Apple, Microsoft, Anthropic or OpenAI; the visual language is inspired by macOS, the icons and code are original.

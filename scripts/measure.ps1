@@ -35,7 +35,7 @@ if (-not (Test-Path $Exe)) { throw "No existe $Exe. Compila antes: cargo build -
 if (Get-Process muelle -ErrorAction SilentlyContinue) { throw 'Ya hay un dock en marcha: ciérralo con `muelle --quit`.' }
 
 $clock = [Diagnostics.Stopwatch]::StartNew()
-Start-Process $Exe | Out-Null
+Start-Process $Exe -WindowStyle Hidden | Out-Null
 $visibleMs = $null
 while ($clock.ElapsedMilliseconds -lt 10000) {
     $h = [MuelleMeasure]::FindWindow('MuelleWindow', [NullString]::Value)

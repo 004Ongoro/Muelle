@@ -19,16 +19,22 @@ en desarrollo activo.
 
 - Dock de cristal con ampliación suave de los iconos bajo el cursor.
 - Abrir, fijar, reordenar y gestionar apps, incluidas las recientes y las ventanas abiertas.
-- Miniaturas en vivo de las ventanas minimizadas.
+- Las ventanas minimizadas se guardan en el icono de su app con el efecto genio;
+  activa Ajustes → Ventanas → *Mostrar ventanas minimizadas* para verlas como
+  miniaturas en vivo a la derecha del dock.
 - Clic en la app que ya está delante para minimizarla, como en la barra de Windows.
 - Arrastrar y soltar archivos sobre apps, Descargas o la Papelera.
 - Ocultación automática opcional.
 - Barra superior con la app en primer plano, hora, red, volumen y batería, además de
   los botones de búsqueda, Vista de tareas y Widgets si los tienes en la barra de Windows.
+- Una isla curva en la barra superior con el uso de Claude, Codex, GitHub Copilot,
+  Cursor, OpenCode Go y Gemini o Antigravity. Aparece cuando el cliente está abierto;
+  al pulsarla muestra los límites disponibles y cuándo se reinician.
 - App de Ajustes aparte, con cambios en vivo, en español e inglés, y efecto genio configurable.
 - Un proceso guardián devuelve la barra de tareas de Windows si el dock se cierra de forma inesperada.
 
-El efecto genio está **desactivado por defecto**. Mientras está activo, Muelle
+El efecto genio está **activado por defecto** y se puede desactivar en Ajustes →
+Ventanas. Mientras está activo, Muelle
 desactiva las transiciones de Windows en las ventanas que sigue, para poder
 dibujar su animación; las devuelve al cerrarse.
 
@@ -155,8 +161,16 @@ de GitHub, y cada firma se aprueba a mano. Política completa y roles del equipo
 
 ## Privacidad
 
-Muelle no recoge datos ni tiene telemetría. La única conexión de red es la
-búsqueda de actualizaciones que hace Ajustes en GitHub Releases al abrirse; se
-desactiva en Ajustes → Sistema → *Buscar actualizaciones automáticamente*. El
-dock nunca se conecta a la red. Detalles:
-[muellee.vercel.app/privacy](https://muellee.vercel.app/privacy).
+Muelle no recoge datos, no tiene telemetría y nunca envía nada al proyecto. Hace
+dos tipos de conexión de red, ambas opcionales:
+
+- **Búsqueda de actualizaciones:** Ajustes pregunta a GitHub Releases si hay una
+  versión nueva al abrirse. Se desactiva en Ajustes → Sistema → *Buscar
+  actualizaciones automáticamente*.
+- **Uso de proveedores de IA:** mientras un cliente compatible está abierto,
+  Muelle reutiliza su sesión local para consultar los límites disponibles de
+  su proveedor cada cinco minutos mientras está visible, o al pulsar Actualizar. Antigravity entrega el uso desde
+  su servicio local. Las credenciales permanecen en memoria; Muelle no las
+  guarda. Se desactiva en Ajustes → Barra superior → *Mostrar uso de proveedores de IA*.
+
+Detalles: [muellee.vercel.app/privacy](https://muellee.vercel.app/privacy).
