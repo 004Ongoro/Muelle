@@ -65,7 +65,7 @@ In one idle snapshot, Windows Task Manager showed **3.1 MB** for the grouped
 `muelle (2)` processes. This point-in-time reading can vary by machine and
 session; it excludes Settings and its WebView2 runtime.
 
-![Windows Task Manager showing Muelle at 3.1 MB memory and 0% CPU while idle](assets/screenshots/dock-idle-memory.png)
+<img width="1000" height="334" alt="d5fcaf5e-b0f9-47f3-a194-2cac8176ea5e" src="https://github.com/user-attachments/assets/a00b8242-be33-466a-a9f5-9390fdd8ccee" />
 
 ## Try it on Windows
 
