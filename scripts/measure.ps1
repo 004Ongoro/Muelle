@@ -15,7 +15,10 @@
 #>
 param(
     [string]$Exe = (Join-Path $env:USERPROFILE '.cargo-target\muelle\release\muelle.exe'),
-    [int]$IdleSeconds = 10
+    [int]$IdleSeconds = 10,
+    # Startup work (icon cache, taskbar, status watches) settles over the first
+    # seconds; sampling earlier counts it as idle use.
+    [int]$WarmSeconds = 20
 )
 $ErrorActionPreference = 'Stop'
 
@@ -40,7 +43,7 @@ while ($clock.ElapsedMilliseconds -lt 10000) {
     Start-Sleep -Milliseconds 5
 }
 
-Start-Sleep -Seconds 3   # Let memory trimming finish before sampling.
+Start-Sleep -Seconds $WarmSeconds   # Let startup and memory trimming finish.
 $procs = Get-CimInstance Win32_Process -Filter "Name='muelle.exe'"
 $cpuBefore = @{}
 foreach ($p in $procs) { $cpuBefore[$p.ProcessId] = (Get-Process -Id $p.ProcessId).TotalProcessorTime }

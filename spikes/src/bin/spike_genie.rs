@@ -14,9 +14,9 @@ use windows::{
         Graphics::Gdi::CreateSolidBrush,
         System::LibraryLoader::GetModuleHandleW,
         UI::WindowsAndMessaging::{
-            CreateWindowExW, DefWindowProcW, DispatchMessageW, MSG, PM_REMOVE, PeekMessageW,
-            RegisterClassW, SW_MINIMIZE, SW_RESTORE, SW_SHOWNOACTIVATE, ShowWindow, WNDCLASSW,
-            WS_OVERLAPPEDWINDOW,
+            CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, MSG, PM_REMOVE,
+            PeekMessageW, RegisterClassW, SW_MINIMIZE, SW_RESTORE, SW_SHOWNOACTIVATE, ShowWindow,
+            WNDCLASSW, WS_OVERLAPPEDWINDOW,
         },
     },
     core::w,
@@ -56,6 +56,44 @@ fn magenta(rect: RECT, y: i32) -> f32 {
             .count();
         hits as f32 / pixels.len().max(1) as f32
     })
+}
+
+/// Opens and closes `cycles` extra windows of this app, so the dock adds and
+/// removes them, to look for leaks.
+fn churn(first: HWND, cycles: u32) {
+    pump(2500);
+    for _ in 0..cycles {
+        // SAFETY: Creates and destroys windows of the class registered in `main`.
+        unsafe {
+            let Ok(instance) = GetModuleHandleW(None) else {
+                return;
+            };
+            let Ok(extra) = CreateWindowExW(
+                Default::default(),
+                w!("MuelleSpikeGenie"),
+                w!("Genie spike churn"),
+                WS_OVERLAPPEDWINDOW,
+                400,
+                200,
+                600,
+                400,
+                None,
+                None,
+                Some(instance.into()),
+                None,
+            ) else {
+                return;
+            };
+            let _ = ShowWindow(extra, SW_SHOWNOACTIVATE);
+            pump(600);
+            let _ = DestroyWindow(extra);
+            pump(600);
+        }
+    }
+    // SAFETY: Our own window.
+    unsafe {
+        let _ = DestroyWindow(first);
+    }
 }
 
 fn main() {
@@ -106,6 +144,10 @@ fn main() {
         let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
         hwnd
     };
+    if std::env::var_os("SPIKE_CHURN").is_some() {
+        churn(hwnd, cycles);
+        return;
+    }
     pump(2500);
     // Rows well inside the client area, near its top and its bottom.
     let (top, bottom) = (rect.top + 80, rect.bottom - 40);

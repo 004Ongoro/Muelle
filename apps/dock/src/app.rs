@@ -101,6 +101,8 @@ const WM_MOUSELEAVE: u32 = 0x02A3;
 const HSHELL_WINDOWACTIVATED: usize = 4;
 const HSHELL_RUDEAPPACTIVATED: usize = 0x8004;
 const HSHELL_FLASH: usize = 0x8006;
+/// A window's title or icon changed.
+const HSHELL_REDRAW: usize = 6;
 /// `wParam` of WM_SETTINGCHANGE when the work area changes. The dock's own
 /// reservation causes this, so handling it would create a loop.
 const SPI_SETWORKAREA: usize = 0x002F;
@@ -675,15 +677,12 @@ impl App {
         let screen_width = (screen.right - screen.left) as f32;
         let dock_x = screen.left as f32 + ((screen_width - dock.width) / 2.0).round();
         let dock_y = screen.bottom as f32 - px(FLOAT_MARGIN) - dock.height;
-        if let Some(appbar) = &mut self.appbar {
-            // A hidden dock leaves the whole screen to maximized windows.
-            let strip = if self.config.auto_hide {
-                0
-            } else {
-                (dock.height + 2.0 * px(FLOAT_MARGIN)) as i32
-            };
-            appbar.reserve(Edge::Bottom, screen, strip);
-        }
+        // A hidden dock leaves the whole screen to maximized windows.
+        let strip = if self.config.auto_hide {
+            0
+        } else {
+            (dock.height + 2.0 * px(FLOAT_MARGIN)) as i32
+        };
         let (dock_right, dock_bottom) = (dock_x + dock.width, dock_y + dock.height);
         let zone = move |left: f32, top: f32, right: f32, bottom: f32| RECT {
             left: (dock_x - left) as i32,
@@ -760,7 +759,13 @@ impl App {
         self.stage = Some(stage);
         self.place_windows()?;
         self.schedule_trim();
-        self.render()
+        self.render()?;
+        // Last: reserving space is a synchronous call to Explorer (40-60 ms
+        // measured), and the dock is already on screen meanwhile.
+        if let Some(appbar) = &mut self.appbar {
+            appbar.reserve(Edge::Bottom, screen, strip);
+        }
+        Ok(())
     }
 
     fn place_windows(&self) -> Result<()> {
@@ -2150,6 +2155,10 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) ->
             HSHELL_WINDOWACTIVATED | HSHELL_RUDEAPPACTIVATED => {
                 with_app("ventana activa", App::update_fullscreen);
             }
+            // Terminals and browsers retitle their windows many times a minute.
+            // The dock shows no titles, so only a window it does not list yet
+            // (an app that declares its identity late) needs a new look.
+            HSHELL_REDRAW if is_tracked(l.0) => {}
             code => {
                 if code == HSHELL_FLASH {
                     with_app("aviso de atención", |app| {
@@ -2164,6 +2173,16 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) ->
         _ => return unsafe { DefWindowProcW(hwnd, msg, w, l) },
     }
     LRESULT(0)
+}
+
+/// `true` if the dock already lists the window `hwnd`.
+fn is_tracked(hwnd: isize) -> bool {
+    APP.with(|cell| {
+        cell.try_borrow().is_ok_and(|app| {
+            app.as_ref()
+                .is_some_and(|app| app.windows.iter().any(|window| window.hwnd == hwnd))
+        })
+    })
 }
 
 fn is_animating() -> bool {
@@ -2317,11 +2336,17 @@ pub fn run() -> Result<()> {
         let _ = SetConsoleCtrlHandler(None, false);
         let _ = SetConsoleCtrlHandler(Some(on_console_ctrl), true);
 
-        app.apply_menu_bar_setting();
         app.sync()?;
         // `sync` recomposes only when the list changes; run it unconditionally at startup.
         if app.stage.is_none() {
             app.refresh()?;
+        }
+        // After the dock: creating the bar and reserving its strip take
+        // 60-130 ms, which the dock no longer waits for.
+        app.apply_menu_bar_setting();
+        // Otherwise the bar shows no app name until the user switches windows.
+        if let Err(error) = app.update_menu_bar_app() {
+            eprintln!("muelle: barra superior: {error:#}");
         }
 
         // The shell notifies this window when a window is created, closed,

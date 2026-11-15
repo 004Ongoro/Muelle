@@ -23,6 +23,7 @@ use muelle_shell::{
     status::{self, AudioWatch, Network, NetworkWatch, TaskbarButtons, Volume},
     system::{self, Battery, Monitor},
 };
+use std::sync::atomic::{AtomicBool, Ordering};
 use windows::{
     UI::{
         Color,
@@ -38,9 +39,10 @@ use windows::{
         UI::Input::KeyboardAndMouse::{TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent},
         UI::WindowsAndMessaging::{
             CreateWindowExW, DefWindowProcW, DestroyWindow, HWND_TOPMOST, IDC_ARROW, LoadCursorW,
-            RegisterClassW, SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_SHOWWINDOW, SetTimer, SetWindowPos,
-            WM_APP, WM_LBUTTONUP, WM_MOUSEMOVE, WM_SETTINGCHANGE, WM_TIMER, WNDCLASSW,
-            WS_EX_NOACTIVATE, WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+            PostMessageW, RegisterClassW, SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_SHOWWINDOW, SetTimer,
+            SetWindowPos, WM_APP, WM_LBUTTONUP, WM_MOUSEMOVE, WM_SETTINGCHANGE, WM_TIMER,
+            WNDCLASSW, WS_EX_NOACTIVATE, WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOOLWINDOW,
+            WS_EX_TOPMOST, WS_POPUP,
         },
     },
     core::{BOOL, Interface, w},
@@ -69,6 +71,13 @@ const WM_MOUSELEAVE: u32 = 0x02A3;
 const APPBAR_CALLBACK: u32 = WM_APP + 20;
 /// Posted by the network and audio watches.
 const STATUS_CHANGED: u32 = WM_APP + 21;
+/// Posted by the bar to itself to update from the message loop.
+const TICK: u32 = WM_APP + 22;
+/// `wParam` of WM_SETTINGCHANGE when the work area changes, which every
+/// AppBar reservation (the dock's, this bar's) causes.
+const SPI_SETWORKAREA: usize = 0x002F;
+/// A `TICK` is already posted.
+static TICK_PENDING: AtomicBool = AtomicBool::new(false);
 
 /// Segoe Fluent Icons code points.
 mod glyph {
@@ -146,7 +155,23 @@ unsafe extern "system" fn bar_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -
         WM_MOUSELEAVE => app::menu_bar_hover(false),
         // The minute changed, the charger was plugged or unplugged, the
         // network or volume changed, or a Windows setting (taskbar buttons).
-        WM_TIMER | WM_POWERBROADCAST | STATUS_CHANGED | WM_SETTINGCHANGE => app::menu_bar_tick(),
+        // Nothing the bar shows depends on the work area.
+        WM_SETTINGCHANGE if w.0 == SPI_SETWORKAREA => {}
+        // Some of these are sent while the dock is busy reserving space, and
+        // updating then was dropped. From the message loop the dock is never
+        // busy, and a burst of them makes a single update.
+        WM_TIMER | WM_POWERBROADCAST | STATUS_CHANGED | WM_SETTINGCHANGE => {
+            if !TICK_PENDING.swap(true, Ordering::Relaxed) {
+                // SAFETY: Posting to our own live window.
+                unsafe {
+                    let _ = PostMessageW(Some(hwnd), TICK, WPARAM(0), LPARAM(0));
+                }
+            }
+        }
+        TICK => {
+            TICK_PENDING.store(false, Ordering::Relaxed);
+            app::menu_bar_tick();
+        }
         // SAFETY: Standard forwarding of unhandled messages.
         _ => return unsafe { DefWindowProcW(hwnd, msg, w, l) },
     }
