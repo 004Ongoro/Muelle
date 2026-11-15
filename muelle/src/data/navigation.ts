@@ -1,19 +1,19 @@
 import { site } from "@/data/site";
 
 export const navigation = [
-  { label: "Dock", href: "#dock" },
-  { label: "Settings", href: "#customize" },
-  { label: "Reversible", href: "#safety" },
+  { label: "Dock", href: "/#dock" },
+  { label: "Settings", href: "/#customize" },
+  { label: "Reversible", href: "/#safety" },
 ] as const;
 
 export const footerGroups = [
   {
     title: "Product",
     links: [
-      { label: "The Dock", href: "#dock", external: false },
-      { label: "Settings", href: "#customize", external: false },
-      { label: "Reversible", href: "#safety", external: false },
-      { label: "Download", href: "#download", external: false },
+      { label: "The Dock", href: "/#dock", external: false },
+      { label: "Settings", href: "/#customize", external: false },
+      { label: "Reversible", href: "/#safety", external: false },
+      { label: "Download", href: "/#download", external: false },
     ],
   },
   {
@@ -30,6 +30,8 @@ export const footerGroups = [
       { label: "License", href: `${site.repository}/blob/main/LICENSE`, external: true },
       { label: "Changelog", href: site.releases, external: true },
       { label: "Contribute", href: site.issues, external: true },
+      { label: "Code signing policy", href: "/code-signing-policy", external: false },
+      { label: "Privacy", href: "/privacy", external: false },
     ],
   },
 ] as const;

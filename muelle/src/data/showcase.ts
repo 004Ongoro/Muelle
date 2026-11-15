@@ -198,7 +198,7 @@ export const download = {
   releases: "All versions on GitHub",
   steps: [
     { title: "Open the installer", body: "Per user. No admin rights, no wizard." },
-    { title: "If SmartScreen asks", body: "It is not signed yet: More info → Run anyway." },
+    { title: "If SmartScreen asks", body: "Muelle is new, so Windows may not know it yet: More info → Run anyway." },
     { title: "That's it", body: "The dock appears and starts with Windows from now on." },
   ],
   source: {

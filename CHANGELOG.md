@@ -24,6 +24,9 @@ copia la sección de la versión que se publica a la release de GitHub.
   first window switch.
 - Menu bar: the battery shows a charging bolt.
 - Settings: options that depend on another fold away under it.
+- Settings → System: "Check for updates automatically" can be turned off; it
+  is the only network request Muelle makes. New privacy policy and code signing
+  policy pages on the website.
 
 ### Español
 
@@ -39,6 +42,9 @@ copia la sección de la versión que se publica a la release de GitHub.
   nombre de la app hasta el primer cambio de ventana.
 - Barra superior: la batería muestra un rayo mientras carga.
 - Ajustes: las opciones que dependen de otra se pliegan bajo ella.
+- Ajustes → Sistema: «Buscar actualizaciones automáticamente» se puede
+  desactivar; es la única conexión de red de Muelle. Nuevas páginas de política
+  de privacidad y de firma de código en la web.
 
 ## [0.1.4]
 

@@ -5,6 +5,7 @@ import Section from "@/components/layout/Section.astro";
 import Button from "@/components/ui/Button.astro";
 import Icon from "@/components/ui/Icon.astro";
 import { download } from "@/data/showcase";
+import { signingCredit } from "@/data/policies";
 import { site } from "@/data/site";
 import "@/styles/showcase.css";
 ---
@@ -41,6 +42,10 @@ import "@/styles/showcase.css";
       ))
     }
   </ol>
+
+  <p class="get-signing" data-r>
+    {signingCredit} <a href="/code-signing-policy">Code signing policy</a> · <a href="/privacy">Privacy</a>
+  </p>
 
   <details class="get-source" data-r>
     <summary>{download.source.summary}</summary>

@@ -1,0 +1,69 @@
+---
+import PolicyPage from "@/components/layout/PolicyPage.astro";
+import { signingCredit, signingTeam } from "@/data/policies";
+import { site } from "@/data/site";
+
+const roles = [
+  { title: "Committers and reviewers", people: signingTeam.committers, note: "may change the code; changes from anyone else are reviewed in a pull request first." },
+  { title: "Approvers", people: signingTeam.approvers, note: "approve each signing request by hand before a release is signed." },
+];
+---
+
+<PolicyPage
+  title="Code signing policy"
+  description="How Muelle's Windows installer and programs are signed, who approves each release, and what the signature guarantees."
+  updated="November 15, 2026"
+>
+  <p>
+    {signingCredit} The Windows installer (<code>Muelle-Setup.exe</code>) and the two programs it installs
+    (<code>muelle.exe</code>, the dock, and <code>muelle-settings.exe</code>, Settings) are signed through the{" "}
+    <a href="https://signpath.org" target="_blank" rel="noopener noreferrer">SignPath Foundation</a> program for open
+    source projects. The certificate is issued to SignPath Foundation, so Windows shows it as the publisher.
+  </p>
+
+  <h2>What gets signed</h2>
+  <ul>
+    <li>
+      Only files built by the project's own{" "}
+      <a href={`${site.repository}/blob/main/.github/workflows/release.yml`} target="_blank" rel="noopener noreferrer">release workflow</a>{" "}
+      on GitHub-hosted runners, from the public source code in{" "}
+      <a href={site.repository} target="_blank" rel="noopener noreferrer">{site.repository.replace("https://", "")}</a>.
+    </li>
+    <li>Nothing built on a personal computer, and no third-party program is signed under this certificate.</li>
+    <li>Every signed file is named Muelle and carries the version of the release it belongs to.</li>
+  </ul>
+
+  <h2>Team roles</h2>
+  <ul>
+    {
+      roles.map(({ title, people, note }) => (
+        <li>
+          <b>{title}:</b>{" "}
+          {people.map((person, index) => (
+            <>
+              {index > 0 && ", "}
+              <a href={person.href} target="_blank" rel="noopener noreferrer">
+                {person.name}
+              </a>
+            </>
+          ))}
+          {" "}— {note}
+        </li>
+      ))
+    }
+  </ul>
+  <p>Every member of the team uses multi-factor authentication on GitHub and on SignPath.</p>
+
+  <h2>Privacy</h2>
+  <p>
+    This program will not transfer any information to other networked systems unless specifically requested by the
+    user or the person installing or operating it. The only exception is the update check, described in the{" "}
+    <a href="/privacy">privacy policy</a>, which can be turned off in Settings.
+  </p>
+
+  <h2>Report a problem</h2>
+  <p>
+    If a signed file does something this page or the privacy policy does not describe, please{" "}
+    <a href={site.issues} target="_blank" rel="noopener noreferrer">open an issue</a>.
+  </p>
+</PolicyPage>

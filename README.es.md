@@ -40,8 +40,9 @@ dibujar su animación; las devuelve al cerrarse.
 
 1. Ejecuta `Muelle-Setup.exe`. Se instala solo para tu usuario: sin permisos de
    administrador, sin asistente, en unos dos segundos.
-2. El instalador aún no está firmado, así que SmartScreen puede decir que protegió
-   tu PC. Elige **Más información → Ejecutar de todas formas**.
+2. Muelle es nuevo, así que SmartScreen puede no reconocerlo todavía y decir que
+   protegió tu PC. Elige **Más información → Ejecutar de todas formas**. Ver la
+   [política de firma de código](#política-de-firma-de-código).
 3. Aparece el dock y se oculta la barra de tareas de Windows. Desde entonces Muelle
    se abre al iniciar Windows; puedes desactivarlo en Ajustes → Sistema.
 
@@ -142,6 +143,20 @@ descarga y la actualización.
 ## Estado
 
 El dock, Ajustes y el instalador funcionan en Windows 11. Algunas funciones e
-interacciones aún se están verificando. El instalador todavía no está firmado,
-así que SmartScreen avisa antes de ejecutarlo (Más información → Ejecutar de
-todas formas).
+interacciones aún se están verificando.
+
+## Política de firma de código
+
+Free code signing provided by [SignPath.io](https://about.signpath.io),
+certificate by [SignPath Foundation](https://signpath.org). Las versiones se
+compilan desde este repositorio con `.github/workflows/release.yml` en máquinas
+de GitHub, y cada firma se aprueba a mano. Política completa y roles del equipo:
+[muellee.vercel.app/code-signing-policy](https://muellee.vercel.app/code-signing-policy).
+
+## Privacidad
+
+Muelle no recoge datos ni tiene telemetría. La única conexión de red es la
+búsqueda de actualizaciones que hace Ajustes en GitHub Releases al abrirse; se
+desactiva en Ajustes → Sistema → *Buscar actualizaciones automáticamente*. El
+dock nunca se conecta a la red. Detalles:
+[muellee.vercel.app/privacy](https://muellee.vercel.app/privacy).

@@ -60,6 +60,9 @@ pub struct Config {
     pub show_recents: bool,
     /// Icons bounce while the app they open is starting.
     pub bounce_on_open: bool,
+    /// Settings asks GitHub Releases for a newer version when it opens. The
+    /// only network access in Muelle, so it can be turned off.
+    pub check_updates: bool,
     pub language: Language,
 }
 
@@ -125,6 +128,7 @@ impl Default for Config {
             show_indicators: true,
             show_recents: true,
             bounce_on_open: true,
+            check_updates: true,
             language: Language::Auto,
         }
     }
@@ -224,6 +228,16 @@ mod tests {
         assert_eq!(config.icon_size, 56);
         assert_eq!(config.active_app_click, ActiveAppClick::Minimize);
         assert!(config.show_indicators && config.show_recents && config.bounce_on_open);
+        assert!(config.check_updates);
+    }
+
+    #[test]
+    fn load_should_read_turned_off_update_checks() {
+        let path = scratch("no-update-checks");
+        save(&path, &Config::default()).ok();
+        fs::write(&path, r#"{"checkUpdates":false}"#).ok();
+        let config = load(&path).ok().flatten().unwrap_or_default();
+        assert!(!config.check_updates);
     }
 
     #[test]

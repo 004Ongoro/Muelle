@@ -46,8 +46,9 @@ restored when Muelle exits.
 
 1. Run `Muelle-Setup.exe`. It installs for your user only: no administrator
    rights, no wizard, about two seconds.
-2. The installer is not code-signed yet, so Windows SmartScreen may say it
-   protected your PC. Choose **More info → Run anyway**.
+2. Muelle is new, so Windows SmartScreen may not recognize it yet and say it
+   protected your PC. Choose **More info → Run anyway**. See the
+   [code signing policy](#code-signing-policy).
 3. Open **Muelle** from the Start menu, then choose **Dock** to
    personalize the dock and top menu bar.
 
@@ -156,5 +157,19 @@ draft to make it the download and the update.
 ## Current status
 
 The dock, Settings app and installer work on Windows 11. Some features and
-interactions are still being verified. The installer is not code-signed yet, so
-Windows SmartScreen warns before running it (More info → Run anyway).
+interactions are still being verified.
+
+## Code signing policy
+
+Free code signing provided by [SignPath.io](https://about.signpath.io),
+certificate by [SignPath Foundation](https://signpath.org). Releases are built
+from this repository by `.github/workflows/release.yml` on GitHub-hosted runners
+and each signing request is approved by hand. Full policy and team roles:
+[muellee.vercel.app/code-signing-policy](https://muellee.vercel.app/code-signing-policy).
+
+## Privacy
+
+Muelle collects no data and has no telemetry. The only network request is the
+update check that Settings makes to GitHub Releases when it opens; turn it off in
+Settings → System → *Check for updates automatically*. The dock never connects to
+the network. Details: [muellee.vercel.app/privacy](https://muellee.vercel.app/privacy).

@@ -920,6 +920,23 @@
   color: var(--color-mute);
 }
 
+.get-signing {
+  max-width: 900px;
+  margin: 32px auto 0;
+  text-align: center;
+  font-size: 13px;
+  color: var(--color-mute);
+}
+
+.get-signing a {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.get-signing a:hover {
+  color: var(--color-signal);
+}
+
 .get-source {
   max-width: 900px;
   margin: 40px auto 0;

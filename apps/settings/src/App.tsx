@@ -25,6 +25,7 @@ import es from "./i18n/es.json";
 
 type Section = "dock" | "system";
 type UpdateState =
+  | { kind: "off" }
   | { kind: "checking" }
   | { kind: "current" }
   | { kind: "available"; info: UpdateInfo }
@@ -76,18 +77,22 @@ export function App() {
     let alive = true;
     Promise.all([loadConfig(), getAutostart()])
       .then(([loaded, starts]) => {
-        if (alive) {
-          setConfig(loaded);
-          setAutostartState(starts);
+        if (!alive) return;
+        setConfig(loaded);
+        setAutostartState(starts);
+        // The only network access in Muelle, and the user can turn it off.
+        if (!loaded.checkUpdates) {
+          setUpdateState({ kind: "off" });
+          return;
         }
+        checkUpdate()
+          .then((found) => alive && setUpdateState(toUpdateState(found)))
+          .catch(() => alive && setUpdateState({ kind: "error" }));
       })
       .catch(() => alive && setFailed(true));
     getVersion()
       .then((current) => alive && setVersion(current))
       .catch(() => {});
-    checkUpdate()
-      .then((found) => alive && setUpdateState(toUpdateState(found)))
-      .catch(() => alive && setUpdateState({ kind: "error" }));
     const progress = listen<ProgressEvent>("update-progress", ({ payload }) => {
       const share = payload.total ? Math.min(payload.downloaded / payload.total, 1) : null;
       setUpdateState((state) => (state.kind === "installing" ? { ...state, progress: share } : state));
@@ -341,6 +346,13 @@ export function App() {
               </Row>
             </Card>
             <Card>
+              <Row label={t.checkUpdates} hint={t.checkUpdatesHint}>
+                <Toggle
+                  label={t.checkUpdates}
+                  checked={config.checkUpdates}
+                  onChange={(checkUpdates) => update({ checkUpdates })}
+                />
+              </Row>
               <Row label={t.updates} hint={updateHint(t, updateState, version)}>
                 {waiting && updateState.kind !== "installing" ? (
                   <button type="button" className="push push-primary" onClick={() => install(waiting)}>
@@ -384,6 +396,8 @@ export function App() {
 
 function updateHint(t: Texts, state: UpdateState, version: string): string {
   switch (state.kind) {
+    case "off":
+      return t.updatesOff;
     case "checking":
       return t.updatesChecking;
     case "current":
