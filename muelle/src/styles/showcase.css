@@ -353,15 +353,43 @@
   color: #fff;
 }
 
-.settings-glyph {
-  display: grid;
-  place-items: center;
-  width: 20px;
+.settings-icon {
+  flex: none;
+  filter: drop-shadow(0 0.5px 0.5px rgb(0 0 0 / 0.18));
+}
+
+/* Options that depend on the menu bar: indented under it, as in the app. */
+.settings-row-sub {
+  padding-left: 28px;
+}
+
+/* The AI usage island of the preview desk, a miniature of the real one. */
+.preview-island {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   height: 20px;
-  border-radius: 5px;
-  background: rgb(120 120 128 / 0.5);
-  color: #fff;
-  font-size: 12px;
+  padding: 0 9px;
+  translate: -50% 0;
+  border-radius: 0 0 9px 9px;
+  background: #0b0c0f;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.preview-island[hidden] {
+  display: none;
+}
+
+.preview-island i {
+  width: 9px;
+  height: 9px;
+  margin-left: 3px;
+  border-radius: 50%;
+  background: conic-gradient(var(--ring) 0 var(--p), rgb(255 255 255 / 0.2) 0);
 }
 
 .settings-main {
@@ -1003,6 +1031,11 @@
   .settings-nav {
     display: flex;
     margin-top: 0;
+  }
+
+  /* Four sections fit on a phone only as icons; each keeps its accessible name. */
+  .settings-nav-label {
+    display: none;
   }
 
   .settings-row:has(.mac-range-wrap) {

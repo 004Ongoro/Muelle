@@ -14,7 +14,7 @@ interface Props {
 const { title, description, updated } = Astro.props;
 ---
 
-<BaseLayout title={`${title} - Muelle`} description={description}>
+<BaseLayout title={`${title} - Muelle`} description={description} product={false}>
   <SiteHeader />
   <main id="main" class="py-16">
     <Container>

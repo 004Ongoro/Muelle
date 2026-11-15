@@ -9,9 +9,11 @@ interface Props {
   description: string;
   /** Error pages: keep them out of the index and skip the product schema. */
   noindex?: boolean;
+  /** The product schema describes the app, so only the home page carries it. */
+  product?: boolean;
 }
 
-const { title, description, noindex = false } = Astro.props;
+const { title, description, noindex = false, product = true } = Astro.props;
 const canonical = new URL(Astro.url.pathname, Astro.site ?? site.url);
 const ogImage = site.ogImage ? new URL(site.ogImage, site.url).href : null;
 
@@ -22,7 +24,7 @@ const author = {
 };
 
 // Lets Google show the product as an app result: name, price, platform, source.
-const schema = noindex
+const schema = noindex || !product
   ? null
   : {
       "@context": "https://schema.org",
@@ -48,6 +50,8 @@ const schema = noindex
         "Drag files onto apps",
         "Optional top menu bar",
         "Restores the Windows taskbar when the dock stops",
+        "AI provider plan usage in the menu bar",
+        "Genie minimize effect",
       ],
       offers: { "@type": "Offer", price: "0", priceCurrency: "USD" },
       ...(ogImage && { screenshot: ogImage }),
@@ -108,7 +112,7 @@ const schema = noindex
   </head>
   <body>
     <a
-      href="#top"
+      href="#main"
       class="sr-only focus:not-sr-only focus:fixed focus:top-3 focus:left-3 focus:z-[60] focus:squircle-pill focus:bg-primary-gradient focus:px-4 focus:py-2 focus:font-bold focus:text-ink"
     >
       Skip to content

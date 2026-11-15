@@ -27,6 +27,7 @@ export function initCustomize(root: HTMLElement) {
   const preview = root.querySelector<HTMLElement>("[data-preview]");
   const dock = root.querySelector<HTMLElement>("[data-preview-dock]");
   const bar = root.querySelector<HTMLElement>("[data-preview-bar]");
+  const island = root.querySelector<HTMLElement>("[data-preview-island]");
   const textNode = root.querySelector<HTMLScriptElement>("[data-settings-text]");
   if (!scene || !preview || !dock || !bar || !textNode) return;
 
@@ -117,8 +118,11 @@ export function initCustomize(root: HTMLElement) {
     const barShown = isOn("menuBar") && (!isOn("menuBarAutoHide") || nearTop);
     dock.classList.toggle("is-hidden", dockHidden);
     bar.classList.toggle("is-hidden", !barShown);
-    const autoRow = scene.querySelector<HTMLElement>("[data-row=menuBarAutoHide]");
-    if (autoRow) autoRow.hidden = !isOn("menuBar");
+    // Options of the menu bar fold away with it, as in the app.
+    scene.querySelectorAll<HTMLElement>(".settings-row-sub").forEach((row) => {
+      row.hidden = !isOn("menuBar");
+    });
+    island?.toggleAttribute("hidden", !isOn("aiUsage"));
   };
 
   preview.addEventListener("pointermove", (event) => {

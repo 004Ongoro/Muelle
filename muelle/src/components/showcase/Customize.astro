@@ -4,7 +4,8 @@ import wallpaper from "@/assets/wallpapers/desktop-02.jpg";
 import Section from "@/components/layout/Section.astro";
 import SectionIntro from "@/components/showcase/SectionIntro.astro";
 import MenuBarStatus from "@/components/dock/MenuBarStatus.astro";
-import Icon from "@/components/ui/Icon.astro";
+import SettingsIcon from "@/components/showcase/SettingsIcon.astro";
+import ToggleRow from "@/components/showcase/ToggleRow.astro";
 import {
   customizeIntro,
   previewIcons,
@@ -17,8 +18,8 @@ import "@/styles/showcase.css";
 const t = settingsText.en;
 const tx = (key: SettingsKey) => ({ "data-t": key });
 const checked = (on: boolean) => (on ? "true" : "false");
-// Use names your Icon component knows.
-const paneIcons = { dock: "app-window", system: "gear-six" } as const;
+/** The sections of the Settings app, in its order. */
+const panes = ["dock", "windows", "menubar", "system"] as const;
 // `<` is escaped so no text can ever close the script tag early.
 const textJson = JSON.stringify(settingsText).replace(/</g, "\\u003c");
 ---
@@ -35,18 +36,22 @@ const textJson = JSON.stringify(settingsText).replace(/</g, "\\u003c");
           <i></i>
         </div>
         <nav class="settings-nav">
-          <button type="button" data-pane="dock" aria-current="page">
-            <span class="settings-glyph" aria-hidden="true">
-              <Icon name={paneIcons.dock} size={16} />
-            </span>
-            <span {...tx("dock")}>{t.dock}</span>
-          </button>
-          <button type="button" data-pane="system">
-            <span class="settings-glyph" aria-hidden="true">
-              <Icon name={paneIcons.system} size={16} />
-            </span>
-            <span {...tx("system")}>{t.system}</span>
-          </button>
+          {
+            panes.map((pane, index) => (
+              <button
+                type="button"
+                data-pane={pane}
+                data-label={pane}
+                aria-current={index === 0 ? "page" : undefined}
+                aria-label={t[pane]}
+              >
+                <SettingsIcon section={pane} />
+                <span class="settings-nav-label" {...tx(pane)}>
+                  {t[pane]}
+                </span>
+              </button>
+            ))
+          }
         </nav>
       </aside>
 
@@ -117,35 +122,22 @@ const textJson = JSON.stringify(settingsText).replace(/</g, "\\u003c");
           </div>
 
           <div class="settings-card">
-            {(
-              [
-                ["autoHide", "autoHideHint", d.autoHide],
-                ["menuBar", "menuBarHint", d.menuBar],
-                ["menuBarAutoHide", "menuBarAutoHideHint", d.menuBarAutoHide],
-                ["genie", "genieHint", d.genie],
-              ] as const
-            ).map(([key, hint, on]) => (
-              <div class="settings-row" data-row={key}>
-                <span class="settings-text">
-                  <span class="settings-label" {...tx(key)}>
-                    {t[key]}
-                  </span>
-                  <span class="settings-hint" {...tx(hint)}>
-                    {t[hint]}
-                  </span>
-                </span>
-                <button
-                  type="button"
-                  role="switch"
-                  class="mac-switch"
-                  aria-checked={checked(on)}
-                  aria-label={t[key]}
-                  data-setting={key}
-                >
-                  <i />
-                </button>
-              </div>
-            ))}
+            <ToggleRow name="autoHide" hint="autoHideHint" on={d.autoHide} />
+          </div>
+        </div>
+
+        <div class="settings-body" data-view="windows" hidden>
+          <div class="settings-card">
+            <ToggleRow name="genie" hint="genieHint" on={d.genie} />
+            <ToggleRow name="showMinimized" hint="showMinimizedHint" on={d.showMinimized} />
+          </div>
+        </div>
+
+        <div class="settings-body" data-view="menubar" hidden>
+          <div class="settings-card">
+            <ToggleRow name="menuBar" hint="menuBarHint" on={d.menuBar} />
+            <ToggleRow name="menuBarAutoHide" hint="menuBarAutoHideHint" on={d.menuBarAutoHide} sub />
+            <ToggleRow name="aiUsage" hint="aiUsageHint" on={d.aiUsage} sub />
           </div>
         </div>
 
@@ -218,6 +210,10 @@ const textJson = JSON.stringify(settingsText).replace(/</g, "\\u003c");
       />
       <div class="preview-bar" data-preview-bar>
         <b>File Explorer</b>
+        <span class="preview-island" data-preview-island aria-hidden="true">
+          <i style="--ring: #d97757; --p: 63%"></i>63%
+          <i style="--ring: #8ab4f8; --p: 28%"></i>28%
+        </span>
         <span class="preview-bar-status">
           <MenuBarStatus />
           <span class="hidden sm:inline" data-date>

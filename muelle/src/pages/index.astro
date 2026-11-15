@@ -2,6 +2,7 @@
 import SiteFooter from "@/components/layout/SiteFooter.astro";
 import SiteHeader from "@/components/layout/SiteHeader.astro";
 import Hero from "@/components/sections/Hero.astro";
+import AiUsage from "@/components/showcase/AiUsage.astro";
 import Customize from "@/components/showcase/Customize.astro";
 import DockAnatomy from "@/components/showcase/DockAnatomy.astro";
 import Download from "@/components/showcase/Download.astro";
@@ -13,9 +14,10 @@ import BaseLayout from "@/layouts/BaseLayout.astro";
 <BaseLayout title={`${site.name} - ${site.tagline}`} description={site.description}>
   <SiteHeader />
 
-  <main>
+  <main id="main">
     <Hero />
     <DockAnatomy />
+    <AiUsage />
     <Customize />
     <Reversible />
     <Download />
