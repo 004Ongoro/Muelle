@@ -6,6 +6,40 @@ copies the section of the version being published into the GitHub release.
 Cada versión lista sus cambios en inglés y en español. El flujo de publicación
 copia la sección de la versión que se publica a la release de GitHub.
 
+## [Unreleased]
+
+## [0.1.5]
+
+### English
+
+- The dock appears sooner at startup (about 170 ms instead of 260-450 ms).
+- Lower idle CPU: windows changing their title (terminals, browsers) no longer
+  make the dock re-read every window.
+- Genie starts sooner after minimizing: the screen copy no longer waits extra
+  frames.
+- Fixed: the dock and menu bar could stay black after energy saver; without
+  transparency they are now solid gray, as macOS draws them with "Reduce
+  transparency".
+- Fixed: the menu bar could miss an update and showed no app name until the
+  first window switch.
+- Menu bar: the battery shows a charging bolt.
+- Settings: options that depend on another fold away under it.
+
+### Español
+
+- El dock aparece antes al arrancar (unos 170 ms en lugar de 260-450 ms).
+- Menos CPU en reposo: las ventanas que cambian de título (terminales,
+  navegadores) ya no hacen que el dock relea todas las ventanas.
+- El genio empieza antes al minimizar: la copia de pantalla ya no espera
+  fotogramas de más.
+- Corregido: el dock y la barra superior podían quedarse negros tras el ahorro
+  de energía; sin transparencia ahora son grises sólidos, como macOS con
+  «Reducir transparencia».
+- Corregido: la barra superior podía perder una actualización y no mostraba el
+  nombre de la app hasta el primer cambio de ventana.
+- Barra superior: la batería muestra un rayo mientras carga.
+- Ajustes: las opciones que dependen de otra se pliegan bajo ella.
+
 ## [0.1.4]
 
 ### English
