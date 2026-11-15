@@ -6,8 +6,9 @@
 use std::{env, io, path::PathBuf, process::Command, sync::Mutex};
 
 use muelle_config::Config;
-use muelle_shell::{autostart, dock_link};
-use tauri::State;
+use muelle_shell::{autostart, dock_link, launcher};
+use serde::Serialize;
+use tauri::{Emitter, Manager, State};
 use tauri_plugin_updater::{Update, UpdaterExt};
 
 /// The dock owns the pinned and recent apps; this app never overwrites them
@@ -73,30 +74,75 @@ struct PendingUpdate(Mutex<Option<Update>>);
 async fn check_update(
     app: tauri::AppHandle,
     pending: State<'_, PendingUpdate>,
-) -> Result<Option<String>, String> {
+) -> Result<Option<UpdateInfo>, String> {
     let update = app
         .updater()
         .map_err(|error| error.to_string())?
         .check()
         .await
         .map_err(|error| error.to_string())?;
-    let version = update.as_ref().map(|update| update.version.clone());
+    let info = update.as_ref().map(|update| UpdateInfo {
+        version: update.version.clone(),
+        notes: update.body.clone().filter(|notes| is_release_page(notes)),
+    });
     *pending.0.lock().map_err(|error| error.to_string())? = update;
-    Ok(version)
+    Ok(info)
+}
+
+/// What the window shows about an available update.
+#[derive(Serialize)]
+struct UpdateInfo {
+    version: String,
+    /// The release page, when the manifest points at one.
+    notes: Option<String>,
+}
+
+/// Download progress, sent to the window as `update-progress`.
+#[derive(Clone, Serialize)]
+struct Progress {
+    downloaded: u64,
+    total: Option<u64>,
+}
+
+const RELEASES: &str = "https://github.com/crafter-station/Muelle/releases/";
+
+/// The update manifest is not signed (only the installer is), so the only
+/// link it may open is a release page of this repository.
+fn is_release_page(url: &str) -> bool {
+    url.starts_with(RELEASES) && !url.contains(char::is_whitespace)
+}
+
+#[tauri::command]
+fn open_release_notes(url: String) -> Result<(), String> {
+    if !is_release_page(&url) {
+        return Err("enlace no permitido".into());
+    }
+    launcher::open(&url).map_err(|error| error.to_string())
 }
 
 /// Downloads the signed installer and runs it; the installer stops the dock,
 /// replaces both apps and starts the dock again. This process exits.
 #[tauri::command]
-async fn install_update(pending: State<'_, PendingUpdate>) -> Result<(), String> {
+async fn install_update(
+    app: tauri::AppHandle,
+    pending: State<'_, PendingUpdate>,
+) -> Result<(), String> {
+    // Cloned, not taken: if the download fails the user can try again.
     let update = pending
         .0
         .lock()
         .map_err(|error| error.to_string())?
-        .take()
+        .clone()
         .ok_or("no hay ninguna actualización pendiente")?;
+    let mut downloaded = 0u64;
     update
-        .download_and_install(|_, _| {}, || {})
+        .download_and_install(
+            |chunk, total| {
+                downloaded += chunk as u64;
+                let _ = app.emit("update-progress", Progress { downloaded, total });
+            },
+            || {},
+        )
         .await
         .map_err(|error| error.to_string())
 }
@@ -110,6 +156,14 @@ fn main() {
         eprintln!("muelle-settings: no se pudo abrir el dock: {error}");
     }
     let result = tauri::Builder::default()
+        // First, so a second launch exits before doing anything else.
+        .plugin(tauri_plugin_single_instance::init(|app, _, _| {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.unminimize();
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+        }))
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(PendingUpdate::default())
         .invoke_handler(tauri::generate_handler![
@@ -119,7 +173,8 @@ fn main() {
             get_autostart,
             set_autostart,
             check_update,
-            install_update
+            install_update,
+            open_release_notes
         ])
         .run(tauri::generate_context!());
     if let Err(error) = result {

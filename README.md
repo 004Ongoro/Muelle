@@ -4,7 +4,8 @@
 
   **A lightweight, macOS-inspired dock for Windows 11.**
 
-  Smooth magnification, live window previews, and an optional Genie-style minimize effect.
+  Muelle replaces the Windows taskbar with a customizable dock and an optional
+  macOS-style menu bar.
 
 </div>
 
@@ -12,9 +13,7 @@
 
 <img width="1000" height="243" alt="ezgif-2421a892c23dc19b" src="https://github.com/user-attachments/assets/83d43043-c6a2-469f-bb87-053e5be868f1" />
 
-Muelle replaces the Windows taskbar with a customizable dock and an optional
-macOS-style menu bar. It is built for Windows 11 and is still under active
-development.
+Smooth magnification, live window previews, and an optional Genie-style minimize effect.
 
 | Auto-hiding Dock and Menu Bar | Genie Effect on Minimize |
 |---|---|

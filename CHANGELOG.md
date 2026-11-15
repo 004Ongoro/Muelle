@@ -6,6 +6,29 @@ copies the section of the version being published into the GitHub release.
 Cada versión lista sus cambios en inglés y en español. El flujo de publicación
 copia la sección de la versión que se publica a la release de GitHub.
 
+## [0.1.2]
+
+### English
+
+- Updates are announced in Settings: a banner above every section with
+  "Update now", "Later" and "What's new", download progress, and a badge on
+  System while an update waits.
+- Smoother Genie effect: the system compositor now runs the whole animation
+  at the display's refresh rate, and it no longer skips its first frames.
+- Fixed: the Dock section of Settings could not scroll to its last options.
+- Fixed: opening Settings twice opened two windows; it now brings the open one
+  to the front.
+
+### Español
+
+- Las actualizaciones se anuncian en Ajustes: un aviso encima de cada sección
+  con «Actualizar ahora», «Más tarde» y «Novedades», progreso de la descarga y
+  una insignia en Sistema mientras haya una pendiente.
+- Efecto genio más fluido: el compositor del sistema ejecuta toda la animación
+  a la frecuencia del monitor y ya no se salta sus primeros fotogramas.
+- Corregido: la sección Dock de Ajustes no dejaba bajar hasta las últimas opciones.
+- Corregido: abrir Ajustes dos veces abría dos ventanas; ahora trae al frente la abierta.
+
 ## [0.1.1]
 
 ### English

@@ -41,5 +41,15 @@
   "resetHint": "Vuelve al aspecto y comportamiento de fábrica. Tus apps fijadas se mantienen.",
   "resetConfirmHint": "Pulsa otra vez para confirmar.",
   "resetButton": "Restablecer",
-  "resetConfirm": "Confirmar"
+  "resetConfirm": "Confirmar",
+  "updateBannerTitle": "Muelle {version} ya está disponible",
+  "updateBannerBody": "Trae mejoras y correcciones. Se instala en unos segundos y el dock vuelve solo.",
+  "updateNow": "Actualizar ahora",
+  "updateLater": "Más tarde",
+  "updateRetry": "Reintentar",
+  "updateWhatsNew": "Novedades",
+  "updateDownloading": "Descargando… {percent} %",
+  "updateDownloadingUnknown": "Descargando…",
+  "updateInstallError": "No se pudo instalar la actualización. Revisa la conexión e inténtalo de nuevo.",
+  "updateBadge": "Actualización disponible"
 }

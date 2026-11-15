@@ -41,5 +41,15 @@
   "resetHint": "Back to the out-of-the-box look and behavior. Your pinned apps stay.",
   "resetConfirmHint": "Click again to confirm.",
   "resetButton": "Restore",
-  "resetConfirm": "Confirm"
+  "resetConfirm": "Confirm",
+  "updateBannerTitle": "Muelle {version} is available",
+  "updateBannerBody": "It brings improvements and fixes. It installs in seconds and the dock comes back on its own.",
+  "updateNow": "Update now",
+  "updateLater": "Later",
+  "updateRetry": "Try again",
+  "updateWhatsNew": "What's new",
+  "updateDownloading": "Downloading… {percent}%",
+  "updateDownloadingUnknown": "Downloading…",
+  "updateInstallError": "The update could not be installed. Check your connection and try again.",
+  "updateBadge": "Update available"
 }

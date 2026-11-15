@@ -60,6 +60,9 @@ input:focus-visible {
 .window {
   display: grid;
   grid-template-columns: 200px 1fr;
+  /* One row exactly as tall as the window, so the content scrolls inside it
+     instead of growing past the bottom edge. */
+  grid-template-rows: minmax(0, 1fr);
   height: 100%;
 }
 
@@ -129,6 +132,7 @@ input:focus-visible {
   flex-direction: column;
   background: var(--content);
   min-width: 0;
+  min-height: 0;
 }
 
 .content-title {
@@ -138,8 +142,122 @@ input:focus-visible {
 }
 
 .content-body {
+  flex: 1;
+  min-height: 0;
   padding: 4px 24px 24px;
   overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+/* Software update card, above every section while an update waits. */
+.update {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  column-gap: 12px;
+  margin: 0 24px 14px;
+  padding: 12px 14px;
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accent) 12%, var(--card));
+}
+
+.update-icon {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #fff;
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.update-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.update-title {
+  margin: 0;
+  font-weight: 600;
+}
+
+.update-detail {
+  margin: 2px 0 0;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.update-detail-error {
+  color: #ff453a;
+}
+
+.update-progress {
+  height: 4px;
+  margin-top: 8px;
+  overflow: hidden;
+  border-radius: 2px;
+  background: var(--track);
+}
+
+.update-progress span {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  background: var(--accent);
+  transition: width 0.2s ease;
+}
+
+.update-progress.is-unknown span {
+  animation: update-indeterminate 1.2s ease-in-out infinite;
+}
+
+@keyframes update-indeterminate {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(300%);
+  }
+}
+
+/* Under the text, so a long title never squeezes into several lines. */
+.update-actions {
+  grid-column: 2;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.update-actions .update-link {
+  margin-right: auto;
+}
+
+.update-link {
+  color: var(--accent);
+  font-size: 12px;
+}
+
+.update-link:hover {
+  text-decoration: underline;
+}
+
+.nav-badge {
+  display: grid;
+  place-items: center;
+  min-width: 18px;
+  height: 18px;
+  margin-left: auto;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: #ff3b30;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
 }
 
 .card {
@@ -287,7 +405,12 @@ input:focus-visible {
 
 @media (prefers-reduced-motion: reduce) {
   .toggle,
-  .toggle-knob {
+  .toggle-knob,
+  .update-progress span {
     transition: none;
+  }
+
+  .update-progress.is-unknown span {
+    animation: none;
   }
 }

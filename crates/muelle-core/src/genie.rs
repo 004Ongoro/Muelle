@@ -48,12 +48,14 @@ fn smoothstep(x: f32) -> f32 {
 
 impl Genie {
     /// How far the side edges have bent toward the slot at time `t` (0..=1).
-    fn bend(t: f32) -> f32 {
+    #[must_use]
+    pub fn bend(t: f32) -> f32 {
         smoothstep(t / BEND_END)
     }
 
     /// How far the image has slid into the slot at time `t` (0..=1).
-    fn slide(t: f32) -> f32 {
+    #[must_use]
+    pub fn slide(t: f32) -> f32 {
         let x = ((t - SLIDE_START) / (1.0 - SLIDE_START)).clamp(0.0, 1.0);
         // Accelerating, like something being pulled in.
         x * x

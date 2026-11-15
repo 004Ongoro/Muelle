@@ -16,6 +16,9 @@ muelle-shell.workspace = true
 serde.workspace = true
 tauri = { version = "2", features = [] }
 tauri-plugin-updater = "2"
+# A second launch (dock menu, Start menu) focuses the open window instead of
+# opening another one that would save the same settings file.
+tauri-plugin-single-instance = "2"
 # `generate_context!` emits serde_json values for plugin settings.
 serde_json = "1"
 

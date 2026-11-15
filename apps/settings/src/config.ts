@@ -30,6 +30,13 @@ export const defaultConfig = () => invoke<Config>("default_config");
 export const saveConfig = (config: Config) => invoke<Config>("set_config", { config });
 export const getAutostart = () => invoke<boolean>("get_autostart");
 export const setAutostart = (enabled: boolean) => invoke<void>("set_autostart", { enabled });
+export interface UpdateInfo {
+  version: string;
+  /** Release page with the notes, if the manifest has one. */
+  notes: string | null;
+}
+
 /** Resolves to the newer version available, or null when up to date. */
-export const checkUpdate = () => invoke<string | null>("check_update");
+export const checkUpdate = () => invoke<UpdateInfo | null>("check_update");
+export const openReleaseNotes = (url: string) => invoke<void>("open_release_notes", { url });
 export const installUpdate = () => invoke<void>("install_update");

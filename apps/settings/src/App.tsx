@@ -1,10 +1,12 @@
 import { getVersion } from "@tauri-apps/api/app";
+import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   type ActiveAppClick,
   type Config,
   type Language,
+  type UpdateInfo,
   ICON_SIZE,
   MAX_MAGNIFIED_SIZE,
   checkUpdate,
@@ -12,10 +14,12 @@ import {
   getAutostart,
   installUpdate,
   loadConfig,
+  openReleaseNotes,
   saveConfig,
   setAutostart,
 } from "./config";
 import { Card, Row, Segmented, Slider, Toggle } from "./controls";
+import { UpdateBanner } from "./UpdateBanner";
 import en from "./i18n/en.json";
 import es from "./i18n/es.json";
 
@@ -23,12 +27,24 @@ type Section = "dock" | "system";
 type UpdateState =
   | { kind: "checking" }
   | { kind: "current" }
-  | { kind: "available"; version: string }
-  | { kind: "installing" }
+  | { kind: "available"; info: UpdateInfo }
+  | { kind: "installing"; info: UpdateInfo; progress: number | null }
+  | { kind: "installFailed"; info: UpdateInfo }
   | { kind: "error" };
 
-const toUpdateState = (found: string | null): UpdateState =>
-  found ? { kind: "available", version: found } : { kind: "current" };
+const toUpdateState = (found: UpdateInfo | null): UpdateState =>
+  found ? { kind: "available", info: found } : { kind: "current" };
+
+/** An update is waiting for the user: the banner and the badge show. */
+const pendingUpdate = (state: UpdateState): UpdateInfo | null =>
+  state.kind === "available" || state.kind === "installing" || state.kind === "installFailed"
+    ? state.info
+    : null;
+
+interface ProgressEvent {
+  downloaded: number;
+  total: number | null;
+}
 type Texts = typeof es;
 
 /** Dragging a slider saves at most this often; the dock redraws on each save. */
@@ -50,8 +66,11 @@ export function App() {
   const [version, setVersion] = useState("");
   const [updateState, setUpdateState] = useState<UpdateState>({ kind: "checking" });
   const [confirmingReset, setConfirmingReset] = useState(false);
+  /** "Later" hides the banner until Settings is opened again. */
+  const [bannerDismissed, setBannerDismissed] = useState(false);
   const pending = useRef<Config | null>(null);
   const timer = useRef<number | undefined>(undefined);
+  const resetTimer = useRef<number | undefined>(undefined);
 
   useEffect(() => {
     let alive = true;
@@ -69,9 +88,15 @@ export function App() {
     checkUpdate()
       .then((found) => alive && setUpdateState(toUpdateState(found)))
       .catch(() => alive && setUpdateState({ kind: "error" }));
+    const progress = listen<ProgressEvent>("update-progress", ({ payload }) => {
+      const share = payload.total ? Math.min(payload.downloaded / payload.total, 1) : null;
+      setUpdateState((state) => (state.kind === "installing" ? { ...state, progress: share } : state));
+    });
     return () => {
       alive = false;
       window.clearTimeout(timer.current);
+      window.clearTimeout(resetTimer.current);
+      progress.then((unlisten) => unlisten()).catch(() => {});
     };
   }, []);
 
@@ -112,10 +137,14 @@ export function App() {
       .catch(() => setUpdateState({ kind: "error" }));
   }, []);
 
-  const install = useCallback(() => {
-    setUpdateState({ kind: "installing" });
+  const install = useCallback((info: UpdateInfo) => {
+    setUpdateState({ kind: "installing", info, progress: null });
     // On success the installer replaces this app and this process exits.
-    installUpdate().catch(() => setUpdateState({ kind: "error" }));
+    installUpdate().catch(() => setUpdateState({ kind: "installFailed", info }));
+  }, []);
+
+  const showNotes = useCallback((info: UpdateInfo) => {
+    if (info.notes) openReleaseNotes(info.notes).catch(() => {});
   }, []);
 
   // Two clicks: the first arms the button, the second resets. Pinned and
@@ -123,7 +152,7 @@ export function App() {
   const reset = useCallback(() => {
     if (!confirmingReset) {
       setConfirmingReset(true);
-      window.setTimeout(() => setConfirmingReset(false), RESET_CONFIRM_MS);
+      resetTimer.current = window.setTimeout(() => setConfirmingReset(false), RESET_CONFIRM_MS);
       return;
     }
     setConfirmingReset(false);
@@ -135,6 +164,10 @@ export function App() {
   if (!config) return <div className="window" />;
   const t = textsFor(config.language);
   const appWindow = getCurrentWindow();
+  const waiting = pendingUpdate(updateState);
+  // An update the user asked for keeps its banner even after "Later".
+  const showBanner =
+    waiting !== null && (!bannerDismissed || updateState.kind !== "available");
 
   return (
     <div className="window">
@@ -158,7 +191,12 @@ export function App() {
           <NavItem active={section === "dock"} onSelect={() => setSection("dock")} glyph="▭">
             {t.dock}
           </NavItem>
-          <NavItem active={section === "system"} onSelect={() => setSection("system")} glyph="⚙">
+          <NavItem
+            active={section === "system"}
+            onSelect={() => setSection("system")}
+            glyph="⚙"
+            badge={waiting ? t.updateBadge : undefined}
+          >
             {t.system}
           </NavItem>
         </nav>
@@ -168,6 +206,18 @@ export function App() {
         <header className="content-title" data-tauri-drag-region>
           {section === "dock" ? t.dock : t.system}
         </header>
+        {showBanner && waiting ? (
+          <UpdateBanner
+            t={t}
+            info={waiting}
+            progress={updateState.kind === "installing" ? updateState.progress : null}
+            installing={updateState.kind === "installing"}
+            failed={updateState.kind === "installFailed"}
+            onInstall={() => install(waiting)}
+            onLater={() => setBannerDismissed(true)}
+            onNotes={() => showNotes(waiting)}
+          />
+        ) : null}
         <div className="content-body">
           {section === "dock" ? (
             <>
@@ -291,8 +341,8 @@ export function App() {
             </Card>
             <Card>
               <Row label={t.updates} hint={updateHint(t, updateState, version)}>
-                {updateState.kind === "available" ? (
-                  <button type="button" className="push push-primary" onClick={install}>
+                {waiting && updateState.kind !== "installing" ? (
+                  <button type="button" className="push push-primary" onClick={() => install(waiting)}>
                     {t.updatesInstall}
                   </button>
                 ) : (
@@ -338,9 +388,11 @@ function updateHint(t: Texts, state: UpdateState, version: string): string {
     case "current":
       return t.updatesCurrent.replace("{version}", version);
     case "available":
-      return t.updatesAvailable.replace("{version}", state.version);
+      return t.updatesAvailable.replace("{version}", state.info.version);
     case "installing":
       return t.updatesInstalling;
+    case "installFailed":
+      return t.updateInstallError;
     case "error":
       return t.updatesError;
   }
@@ -350,10 +402,12 @@ interface NavItemProps {
   active: boolean;
   glyph: string;
   onSelect: () => void;
+  /** Accessible text of a red badge, as macOS shows for a pending update. */
+  badge?: string;
   children: string;
 }
 
-function NavItem({ active, glyph, onSelect, children }: NavItemProps) {
+function NavItem({ active, glyph, onSelect, badge, children }: NavItemProps) {
   return (
     <button
       type="button"
@@ -365,6 +419,11 @@ function NavItem({ active, glyph, onSelect, children }: NavItemProps) {
         {glyph}
       </span>
       {children}
+      {badge ? (
+        <span className="nav-badge" role="img" aria-label={badge}>
+          1
+        </span>
+      ) : null}
     </button>
   );
 }

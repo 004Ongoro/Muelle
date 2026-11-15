@@ -10,8 +10,15 @@
 //! 2. a frame later that rectangle is copied from the screen: a snapshot, as
 //!    macOS also uses for its genie;
 //! 3. the snapshot becomes one composition surface shared by thin horizontal
-//!    strips (plain composition visuals), placed every frame along the genie
-//!    curves (`muelle_core::genie`).
+//!    strips (plain composition visuals) that follow the genie curves
+//!    (`muelle_core::genie`).
+//!
+//! The dock does not move the strips itself. Each strip gets two expression
+//! animations (offset and scale) that read two shared values, `bend` and
+//! `shift`, and those two are keyframe animations: the system compositor runs
+//! the whole flight on its own thread at the display's refresh rate. Placing
+//! ~300 strips from the UI thread every frame was measured at 8-10 ms a frame
+//! and made the compositor skip every other refresh.
 //!
 //! To restore, the same strips play backwards from a quarter-size copy of that
 //! snapshot (a [`Snapshot`], kept while the window is minimized), and the real
@@ -32,11 +39,12 @@ use std::{
 };
 
 use anyhow::Result;
-use muelle_core::genie::{Edges, Genie, Strip};
+use muelle_core::genie::{Edges, Genie};
 use muelle_shell::{icons::IconImage, screen};
 use windows::{
+    Foundation::TimeSpan,
     UI::Composition::{
-        CompositionStretch, CompositionSurfaceBrush, ContainerVisual, Desktop::DesktopWindowTarget,
+        CompositionPropertySet, CompositionStretch, ContainerVisual, Desktop::DesktopWindowTarget,
         SpriteVisual,
     },
     Win32::{
@@ -53,9 +61,9 @@ use windows::{
             WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
         },
     },
-    core::{Interface, w},
+    core::{HSTRING, Interface, h, w},
 };
-use windows_numerics::{Matrix3x2, Vector2, Vector3};
+use windows_numerics::{Matrix3x2, Vector2};
 
 use crate::gfx::Gfx;
 
@@ -63,6 +71,13 @@ const DURATION_SECONDS: f32 = 0.5;
 /// Screen rows per strip: the edge of the funnel steps by at most a few pixels.
 const STRIP_ROWS: u32 = 3;
 const MAX_STRIPS: u32 = 400;
+/// Samples of the bend and slide curves handed to the compositor, which
+/// interpolates between them at the display's refresh rate.
+const KEYFRAMES: u32 = 30;
+/// Extra source rows each strip draws below itself. Strips sit at fractional
+/// positions while they fly; overlapping the next one (same pixels) leaves no
+/// seam between their antialiased edges.
+const OVERLAP_ROWS: f32 = 1.0;
 /// Frames the thumbnail stays up before the screen is copied, so DWM has
 /// certainly presented it.
 const FRAMES_BEFORE_SNAPSHOT: u32 = 2;
@@ -91,28 +106,21 @@ impl Snapshot {
 
 struct Piece {
     visual: SpriteVisual,
-    brush: CompositionSurfaceBrush,
     /// First source row and row count, in snapshot pixels.
     top: f32,
     rows: f32,
-    /// Last placement applied (`None` = hidden), to skip redundant calls.
-    shown: Option<[i32; 4]>,
 }
 
 enum Phase {
     /// The stand-in thumbnail is on screen; counting frames until the snapshot.
-    Standing {
-        thumbnail: isize,
-        frames: u32,
-    },
+    Standing { thumbnail: isize, frames: u32 },
     Flying {
         start: Instant,
-        pieces: Vec<Piece>,
+        /// Kept alive: the strips' animations read it.
+        _drive: CompositionPropertySet,
     },
     /// A restore has reached full size and waits for the real window.
-    Settling {
-        until: Instant,
-    },
+    Settling { until: Instant },
 }
 
 pub struct Flight {
@@ -126,15 +134,13 @@ pub struct Flight {
     origin: (i32, i32),
     genie: Genie,
     phase: Phase,
-    /// Scratch buffer reused every frame.
-    strips: Vec<Strip>,
-    /// Width of the surface the strips sample, in its own pixels.
-    source_width: f32,
     /// Out of the dock instead of into it.
     restoring: bool,
     /// The real window still has to be restored (restore flights only).
     restore_pending: bool,
-    snapshot: Option<Snapshot>,
+    /// The full-size screen copy of a minimize, reduced only once the flight
+    /// is over so that work stays out of the take-off.
+    captured: Option<(IconImage, RECT)>,
 }
 
 unsafe extern "system" fn overlay_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LRESULT {
@@ -261,34 +267,120 @@ fn cut(
     let children = root.Children()?;
     (0..count)
         .map(|index| {
+            let (top, rows) = (row(index), row(index + 1) - row(index));
             let brush = compositor.CreateSurfaceBrushWithSurface(&surface)?;
             brush.SetStretch(CompositionStretch::None)?;
             brush.SetHorizontalAlignmentRatio(0.0)?;
             brush.SetVerticalAlignmentRatio(0.0)?;
+            // Bring this strip's first row to the top of the visual.
+            brush.SetTransformMatrix(Matrix3x2::translation(0.0, -top))?;
+            // The visual has the strip's natural size; its animated scale
+            // squeezes it into place.
             let visual = compositor.CreateSpriteVisual()?;
+            visual.SetSize(Vector2 {
+                X: image.width as f32,
+                Y: rows + OVERLAP_ROWS,
+            })?;
             visual.SetBrush(&brush)?;
-            visual.SetIsVisible(false)?;
             children.InsertAtTop(&visual)?;
-            Ok(Piece {
-                visual,
-                brush,
-                top: row(index),
-                rows: row(index + 1) - row(index),
-                shown: None,
-            })
+            Ok(Piece { visual, top, rows })
         })
         .collect()
 }
 
-fn blank_strips(count: usize) -> Vec<Strip> {
-    vec![
-        Strip {
-            source_top: 0.0,
-            source_bottom: 0.0,
-            target: None,
-        };
-        count
-    ]
+/// Hands the flight to the compositor: every strip follows `genie` for
+/// `DURATION_SECONDS`, into the slot or (`reverse`) out of it.
+///
+/// The expressions are `Genie::frame` written for the compositor: a strip's
+/// top is its resting row plus `shift`, its bottom stops at the slot, and its
+/// sides follow the cosine funnel scaled by `bend`.
+fn fly(
+    gfx: &Gfx,
+    genie: &Genie,
+    pieces: &[Piece],
+    image: (f32, f32),
+    reverse: bool,
+) -> Result<CompositionPropertySet> {
+    let compositor = &gfx.compositor;
+    let (window, slot) = (genie.window, genie.slot);
+    let travel = (slot.bottom - window.top).max(0.0);
+    let at = |progress: f32| if reverse { 1.0 - progress } else { progress };
+
+    let drive = compositor.CreatePropertySet()?;
+    drive.InsertScalar(h!("bend"), Genie::bend(at(0.0)))?;
+    drive.InsertScalar(h!("shift"), Genie::slide(at(0.0)) * travel)?;
+
+    // How far along the funnel the middle of the strip is, eased by a cosine.
+    let curve = format!(
+        "((1 - Cos(3.14159265 * Clamp(((y0 + Min(y1, {bottom:.3} - d.shift)) * 0.5 + d.shift - ({top:.3})) / {span:.3}, 0, 1))) * 0.5 * d.bend)",
+        bottom = slot.bottom,
+        top = window.top,
+        span = (slot.top - window.top).max(1.0),
+    );
+    let offset = format!(
+        "Vector3(({left:.3}) + ({shrink:.3}) * {curve}, y0 + d.shift, 0)",
+        left = window.left,
+        shrink = slot.left - window.left,
+    );
+    let scale = format!(
+        "Vector3((({width:.3}) + ({narrow:.3}) * {curve}) / {source:.3}, Max(Min(y1, {bottom:.3} - d.shift) - y0, 0) / rows, 1)",
+        width = window.right - window.left,
+        narrow = (slot.right - slot.left) - (window.right - window.left),
+        source = image.0,
+        bottom = slot.bottom,
+    );
+    let offset = compositor.CreateExpressionAnimationWithExpression(&HSTRING::from(offset))?;
+    let scale = compositor.CreateExpressionAnimationWithExpression(&HSTRING::from(scale))?;
+    offset.SetReferenceParameter(h!("d"), &drive)?;
+    scale.SetReferenceParameter(h!("d"), &drive)?;
+
+    // Screen rows per source row.
+    let stretch = (window.bottom - window.top) / image.1;
+    for piece in pieces {
+        let y0 = window.top + piece.top * stretch;
+        let y1 = y0 + piece.rows * stretch;
+        // Each start takes a copy of the animation with these values.
+        offset.SetScalarParameter(h!("y0"), y0)?;
+        offset.SetScalarParameter(h!("y1"), y1)?;
+        scale.SetScalarParameter(h!("y0"), y0)?;
+        scale.SetScalarParameter(h!("y1"), y1)?;
+        scale.SetScalarParameter(h!("rows"), piece.rows)?;
+        piece.visual.StartAnimation(h!("Offset"), &offset)?;
+        piece.visual.StartAnimation(h!("Scale"), &scale)?;
+    }
+
+    // Last, so every strip is already listening when the values start moving.
+    let linear = compositor.CreateLinearEasingFunction()?;
+    let duration = TimeSpan {
+        Duration: (DURATION_SECONDS * 1e7) as i64,
+    };
+    let animate = |name: &HSTRING, curve: fn(f32) -> f32, amount: f32| -> Result<()> {
+        let animation = compositor.CreateScalarKeyFrameAnimation()?;
+        animation.SetDuration(duration)?;
+        for step in 0..=KEYFRAMES {
+            let progress = step as f32 / KEYFRAMES as f32;
+            animation.InsertKeyFrameWithEasingFunction(
+                progress,
+                curve(at(progress)) * amount,
+                &linear,
+            )?;
+        }
+        drive.StartAnimation(name, &animation)?;
+        Ok(())
+    };
+    animate(h!("bend"), Genie::bend, 1.0)?;
+    animate(h!("shift"), Genie::slide, travel)?;
+    Ok(drive)
+}
+
+/// Nothing is drawn below the slot: strips vanish as they enter it.
+fn clip_at_slot(gfx: &Gfx, root: &ContainerVisual, genie: &Genie, screen: RECT) -> Result<()> {
+    let below = (screen.bottom - screen.top) as f32 - genie.slot.bottom;
+    let clip = gfx
+        .compositor
+        .CreateInsetClipWithInsets(0.0, 0.0, 0.0, below.max(0.0))?;
+    root.SetClip(&clip)?;
+    Ok(())
 }
 
 fn local(rect: RECT, screen: RECT) -> Edges {
@@ -338,25 +430,27 @@ impl Flight {
             let _ = ShowWindow(overlay, SW_SHOWNOACTIVATE);
             thumbnail
         };
+        let genie = Genie {
+            window: local(visible, screen),
+            slot: local(to, screen),
+        };
+        // Without the clip the flight still works; strips would only show a
+        // little below the slot.
+        let _ = clip_at_slot(gfx, &root, &genie, screen);
         Some(Self {
             hwnd,
             overlay,
             _target: target,
             root,
             origin: (screen.left, screen.top),
-            genie: Genie {
-                window: local(visible, screen),
-                slot: local(to, screen),
-            },
+            genie,
             phase: Phase::Standing {
                 thumbnail,
                 frames: 0,
             },
-            strips: Vec::new(),
-            source_width: (visible.right - visible.left) as f32,
             restoring: false,
             restore_pending: false,
-            snapshot: None,
+            captured: None,
         })
     }
 
@@ -376,34 +470,37 @@ impl Flight {
         }
         let (overlay, target, root) = create_overlay(gfx, screen)?;
         let height = (window.bottom - window.top) as u32;
-        let Ok(pieces) = cut(gfx, &root, &snapshot.image, height) else {
+        let genie = Genie {
+            window: local(window, screen),
+            slot: local(slot, screen),
+        };
+        let image = &snapshot.image;
+        let size = (image.width as f32, image.height as f32);
+        let drive = clip_at_slot(gfx, &root, &genie, screen)
+            .and_then(|()| cut(gfx, &root, image, height))
+            .and_then(|pieces| fly(gfx, &genie, &pieces, size, true));
+        let Ok(drive) = drive else {
             // SAFETY: Our own window, destroyed once.
             unsafe {
                 let _ = DestroyWindow(overlay);
             }
             return None;
         };
-        let mut flight = Self {
+        let flight = Self {
             hwnd,
             overlay,
             _target: target,
             root,
             origin: (screen.left, screen.top),
-            genie: Genie {
-                window: local(window, screen),
-                slot: local(slot, screen),
-            },
-            strips: blank_strips(pieces.len()),
+            genie,
             phase: Phase::Flying {
                 start: Instant::now(),
-                pieces,
+                _drive: drive,
             },
-            source_width: snapshot.image.width as f32,
             restoring: true,
             restore_pending: true,
-            snapshot: None,
+            captured: None,
         };
-        let _ = flight.place(1.0);
         // SAFETY: Our own live window.
         unsafe {
             let _ = ShowWindow(flight.overlay, SW_SHOWNOACTIVATE);
@@ -420,12 +517,15 @@ impl Flight {
                     return true;
                 }
                 let thumbnail = *thumbnail;
-                let Ok(pieces) = self.take_snapshot(gfx) else {
+                let Ok(drive) = self.take_off(gfx) else {
                     return false;
                 };
-                self.strips = blank_strips(pieces.len());
-                self.phase = Phase::Flying { start: now, pieces };
-                let _ = self.place(0.0);
+                // The clock starts once the strips are up: copying the screen
+                // takes tens of milliseconds that must not eat the animation.
+                self.phase = Phase::Flying {
+                    start: Instant::now(),
+                    _drive: drive,
+                };
                 // The strips now show the same image: the stand-in can go.
                 // SAFETY: `thumbnail` came from DwmRegisterThumbnail and is released once.
                 unsafe {
@@ -433,19 +533,19 @@ impl Flight {
                 }
                 true
             }
+            // The compositor is flying the strips; only the end is ours.
             Phase::Flying { start, .. } => {
-                let t = now.duration_since(*start).as_secs_f32() / DURATION_SECONDS;
-                if !self.restoring {
-                    return t < 1.0 && self.place(t).is_ok();
-                }
+                let t = now.saturating_duration_since(*start).as_secs_f32() / DURATION_SECONDS;
                 if t < 1.0 {
-                    return self.place(1.0 - t).is_ok();
+                    return true;
                 }
-                let arrived = self.place(0.0).is_ok();
+                if !self.restoring {
+                    return false;
+                }
                 self.phase = Phase::Settling {
                     until: now + SETTLE,
                 };
-                arrived
+                true
             }
             Phase::Settling { until } => now < *until,
         }
@@ -461,7 +561,10 @@ impl Flight {
     /// The snapshot of a window that has just been minimized, to restore it
     /// with the genie later.
     pub fn take_snapshot_for_restore(&mut self) -> Option<Snapshot> {
-        self.snapshot.take()
+        self.captured.take().map(|(image, window)| Snapshot {
+            image: halved(&image),
+            window,
+        })
     }
 
     /// Opacity (0..=255) of the dock's own thumbnail for this window: it
@@ -470,7 +573,7 @@ impl Flight {
         let Phase::Flying { start, .. } = &self.phase else {
             return 0;
         };
-        let elapsed = now.duration_since(*start).as_secs_f32() / DURATION_SECONDS;
+        let elapsed = now.saturating_duration_since(*start).as_secs_f32() / DURATION_SECONDS;
         let t = if self.restoring {
             1.0 - elapsed
         } else {
@@ -479,8 +582,9 @@ impl Flight {
         (((t - LANDING_START) / (1.0 - LANDING_START)).clamp(0.0, 1.0) * 255.0) as u8
     }
 
-    /// Copies the window's rectangle from the screen and cuts it into strips.
-    fn take_snapshot(&mut self, gfx: &Gfx) -> Result<Vec<Piece>> {
+    /// Copies the window's rectangle from the screen, cuts it into strips and
+    /// starts them flying.
+    fn take_off(&mut self, gfx: &Gfx) -> Result<CompositionPropertySet> {
         let edges = self.genie.window;
         let window = RECT {
             left: edges.left as i32 + self.origin.0,
@@ -491,68 +595,10 @@ impl Flight {
         let image =
             screen::capture(window).ok_or_else(|| anyhow::anyhow!("screen capture failed"))?;
         let pieces = cut(gfx, &self.root, &image, image.height)?;
-        self.snapshot = Some(Snapshot {
-            image: halved(&image),
-            window,
-        });
-        Ok(pieces)
-    }
-
-    fn place(&mut self, t: f32) -> Result<()> {
-        let Phase::Flying { pieces, .. } = &mut self.phase else {
-            return Ok(());
-        };
-        let source_width = self.source_width;
-        self.genie.frame(t, &mut self.strips);
-        for (piece, strip) in pieces.iter_mut().zip(&self.strips) {
-            // Whole pixels, so neighbouring strips meet without seams.
-            let target = strip
-                .target
-                .map(|edges| {
-                    [
-                        edges.left.round() as i32,
-                        edges.top.round() as i32,
-                        edges.right.round() as i32,
-                        edges.bottom.round() as i32,
-                    ]
-                })
-                .filter(|[left, top, right, bottom]| right > left && bottom > top);
-            if piece.shown == target {
-                continue;
-            }
-            let Some([left, top, right, bottom]) = target else {
-                piece.visual.SetIsVisible(false)?;
-                piece.shown = None;
-                continue;
-            };
-            if piece.shown.is_none() {
-                piece.visual.SetIsVisible(true)?;
-            }
-            piece.shown = target;
-
-            let (width, height) = ((right - left) as f32, (bottom - top) as f32);
-            piece.visual.SetOffset(Vector3 {
-                X: left as f32,
-                Y: top as f32,
-                Z: 0.0,
-            })?;
-            piece.visual.SetSize(Vector2 {
-                X: width,
-                Y: height,
-            })?;
-            // Squeeze the full snapshot width into the strip and bring this
-            // strip's first row to the top of the visual.
-            let (scale_x, scale_y) = (width / source_width, height / piece.rows);
-            piece.brush.SetTransformMatrix(Matrix3x2 {
-                M11: scale_x,
-                M12: 0.0,
-                M21: 0.0,
-                M22: scale_y,
-                M31: 0.0,
-                M32: -piece.top * scale_y,
-            })?;
-        }
-        Ok(())
+        let size = (image.width as f32, image.height as f32);
+        let drive = fly(gfx, &self.genie, &pieces, size, false)?;
+        self.captured = Some((image, window));
+        Ok(drive)
     }
 }
 
