@@ -101,7 +101,12 @@
   inset: 25% 10%;
   z-index: -1;
   border-radius: 50%;
-  background: radial-gradient(closest-side, rgb(249 124 3 / 0.28), rgb(10 132 255 / 0.12), transparent);
+  background: radial-gradient(
+    closest-side,
+    rgb(249 124 3 / 0.28),
+    rgb(10 132 255 / 0.12),
+    transparent
+  );
   filter: blur(30px);
 }
 

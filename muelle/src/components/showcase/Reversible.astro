@@ -27,19 +27,31 @@ import "@/styles/showcase.css";
     </div>
 
     <div class="flip-desk" data-state="off" aria-live="polite">
-      <Image src={wallpaper} alt="" class="flip-wall" widths={[640, 1280]} sizes="(min-width: 1024px) 900px, 100vw" />
+      <Image
+        src={wallpaper}
+        alt=""
+        class="flip-wall"
+        widths={[640, 1280]}
+        sizes="(min-width: 1024px) 900px, 100vw"
+      />
 
       <div class="flip-menubar" aria-hidden="true">
         <b>Muelle</b>
         <span class="flip-menubar-status">
           <MenuBarStatus />
-          <span class="hidden sm:inline" data-date>Fri, Nov 14</span>
-          <span class="tabular-nums" data-clock>9:41</span>
+          <span class="hidden sm:inline" data-date>
+            Fri, Nov 14
+          </span>
+          <span class="tabular-nums" data-clock>
+            9:41
+          </span>
         </span>
       </div>
 
       <div class="flip-dock" aria-hidden="true">
-        {previewIcons.map((icon) => <Image src={icon} alt="" width={96} height={96} />)}
+        {previewIcons.map((icon) => (
+          <Image src={icon} alt="" width={96} height={96} />
+        ))}
       </div>
 
       <div class="flip-taskbar" aria-hidden="true">
@@ -50,27 +62,31 @@ import "@/styles/showcase.css";
             <rect x="2" y="12.5" width="9.5" height="9.5" rx="1" />
             <rect x="12.5" y="12.5" width="9.5" height="9.5" rx="1" />
           </svg>
-          {taskbarIcons.map((icon) => <Image src={icon} alt="" width={64} height={64} />)}
+          {taskbarIcons.map((icon) => (
+            <Image src={icon} alt="" width={64} height={64} />
+          ))}
         </span>
-        <span class="flip-taskbar-clock tabular-nums" data-clock>9:41</span>
+        <span class="flip-taskbar-clock tabular-nums" data-clock>
+          9:41
+        </span>
       </div>
 
-      <p class="sr-only" data-flip-status>The Windows taskbar is showing.</p>
+      <p class="sr-only" data-flip-status>
+        The Windows taskbar is showing.
+      </p>
     </div>
   </div>
 
   <ul class="facts">
-    {
-      safetyFacts.map(({ title, body }, index) => (
-        <li data-r>
-          <span class="facts-mark" aria-hidden="true">
-            {index + 1}
-          </span>
-          <b>{title}</b>
-          <p>{body}</p>
-        </li>
-      ))
-    }
+    {safetyFacts.map(({ title, body }, index) => (
+      <li data-r>
+        <span class="facts-mark" aria-hidden="true">
+          {index + 1}
+        </span>
+        <b>{title}</b>
+        <p>{body}</p>
+      </li>
+    ))}
   </ul>
 </Section>
 
@@ -92,7 +108,9 @@ import "@/styles/showcase.css";
       toggle.setAttribute("aria-checked", String(on));
       desk.dataset.state = on ? "on" : "off";
       if (status) {
-        status.textContent = on ? "Muelle is running: dock and menu bar." : "The Windows taskbar is showing.";
+        status.textContent = on
+          ? "Muelle is running: dock and menu bar."
+          : "The Windows taskbar is showing.";
       }
     };
 
