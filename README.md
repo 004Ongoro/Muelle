@@ -15,6 +15,11 @@ development.
 
 <img width="1000" height="243" alt="ezgif-2421a892c23dc19b" src="https://github.com/user-attachments/assets/83d43043-c6a2-469f-bb87-053e5be868f1" />
 
+
+| Auto-hiding Dock and Menu Bar | Genie Effect on Minimize |
+|---|---|
+| ![GIF showing the Dock and Menu Bar automatically hiding and reappearing](https://github.com/user-attachments/assets/7127c478-aada-49e4-9813-7b578fef0d63) | ![GIF showing a window minimizing into the Dock with the Genie effect](https://github.com/user-attachments/assets/171e14c4-4a35-4912-9dc9-08bf4222744d) |
+
 ## Features
 
 - Glass-style dock with smooth, cursor-based icon magnification.
