@@ -7,12 +7,13 @@ export function Card({ children }: { children: ReactNode }) {
 interface RowProps {
   label: string;
   hint?: string;
+  nested?: boolean;
   children: ReactNode;
 }
 
-export function Row({ label, hint, children }: RowProps) {
+export function Row({ label, hint, nested = false, children }: RowProps) {
   return (
-    <div className="row">
+    <div className={nested ? "row row-nested" : "row"}>
       <div className="row-text">
         <span className="row-label">{label}</span>
         {hint ? <span className="row-hint">{hint}</span> : null}

@@ -240,7 +240,7 @@ export function App() {
                     onChange={(magnification) => update({ magnification })}
                   />
                 </Row>
-                <Row label={t.magnifiedSize}>
+                <Row label={t.magnifiedSize} nested>
                   <Slider
                     label={t.magnifiedSize}
                     value={config.magnifiedSize}
@@ -269,7 +269,7 @@ export function App() {
                   />
                 </Row>
                 {config.menuBar ? (
-                  <Row label={t.menuBarAutoHide} hint={t.menuBarAutoHideHint}>
+                  <Row label={t.menuBarAutoHide} hint={t.menuBarAutoHideHint} nested>
                     <Toggle
                       label={t.menuBarAutoHide}
                       checked={config.menuBarAutoHide}

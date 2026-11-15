@@ -104,7 +104,7 @@ export const settingsDefaults = {
   autoHide: false,
   menuBar: true,
   menuBarAutoHide: false,
-  genie: false,
+  genie: true,
   autostart: true,
 } as const;
 

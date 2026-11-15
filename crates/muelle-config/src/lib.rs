@@ -118,7 +118,7 @@ impl Default for Config {
             icon_size: 48,
             magnification: true,
             magnified_size: 77,
-            genie: false,
+            genie: true,
             menu_bar: true,
             menu_bar_auto_hide: false,
             active_app_click: ActiveAppClick::Minimize,

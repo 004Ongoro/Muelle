@@ -280,6 +280,33 @@ input:focus-visible {
   border-top: 1px solid var(--line);
 }
 
+.row-nested {
+  position: relative;
+  padding-left: 34px;
+  background: var(--hover);
+}
+
+.row-nested::before,
+.row-nested::after {
+  position: absolute;
+  content: "";
+  border-color: var(--line);
+}
+
+.row-nested::before {
+  top: 0;
+  bottom: 50%;
+  left: 21px;
+  border-left: 1px solid;
+}
+
+.row-nested::after {
+  top: 50%;
+  left: 21px;
+  width: 10px;
+  border-top: 1px solid;
+}
+
 .row-text {
   display: flex;
   flex-direction: column;
