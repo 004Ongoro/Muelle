@@ -6,6 +6,22 @@ copies the section of the version being published into the GitHub release.
 Cada versión lista sus cambios en inglés y en español. El flujo de publicación
 copia la sección de la versión que se publica a la release de GitHub.
 
+## [0.1.4]
+
+### English
+
+- Maintenance release: align Genie default documentation and tests with the
+  shipped setting.
+- Website: add an Open Graph preview image and document the observed idle
+  memory reading.
+
+### Español
+
+- Versión de mantenimiento: alinear la documentación y las pruebas del efecto
+  Genio con el ajuste publicado.
+- Web: añadir una imagen de vista previa Open Graph y documentar la lectura
+  observada de memoria en reposo.
+
 ## [0.1.2]
 
 ### English
