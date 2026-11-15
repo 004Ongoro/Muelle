@@ -45,7 +45,7 @@ pub struct Config {
     pub magnification: bool,
     /// Side of the icon under the cursor, in logical pixels.
     pub magnified_size: u32,
-    /// Genie effect when minimizing. Off by default: while it is on, the dock
+    /// Genie effect when minimizing. On by default; while enabled, the dock
     /// turns off the system's own window transitions (see plan, "Efecto genio").
     pub genie: bool,
     /// macOS-style bar across the top with the clock and status items.
@@ -277,8 +277,8 @@ mod tests {
     }
 
     #[test]
-    fn genie_should_be_off_by_default() {
-        assert!(!Config::default().genie);
+    fn genie_should_be_on_by_default() {
+        assert!(Config::default().genie);
     }
 
     #[test]

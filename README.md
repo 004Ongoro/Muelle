@@ -33,9 +33,18 @@ Smooth magnification, live window previews, and an optional Genie-style minimize
   configurable Genie-style minimize animation.
 - A watchdog restores the Windows taskbar if the dock exits unexpectedly.
 
-The Genie effect is **off by default**. When enabled, Muelle temporarily
-disables Windows window transitions for tracked windows so its minimize
-animation can run; those transitions are restored when Muelle exits.
+The Genie effect is **on by default** and can be turned off in Settings → Dock.
+While enabled, Muelle temporarily disables Windows window transitions for
+tracked windows so its minimize animation can run; those transitions are
+restored when Muelle exits.
+
+## Resource usage
+
+In one idle snapshot, Windows Task Manager showed **3.1 MB** for the grouped
+`muelle (2)` processes. This point-in-time reading can vary by machine and
+session; it excludes Settings and its WebView2 runtime.
+
+![Windows Task Manager showing Muelle at 3.1 MB memory and 0% CPU while idle](assets/screenshots/dock-idle-memory.png)
 
 ## Install
 

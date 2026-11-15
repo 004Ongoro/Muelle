@@ -8,9 +8,8 @@ export const site = {
     "Muelle replaces the Windows 11 taskbar with a glass dock: icons that grow under your cursor and minimized windows as live thumbnails. Free and open source.",
   /** Canonical origin. Must match `site` in astro.config.mjs and the sitemap. */
   url: "https://muellee.vercel.app",
-  /** Path to the social card in `public/`. Empty until the image exists: the
-   * Open Graph tags are then omitted instead of pointing at a 404. */
-  ogImage: "",
+  /** Path to the social card in `public/`. */
+  ogImage: "/og-image.png",
   locale: "en_US",
   repository: "https://github.com/crafter-station/Muelle",
   releases: "https://github.com/crafter-station/Muelle/releases",
