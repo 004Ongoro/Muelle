@@ -38,14 +38,6 @@ While enabled, Muelle temporarily disables Windows window transitions for
 tracked windows so its minimize animation can run; those transitions are
 restored when Muelle exits.
 
-## Resource usage
-
-In one idle snapshot, Windows Task Manager showed **3.1 MB** for the grouped
-`muelle (2)` processes. This point-in-time reading can vary by machine and
-session; it excludes Settings and its WebView2 runtime.
-
-![Windows Task Manager showing Muelle at 3.1 MB memory and 0% CPU while idle](assets/screenshots/dock-idle-memory.png)
-
 ## Install
 
 **[Download Muelle-Setup.exe](https://github.com/crafter-station/Muelle/releases/latest/download/Muelle-Setup.exe)**
@@ -56,16 +48,23 @@ session; it excludes Settings and its WebView2 runtime.
    rights, no wizard, about two seconds.
 2. The installer is not code-signed yet, so Windows SmartScreen may say it
    protected your PC. Choose **More info → Run anyway**.
-3. The dock appears and the Windows taskbar hides. Muelle starts with Windows
-   from then on; turn that off in Settings → System.
+3. Open **Muelle** from the Start menu, then choose **Dock** to
+   personalize the dock and top menu bar.
 
-Open **Muelle** from the Start menu (or right-click the dock → *Muelle
-Settings…*) to change the dock. Settings also checks for updates and installs
-them for you.
+You can also open Settings by right-clicking the dock and choosing *Muelle
+Settings…*. It checks for updates and installs them for you.
 
 **Get the taskbar back:** right-click the dock and choose *Quit Muelle*. To
 remove it completely, go to Windows Settings → Apps → Installed apps → Muelle →
 Uninstall; the taskbar comes back and nothing is left running.
+
+## Resource usage
+
+In one idle snapshot, Windows Task Manager showed **3.1 MB** for the grouped
+`muelle (2)` processes. This point-in-time reading can vary by machine and
+session; it excludes Settings and its WebView2 runtime.
+
+![Windows Task Manager showing Muelle at 3.1 MB memory and 0% CPU while idle](assets/screenshots/dock-idle-memory.png)
 
 ## Try it on Windows
 
