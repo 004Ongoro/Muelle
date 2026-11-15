@@ -3,6 +3,7 @@ import { Image } from "astro:assets";
 import wallpaper from "@/assets/wallpapers/desktop-05.jpg";
 import Section from "@/components/layout/Section.astro";
 import SectionIntro from "@/components/showcase/SectionIntro.astro";
+import MenuBarStatus from "@/components/dock/MenuBarStatus.astro";
 import { previewIcons, safetyFacts, safetyIntro, taskbarIcons } from "@/data/showcase";
 import "@/styles/showcase.css";
 ---
@@ -30,7 +31,11 @@ import "@/styles/showcase.css";
 
       <div class="flip-menubar" aria-hidden="true">
         <b>Muelle</b>
-        <span class="tabular-nums" data-clock>9:41</span>
+        <span class="flip-menubar-status">
+          <MenuBarStatus />
+          <span class="hidden sm:inline" data-date>Fri, Nov 14</span>
+          <span class="tabular-nums" data-clock>9:41</span>
+        </span>
       </div>
 
       <div class="flip-dock" aria-hidden="true">

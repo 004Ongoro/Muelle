@@ -3,6 +3,7 @@ import { Image } from "astro:assets";
 import wallpaper from "@/assets/wallpapers/desktop-02.jpg";
 import Section from "@/components/layout/Section.astro";
 import SectionIntro from "@/components/showcase/SectionIntro.astro";
+import MenuBarStatus from "@/components/dock/MenuBarStatus.astro";
 import Icon from "@/components/ui/Icon.astro";
 import {
   customizeIntro,
@@ -171,7 +172,11 @@ const textJson = JSON.stringify(settingsText).replace(/</g, "\\u003c");
       <Image src={wallpaper} alt="" class="preview-wall" widths={[480, 960]} sizes="(min-width: 1024px) 480px, 100vw" />
       <div class="preview-bar" data-preview-bar>
         <b>File Explorer</b>
-        <span class="tabular-nums" data-clock>9:41 AM</span>
+        <span class="preview-bar-status">
+          <MenuBarStatus />
+          <span class="hidden sm:inline" data-date>Fri, Nov 14</span>
+          <span class="tabular-nums" data-clock>9:41 AM</span>
+        </span>
       </div>
       <div class="preview-dock" data-preview-dock>
         {previewIcons.map((icon) => <Image src={icon} alt="" width={128} height={128} />)}
