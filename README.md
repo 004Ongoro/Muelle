@@ -65,7 +65,7 @@ In one idle snapshot, Windows Task Manager showed **3.1 MB** for the grouped
 `muelle (2)` processes. This point-in-time reading can vary by machine and
 session; it excludes Settings and its WebView2 runtime.
 
-<img width="1000" height="334" alt="d5fcaf5e-b0f9-47f3-a194-2cac8176ea5e" src="https://github.com/user-attachments/assets/a00b8242-be33-466a-a9f5-9390fdd8ccee" />
+<img width="1000" height="209" alt="706924247-a00b8242-be33-466a-a9f5-9390fdd8ccee" src="https://github.com/user-attachments/assets/2446de33-9ad9-4fc2-8645-4a264d90b3f4" />
 
 ## Try it on Windows
 
