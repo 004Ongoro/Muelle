@@ -344,25 +344,24 @@ impl Gfx {
                     &gradient,
                 );
 
-                let white = dc.CreateSolidColorBrush(&rgb(1.0, 1.0, 1.0, 0.95), None)?;
-                let grid = size * 0.46;
-                let cell = grid / 3.0;
-                let square = cell * 0.72;
-                let origin = (size - grid) / 2.0 + (cell - square) / 2.0;
-                for row in 0..3 {
-                    for column in 0..3 {
-                        let left = origin + column as f32 * cell;
-                        let top = origin + row as f32 * cell;
-                        dc.FillRoundedRectangle(
-                            &D2D1_ROUNDED_RECT {
-                                rect: D2D_RECT_F {
-                                    left,
-                                    top,
-                                    right: left + square,
-                                    bottom: top + square,
-                                },
-                                radiusX: square * 0.28,
-                                radiusY: square * 0.28,
+                // The Windows logo: four square panes split by a thin gap
+                // (0.85 of 18.5 units in its SVG), on whole pixels so the
+                // edges stay sharp at every icon size.
+                let white = dc.CreateSolidColorBrush(&rgb(1.0, 1.0, 1.0, 0.97), None)?;
+                let logo = (size * 0.44).round();
+                let gap = (logo * 0.046).round().max(1.0);
+                let pane = ((logo - gap) / 2.0).floor();
+                let origin = ((size - (2.0 * pane + gap)) / 2.0).round();
+                for row in 0..2 {
+                    for column in 0..2 {
+                        let left = origin + column as f32 * (pane + gap);
+                        let top = origin + row as f32 * (pane + gap);
+                        dc.FillRectangle(
+                            &D2D_RECT_F {
+                                left,
+                                top,
+                                right: left + pane,
+                                bottom: top + pane,
                             },
                             &white,
                         );

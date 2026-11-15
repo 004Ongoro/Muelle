@@ -146,12 +146,22 @@ def shrink(master: Image.Image, size: int) -> Image.Image:
     return Image.fromarray((out * 255 + 0.5).astype(np.uint8))
 
 
+def variant(size: int, fine: Image.Image, medium: Image.Image, bold: Image.Image) -> Image.Image:
+    """The master that keeps the lotus outline at least about one pixel wide."""
+    if size <= 48:
+        return bold
+    # The dock shows the 256 px image at 60-120 px: with the fine outline
+    # (0.3 px there) the lotus looked blurred and washed out.
+    return medium if size <= 256 else fine
+
+
 def main() -> None:
     fine = draw(stroke=3.2 / 1024, petal_boost=0.0)
+    medium = draw(stroke=13 / 1024, petal_boost=0.07)
     bold = draw(stroke=22 / 1024, petal_boost=0.14)
 
     shrink(fine, 1024).save(BRAND / "muelle-1024.png", optimize=True)
-    frames = [shrink(fine if size > 48 else bold, size) for size in ICO_SIZES]
+    frames = [shrink(variant(size, fine, medium, bold), size) for size in ICO_SIZES]
     frames[-1].save(
         BRAND / "muelle.ico",
         sizes=[(s, s) for s in ICO_SIZES],

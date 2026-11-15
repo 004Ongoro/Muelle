@@ -23,6 +23,8 @@ copia la sección de la versión que se publica a la release de GitHub.
 - Fixed: the menu bar could miss an update and showed no app name until the
   first window switch.
 - Menu bar: the battery shows a charging bolt.
+- The Muelle icon is sharp in the dock (its lotus outline was too thin at dock
+  sizes and looked blurred), and the Start button shows the Windows logo.
 - Settings: options that depend on another fold away under it.
 - Settings → System: "Check for updates automatically" can be turned off; it
   is the only network request Muelle makes. New privacy policy and code signing
@@ -41,6 +43,9 @@ copia la sección de la versión que se publica a la release de GitHub.
 - Corregido: la barra superior podía perder una actualización y no mostraba el
   nombre de la app hasta el primer cambio de ventana.
 - Barra superior: la batería muestra un rayo mientras carga.
+- El icono de Muelle se ve nítido en el dock (el contorno de la flor era
+  demasiado fino a ese tamaño y parecía borroso), y el botón Inicio muestra el
+  logo de Windows.
 - Ajustes: las opciones que dependen de otra se pliegan bajo ella.
 - Ajustes → Sistema: «Buscar actualizaciones automáticamente» se puede
   desactivar; es la única conexión de red de Muelle. Nuevas páginas de política
