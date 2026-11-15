@@ -21,6 +21,16 @@ pub struct Strings {
     pub remove: &'static str,
     pub close_window: &'static str,
     pub settings: &'static str,
+    pub usage_title: &'static str,
+    pub usage_refresh: &'static str,
+    pub usage_refreshing: &'static str,
+    pub usage_sign_in: &'static str,
+    pub usage_unavailable: &'static str,
+    pub usage_loading: &'static str,
+    pub usage_stale: &'static str,
+    pub usage_resets: &'static str,
+    pub usage_updated: &'static str,
+    pub usage_used: &'static str,
 }
 
 const ES: Strings = Strings {
@@ -37,6 +47,16 @@ const ES: Strings = Strings {
     remove: "Quitar",
     close_window: "&Cerrar",
     settings: "&Ajustes de Muelle…",
+    usage_title: "Uso de IA",
+    usage_refresh: "Actualizar",
+    usage_refreshing: "Actualizando…",
+    usage_sign_in: "Inicia sesión",
+    usage_unavailable: "No disponible",
+    usage_loading: "Cargando…",
+    usage_stale: "Sin actualizar",
+    usage_resets: "Reinicia",
+    usage_updated: "Actualizado hace",
+    usage_used: "usado",
 };
 
 const EN: Strings = Strings {
@@ -53,6 +73,16 @@ const EN: Strings = Strings {
     remove: "Remove",
     close_window: "&Close",
     settings: "Muelle &Settings…",
+    usage_title: "AI usage",
+    usage_refresh: "Refresh",
+    usage_refreshing: "Refreshing…",
+    usage_sign_in: "Sign in",
+    usage_unavailable: "Unavailable",
+    usage_loading: "Loading…",
+    usage_stale: "Not updated",
+    usage_resets: "Resets",
+    usage_updated: "Updated",
+    usage_used: "used",
 };
 
 /// 0 = not chosen yet (follow Windows), 1 = Spanish, 2 = English.

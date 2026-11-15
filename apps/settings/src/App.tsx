@@ -3,7 +3,6 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  type ActiveAppClick,
   type Config,
   type Language,
   type UpdateInfo,
@@ -19,11 +18,11 @@ import {
   setAutostart,
 } from "./config";
 import { Card, Row, Segmented, Slider, SubRow, Toggle } from "./controls";
+import { type SectionId, SectionIcon } from "./icons";
 import { UpdateBanner } from "./UpdateBanner";
 import en from "./i18n/en.json";
 import es from "./i18n/es.json";
 
-type Section = "dock" | "system";
 type UpdateState =
   | { kind: "off" }
   | { kind: "checking" }
@@ -62,7 +61,7 @@ function textsFor(language: Language): Texts {
 export function App() {
   const [config, setConfig] = useState<Config | null>(null);
   const [autostart, setAutostartState] = useState(false);
-  const [section, setSection] = useState<Section>("dock");
+  const [section, setSection] = useState<SectionId>("dock");
   const [failed, setFailed] = useState(false);
   const [version, setVersion] = useState("");
   const [updateState, setUpdateState] = useState<UpdateState>({ kind: "checking" });
@@ -190,26 +189,31 @@ export function App() {
             aria-label={t.minimize}
             onClick={() => appWindow.minimize()}
           />
-          <span className="light light-idle" />
+          <button
+            type="button"
+            className="light light-zoom"
+            aria-label={t.zoom}
+            onClick={() => appWindow.toggleMaximize()}
+          />
         </div>
         <nav>
-          <NavItem active={section === "dock"} onSelect={() => setSection("dock")} glyph="▭">
-            {t.dock}
-          </NavItem>
-          <NavItem
-            active={section === "system"}
-            onSelect={() => setSection("system")}
-            glyph="⚙"
-            badge={waiting ? t.updateBadge : undefined}
-          >
-            {t.system}
-          </NavItem>
+          {SECTIONS.map((id) => (
+            <NavItem
+              key={id}
+              section={id}
+              active={section === id}
+              onSelect={() => setSection(id)}
+              badge={id === "system" && waiting ? t.updateBadge : undefined}
+            >
+              {sectionTitle(t, id)}
+            </NavItem>
+          ))}
         </nav>
       </aside>
 
       <main className="content">
         <header className="content-title" data-tauri-drag-region>
-          {section === "dock" ? t.dock : t.system}
+          {sectionTitle(t, section)}
         </header>
         {showBanner && waiting ? (
           <UpdateBanner
@@ -257,7 +261,7 @@ export function App() {
                   />
                 </SubRow>
               </Card>
-              <Card>
+              <Card title={t.groupBehavior}>
                 <Row label={t.autoHide} hint={t.autoHideHint}>
                   <Toggle
                     label={t.autoHide}
@@ -265,33 +269,13 @@ export function App() {
                     onChange={(autoHide) => update({ autoHide })}
                   />
                 </Row>
-                <Row label={t.menuBar} hint={t.menuBarHint}>
+                <Row label={t.bounceOnOpen}>
                   <Toggle
-                    label={t.menuBar}
-                    checked={config.menuBar}
-                    onChange={(menuBar) => update({ menuBar })}
+                    label={t.bounceOnOpen}
+                    checked={config.bounceOnOpen}
+                    onChange={(bounceOnOpen) => update({ bounceOnOpen })}
                   />
                 </Row>
-                <SubRow
-                  label={t.menuBarAutoHide}
-                  hint={t.menuBarAutoHideHint}
-                  open={config.menuBar}
-                >
-                  <Toggle
-                    label={t.menuBarAutoHide}
-                    checked={config.menuBarAutoHide}
-                    onChange={(menuBarAutoHide) => update({ menuBarAutoHide })}
-                  />
-                </SubRow>
-                <Row label={t.genie} hint={t.genieHint}>
-                  <Toggle
-                    label={t.genie}
-                    checked={config.genie}
-                    onChange={(genie) => update({ genie })}
-                  />
-                </Row>
-              </Card>
-              <Card>
                 <Row label={t.showIndicators}>
                   <Toggle
                     label={t.showIndicators}
@@ -306,81 +290,106 @@ export function App() {
                     onChange={(showRecents) => update({ showRecents })}
                   />
                 </Row>
-                <Row label={t.bounceOnOpen}>
+              </Card>
+            </>
+          ) : section === "windows" ? (
+            <>
+              <Card title={t.groupMinimize}>
+                <Row label={t.genie} hint={t.genieHint}>
                   <Toggle
-                    label={t.bounceOnOpen}
-                    checked={config.bounceOnOpen}
-                    onChange={(bounceOnOpen) => update({ bounceOnOpen })}
+                    label={t.genie}
+                    checked={config.genie}
+                    onChange={(genie) => update({ genie })}
                   />
                 </Row>
-                <Row label={t.activeAppClick} hint={t.activeAppClickHint}>
-                  <Segmented<ActiveAppClick>
-                    label={t.activeAppClick}
-                    value={config.activeAppClick}
-                    options={[
-                      { value: "minimize", label: t.activeAppMinimize },
-                      { value: "nothing", label: t.activeAppNothing },
-                    ]}
-                    onChange={(activeAppClick) => update({ activeAppClick })}
+                <Row label={t.showMinimized} hint={t.showMinimizedHint}>
+                  <Toggle
+                    label={t.showMinimized}
+                    checked={config.showMinimized}
+                    onChange={(showMinimized) => update({ showMinimized })}
                   />
                 </Row>
               </Card>
             </>
+          ) : section === "menubar" ? (
+            <Card>
+              <Row label={t.menuBarShow} hint={t.menuBarHint}>
+                <Toggle
+                  label={t.menuBarShow}
+                  checked={config.menuBar}
+                  onChange={(menuBar) => update({ menuBar })}
+                />
+              </Row>
+              <SubRow label={t.menuBarAutoHide} hint={t.menuBarAutoHideHint} open={config.menuBar}>
+                <Toggle
+                  label={t.menuBarAutoHide}
+                  checked={config.menuBarAutoHide}
+                  onChange={(menuBarAutoHide) => update({ menuBarAutoHide })}
+                />
+              </SubRow>
+              <SubRow label={t.aiUsage} hint={t.aiUsageHint} open={config.menuBar}>
+                <Toggle
+                  label={t.aiUsage}
+                  checked={config.aiUsage}
+                  onChange={(aiUsage) => update({ aiUsage })}
+                />
+              </SubRow>
+            </Card>
           ) : (
             <>
-            <Card>
-              <Row label={t.autostart}>
-                <Toggle label={t.autostart} checked={autostart} onChange={changeAutostart} />
-              </Row>
-              <Row label={t.language}>
-                <Segmented<Language>
-                  label={t.language}
-                  value={config.language}
-                  options={[
-                    { value: "auto", label: t.languageAuto },
-                    { value: "es", label: "Español" },
-                    { value: "en", label: "English" },
-                  ]}
-                  onChange={(language) => update({ language })}
-                />
-              </Row>
-            </Card>
-            <Card>
-              <Row label={t.checkUpdates} hint={t.checkUpdatesHint}>
-                <Toggle
-                  label={t.checkUpdates}
-                  checked={config.checkUpdates}
-                  onChange={(checkUpdates) => update({ checkUpdates })}
-                />
-              </Row>
-              <Row label={t.updates} hint={updateHint(t, updateState, version)}>
-                {waiting && updateState.kind !== "installing" ? (
-                  <button type="button" className="push push-primary" onClick={() => install(waiting)}>
-                    {t.updatesInstall}
-                  </button>
-                ) : (
+              <Card>
+                <Row label={t.autostart}>
+                  <Toggle label={t.autostart} checked={autostart} onChange={changeAutostart} />
+                </Row>
+                <Row label={t.language}>
+                  <Segmented<Language>
+                    label={t.language}
+                    value={config.language}
+                    options={[
+                      { value: "auto", label: t.languageAuto },
+                      { value: "es", label: "Español" },
+                      { value: "en", label: "English" },
+                    ]}
+                    onChange={(language) => update({ language })}
+                  />
+                </Row>
+              </Card>
+              <Card title={t.updates}>
+                <Row label={t.checkUpdates} hint={t.checkUpdatesHint}>
+                  <Toggle
+                    label={t.checkUpdates}
+                    checked={config.checkUpdates}
+                    onChange={(checkUpdates) => update({ checkUpdates })}
+                  />
+                </Row>
+                <Row label={t.updatesNow} hint={updateHint(t, updateState, version)}>
+                  {waiting && updateState.kind !== "installing" ? (
+                    <button type="button" className="push push-primary" onClick={() => install(waiting)}>
+                      {t.updatesInstall}
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      className="push"
+                      disabled={updateState.kind === "checking" || updateState.kind === "installing"}
+                      onClick={recheck}
+                    >
+                      {t.updatesCheck}
+                    </button>
+                  )}
+                </Row>
+              </Card>
+              <Card>
+                <Row label={t.reset} hint={confirmingReset ? t.resetConfirmHint : t.resetHint}>
                   <button
                     type="button"
-                    className="push"
-                    disabled={updateState.kind === "checking" || updateState.kind === "installing"}
-                    onClick={recheck}
+                    className={confirmingReset ? "push push-danger" : "push"}
+                    onClick={reset}
                   >
-                    {t.updatesCheck}
+                    {confirmingReset ? t.resetConfirm : t.resetButton}
                   </button>
-                )}
-              </Row>
-            </Card>
-            <Card>
-              <Row label={t.reset} hint={confirmingReset ? t.resetConfirmHint : t.resetHint}>
-                <button
-                  type="button"
-                  className={confirmingReset ? "push push-danger" : "push"}
-                  onClick={reset}
-                >
-                  {confirmingReset ? t.resetConfirm : t.resetButton}
-                </button>
-              </Row>
-            </Card>
+                </Row>
+              </Card>
             </>
           )}
           {failed ? (
@@ -413,16 +422,31 @@ function updateHint(t: Texts, state: UpdateState, version: string): string {
   }
 }
 
+const SECTIONS: readonly SectionId[] = ["dock", "windows", "menubar", "system"];
+
+function sectionTitle(t: Texts, section: SectionId): string {
+  switch (section) {
+    case "dock":
+      return t.dock;
+    case "windows":
+      return t.windows;
+    case "menubar":
+      return t.menuBar;
+    case "system":
+      return t.system;
+  }
+}
+
 interface NavItemProps {
+  section: SectionId;
   active: boolean;
-  glyph: string;
   onSelect: () => void;
   /** Accessible text of a red badge, as macOS shows for a pending update. */
   badge?: string;
   children: string;
 }
 
-function NavItem({ active, glyph, onSelect, badge, children }: NavItemProps) {
+function NavItem({ section, active, onSelect, badge, children }: NavItemProps) {
   return (
     <button
       type="button"
@@ -430,9 +454,7 @@ function NavItem({ active, glyph, onSelect, badge, children }: NavItemProps) {
       aria-current={active ? "page" : undefined}
       onClick={onSelect}
     >
-      <span className="nav-glyph" aria-hidden="true">
-        {glyph}
-      </span>
+      <SectionIcon section={section} />
       {children}
       {badge ? (
         <span className="nav-badge" role="img" aria-label={badge}>

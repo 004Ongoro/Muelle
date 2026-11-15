@@ -48,12 +48,15 @@ pub struct Config {
     /// Genie effect when minimizing. On by default; while enabled, the dock
     /// turns off the system's own window transitions (see plan, "Efecto genio").
     pub genie: bool,
+    /// Minimized windows get a live thumbnail in the right section of the
+    /// dock. Off by default: they go into their app's icon instead.
+    pub show_minimized: bool,
     /// macOS-style bar across the top with the clock and status items.
     pub menu_bar: bool,
     /// Keep the menu bar off screen until the pointer touches the top edge.
     pub menu_bar_auto_hide: bool,
-    /// What clicking the icon of the app already in front does.
-    pub active_app_click: ActiveAppClick,
+    /// Show supported AI providers' plan usage in the menu bar.
+    pub ai_usage: bool,
     /// The dot under apps that have windows open.
     pub show_indicators: bool,
     /// The section of recently used apps that are not pinned.
@@ -64,16 +67,6 @@ pub struct Config {
     /// only network access in Muelle, so it can be turned off.
     pub check_updates: bool,
     pub language: Language,
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum ActiveAppClick {
-    /// As the Windows taskbar does.
-    #[default]
-    Minimize,
-    /// As macOS does.
-    Nothing,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -122,9 +115,10 @@ impl Default for Config {
             magnification: true,
             magnified_size: 77,
             genie: true,
+            show_minimized: false,
             menu_bar: true,
             menu_bar_auto_hide: false,
-            active_app_click: ActiveAppClick::Minimize,
+            ai_usage: true,
             show_indicators: true,
             show_recents: true,
             bounce_on_open: true,
@@ -226,9 +220,19 @@ mod tests {
         fs::write(&path, r#"{"version":1,"iconSize":56}"#).ok();
         let config = load(&path).ok().flatten().unwrap_or_default();
         assert_eq!(config.icon_size, 56);
-        assert_eq!(config.active_app_click, ActiveAppClick::Minimize);
         assert!(config.show_indicators && config.show_recents && config.bounce_on_open);
         assert!(config.check_updates);
+        assert!(config.ai_usage);
+        assert!(!config.show_minimized);
+    }
+
+    #[test]
+    fn load_should_read_show_minimized() {
+        let path = scratch("show-minimized");
+        save(&path, &Config::default()).ok();
+        fs::write(&path, r#"{"showMinimized":true}"#).ok();
+        let config = load(&path).ok().flatten().unwrap_or_default();
+        assert!(config.show_minimized);
     }
 
     #[test]
@@ -250,7 +254,6 @@ mod tests {
         )
         .ok();
         let config = load(&path).ok().flatten().unwrap_or_default();
-        assert_eq!(config.active_app_click, ActiveAppClick::Nothing);
         assert!(!config.show_recents && !config.bounce_on_open);
     }
 

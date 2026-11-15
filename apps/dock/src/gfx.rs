@@ -6,17 +6,21 @@ use muelle_shell::icons::IconImage;
 use windows::{
     Foundation::Size,
     Graphics::DirectX::{DirectXAlphaMode, DirectXPixelFormat},
-    UI::Composition::{
-        CompositionDrawingSurface, CompositionGraphicsDevice, CompositionSurfaceBrush, Compositor,
+    UI::{
+        Color,
+        Composition::{
+            CompositionDrawingSurface, CompositionGraphicsDevice, CompositionSurfaceBrush,
+            Compositor,
+        },
     },
     Win32::{
         Foundation::{HMODULE, POINT},
         Graphics::{
             Direct2D::{
                 Common::{
-                    D2D_RECT_F, D2D_SIZE_U, D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_COLOR_F,
-                    D2D1_FIGURE_BEGIN_FILLED, D2D1_FIGURE_END_CLOSED, D2D1_GRADIENT_STOP,
-                    D2D1_PIXEL_FORMAT,
+                    D2D_RECT_F, D2D_SIZE_U, D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_BEZIER_SEGMENT,
+                    D2D1_COLOR_F, D2D1_FIGURE_BEGIN_FILLED, D2D1_FIGURE_END_CLOSED,
+                    D2D1_GRADIENT_STOP, D2D1_PIXEL_FORMAT,
                 },
                 D2D1_BITMAP_OPTIONS_NONE, D2D1_BITMAP_PROPERTIES1,
                 D2D1_BUFFER_PRECISION_8BPC_UNORM, D2D1_COLOR_INTERPOLATION_MODE_PREMULTIPLIED,
@@ -197,6 +201,159 @@ impl Gfx {
         })
     }
 
+    /// Opaque island silhouette with curved shoulders at the screen edge.
+    pub fn island_mask(
+        &self,
+        width: f32,
+        height: f32,
+        scale: f32,
+    ) -> Result<CompositionSurfaceBrush> {
+        self.draw(width.ceil() as u32, height.ceil() as u32, |dc| {
+            let shoulder = 12.0 * scale;
+            let corner = 22.0 * scale;
+            // SAFETY: The geometry, sink and brush stay alive through the drawing calls.
+            unsafe {
+                let shape = dc.GetFactory()?.CreatePathGeometry()?;
+                let sink = shape.Open()?;
+                sink.BeginFigure(Vector2 { X: 0.0, Y: 0.0 }, D2D1_FIGURE_BEGIN_FILLED);
+                sink.AddLine(Vector2 { X: width, Y: 0.0 });
+                sink.AddBezier(&D2D1_BEZIER_SEGMENT {
+                    point1: Vector2 {
+                        X: width - shoulder,
+                        Y: 0.0,
+                    },
+                    point2: Vector2 {
+                        X: width - shoulder,
+                        Y: shoulder * 0.7,
+                    },
+                    point3: Vector2 {
+                        X: width - shoulder,
+                        Y: shoulder,
+                    },
+                });
+                sink.AddLine(Vector2 {
+                    X: width - shoulder,
+                    Y: height - corner,
+                });
+                sink.AddBezier(&D2D1_BEZIER_SEGMENT {
+                    point1: Vector2 {
+                        X: width - shoulder,
+                        Y: height - corner * 0.35,
+                    },
+                    point2: Vector2 {
+                        X: width - shoulder - corner * 0.35,
+                        Y: height,
+                    },
+                    point3: Vector2 {
+                        X: width - shoulder - corner,
+                        Y: height,
+                    },
+                });
+                sink.AddLine(Vector2 {
+                    X: shoulder + corner,
+                    Y: height,
+                });
+                sink.AddBezier(&D2D1_BEZIER_SEGMENT {
+                    point1: Vector2 {
+                        X: shoulder + corner * 0.35,
+                        Y: height,
+                    },
+                    point2: Vector2 {
+                        X: shoulder,
+                        Y: height - corner * 0.35,
+                    },
+                    point3: Vector2 {
+                        X: shoulder,
+                        Y: height - corner,
+                    },
+                });
+                sink.AddLine(Vector2 {
+                    X: shoulder,
+                    Y: shoulder,
+                });
+                sink.AddBezier(&D2D1_BEZIER_SEGMENT {
+                    point1: Vector2 {
+                        X: shoulder,
+                        Y: shoulder * 0.7,
+                    },
+                    point2: Vector2 {
+                        X: shoulder,
+                        Y: 0.0,
+                    },
+                    point3: Vector2 { X: 0.0, Y: 0.0 },
+                });
+                sink.EndFigure(D2D1_FIGURE_END_CLOSED);
+                sink.Close()?;
+                let white = dc.CreateSolidColorBrush(&WHITE, None)?;
+                dc.FillGeometry(&shape, &white, None);
+            }
+            Ok(())
+        })
+    }
+
+    pub fn usage_ring(
+        &self,
+        used_percent: Option<u8>,
+        scale: f32,
+        accent: Color,
+    ) -> Result<LabelBrush> {
+        let side = (18.0 * scale).round();
+        let center = side / 2.0;
+        let radius = center - 2.0 * scale;
+        let stroke = (2.4 * scale).max(1.0);
+        let brush = self.draw(side as u32, side as u32, |dc| {
+            // SAFETY: Brushes remain alive for the drawing calls.
+            unsafe {
+                let track = dc.CreateSolidColorBrush(&rgb(0.53, 0.56, 0.6, 0.4), None)?;
+                dc.DrawEllipse(
+                    &D2D1_ELLIPSE {
+                        point: Vector2 {
+                            X: center,
+                            Y: center,
+                        },
+                        radiusX: radius,
+                        radiusY: radius,
+                    },
+                    &track,
+                    stroke,
+                    None,
+                );
+                if let Some(percent) = used_percent {
+                    let foreground = dc.CreateSolidColorBrush(
+                        &rgb(
+                            f32::from(accent.R) / 255.0,
+                            f32::from(accent.G) / 255.0,
+                            f32::from(accent.B) / 255.0,
+                            1.0,
+                        ),
+                        None,
+                    )?;
+                    let steps = usize::from(percent) * 36 / 100;
+                    for index in 0..steps {
+                        let start = -std::f32::consts::FRAC_PI_2
+                            + index as f32 * std::f32::consts::TAU / 36.0;
+                        let end = start + std::f32::consts::TAU / 36.0;
+                        let a = Vector2 {
+                            X: center + radius * start.cos(),
+                            Y: center + radius * start.sin(),
+                        };
+                        let b = Vector2 {
+                            X: center + radius * end.cos(),
+                            Y: center + radius * end.sin(),
+                        };
+                        dc.DrawLine(a, b, &foreground, stroke, None);
+                    }
+                }
+            }
+            Ok(())
+        })?;
+        Ok(LabelBrush {
+            brush,
+            width: side,
+            height: side,
+        })
+    }
+
     /// Creates an app-name label: a dark pill (light in light theme) with a
     /// downward-pointing arrow.
     pub fn label_brush(&self, text: &str, scale: f32, light: bool) -> Result<LabelBrush> {
@@ -374,6 +531,18 @@ impl Gfx {
 
     /// Plain text on a transparent background (menu bar).
     pub fn text_brush(&self, text: &str, scale: f32, bold: bool, ink: Ink) -> Result<LabelBrush> {
+        self.text_brush_sized(text, scale, 13.0, bold, ink)
+    }
+
+    /// Text at a chosen logical font size for the expanded usage panel.
+    pub fn text_brush_sized(
+        &self,
+        text: &str,
+        scale: f32,
+        font_size: f32,
+        bold: bool,
+        ink: Ink,
+    ) -> Result<LabelBrush> {
         let utf16: Vec<u16> = text.encode_utf16().collect();
         let weight = if bold {
             DWRITE_FONT_WEIGHT_SEMI_BOLD
@@ -388,7 +557,7 @@ impl Gfx {
                 weight,
                 DWRITE_FONT_STYLE_NORMAL,
                 DWRITE_FONT_STRETCH_NORMAL,
-                13.0 * scale,
+                font_size * scale,
                 w!(""),
             )?;
             let layout = self

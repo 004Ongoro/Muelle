@@ -659,6 +659,20 @@ impl Flight {
         let _ = clip_at_slot(gfx, &self.root, &self.genie, self.screen);
     }
 
+    /// Puts the flight right under `dock` in the z-order, so a window flying
+    /// into (or out of) an app icon passes behind the dock's glass instead
+    /// of over it. The stand-in window stays just under the strips.
+    pub fn tuck_under(&self, dock: HWND) {
+        let flags = SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE;
+        // SAFETY: Reorders our own live windows; nothing else changes.
+        unsafe {
+            let _ = SetWindowPos(self.overlay, Some(dock), 0, 0, 0, 0, flags);
+            if let Some(stand) = self.stand {
+                let _ = SetWindowPos(stand, Some(self.overlay), 0, 0, 0, 0, flags);
+            }
+        }
+    }
+
     #[must_use]
     pub fn needs_aim(&self) -> bool {
         !self.aimed

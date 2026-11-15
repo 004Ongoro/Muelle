@@ -94,8 +94,8 @@ input:focus-visible {
   background: #febc2e;
 }
 
-.light-idle {
-  background: var(--track);
+.light-zoom {
+  background: #28c840;
 }
 
 .nav-item {
@@ -117,14 +117,25 @@ input:focus-visible {
   color: #fff;
 }
 
-.nav-glyph {
-  display: grid;
-  place-items: center;
-  width: 22px;
-  height: 22px;
-  border-radius: 6px;
-  background: rgba(127, 127, 127, 0.25);
+.nav-icon {
+  flex: none;
+  filter: drop-shadow(0 0.5px 0.5px rgba(0, 0, 0, 0.18));
+}
+
+/* A titled group: the heading sits above its card, as in macOS. */
+.card-group {
+  margin-bottom: 16px;
+}
+
+.card-group .card {
+  margin-bottom: 0;
+}
+
+.card-title {
+  margin: 0 0 6px 4px;
   font-size: 12px;
+  font-weight: 600;
+  color: var(--text-dim);
 }
 
 .content {

@@ -23,14 +23,17 @@ use muelle_shell::{
     status::{self, AudioWatch, Network, NetworkWatch, TaskbarButtons, Volume},
     system::{self, Battery, Monitor},
 };
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use windows::{
     UI::{
         Color,
-        Composition::{ContainerVisual, Desktop::DesktopWindowTarget, SpriteVisual},
+        Composition::{
+            CompositionBrush, Compositor, ContainerVisual, Desktop::DesktopWindowTarget,
+            SpriteVisual, VisualCollection,
+        },
     },
     Win32::{
-        Foundation::{HWND, LPARAM, LRESULT, RECT, SYSTEMTIME, WPARAM},
+        Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, SYSTEMTIME, WPARAM},
         Graphics::Dwm::{DWMWA_USE_HOSTBACKDROPBRUSH, DwmSetWindowAttribute},
         System::{
             LibraryLoader::GetModuleHandleW, SystemInformation::GetLocalTime,
@@ -38,11 +41,11 @@ use windows::{
         },
         UI::Input::KeyboardAndMouse::{TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent},
         UI::WindowsAndMessaging::{
-            CreateWindowExW, DefWindowProcW, DestroyWindow, HWND_TOPMOST, IDC_ARROW, LoadCursorW,
-            PostMessageW, RegisterClassW, SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_SHOWWINDOW, SetTimer,
-            SetWindowPos, WM_APP, WM_LBUTTONUP, WM_MOUSEMOVE, WM_SETTINGCHANGE, WM_TIMER,
-            WNDCLASSW, WS_EX_NOACTIVATE, WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOOLWINDOW,
-            WS_EX_TOPMOST, WS_POPUP,
+            CreateWindowExW, DefWindowProcW, DestroyWindow, GetCursorPos, HWND_TOPMOST, IDC_ARROW,
+            IDC_HAND, LoadCursorW, PostMessageW, RegisterClassW, SWP_HIDEWINDOW, SWP_NOACTIVATE,
+            SWP_SHOWWINDOW, SetCursor, SetTimer, SetWindowPos, WM_APP, WM_LBUTTONUP, WM_MOUSEMOVE,
+            WM_NCHITTEST, WM_SETCURSOR, WM_SETTINGCHANGE, WM_TIMER, WNDCLASSW, WS_EX_NOACTIVATE,
+            WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
         },
     },
     core::{BOOL, Interface, w},
@@ -52,6 +55,10 @@ use windows_numerics::{Vector2, Vector3};
 use crate::{
     app,
     gfx::{Gfx, Ink, LabelBrush},
+    strings,
+    usage::{
+        self, ActiveProviders, Monitor as UsageMonitor, Provider, ProviderUsage, Snapshot, State,
+    },
 };
 
 // Logical pixels.
@@ -65,6 +72,10 @@ const HIT_SLOP: f32 = 7.0;
 const REVEAL_STRIP: i32 = 2;
 
 const CLOCK_TIMER: usize = 1;
+const ISLAND_SINGLE_WIDTH: f32 = 145.0;
+const ISLAND_EXPANDED_WIDTH: f32 = 440.0;
+const ISLAND_ROW_HEIGHT: f32 = 118.0;
+const ISLAND_CARD_HEIGHT: f32 = 108.0;
 const WM_POWERBROADCAST: u32 = 0x0218;
 const WM_MOUSELEAVE: u32 = 0x02A3;
 /// AppBar notifications need a message id; the bar ignores them.
@@ -73,11 +84,18 @@ const APPBAR_CALLBACK: u32 = WM_APP + 20;
 const STATUS_CHANGED: u32 = WM_APP + 21;
 /// Posted by the bar to itself to update from the message loop.
 const TICK: u32 = WM_APP + 22;
+const USAGE_CHANGED: u32 = WM_APP + 23;
 /// `wParam` of WM_SETTINGCHANGE when the work area changes, which every
 /// AppBar reservation (the dock's, this bar's) causes.
 const SPI_SETWORKAREA: usize = 0x002F;
 /// A `TICK` is already posted.
 static TICK_PENDING: AtomicBool = AtomicBool::new(false);
+static ISLAND_LEFT: AtomicI32 = AtomicI32::new(0);
+static ISLAND_RIGHT: AtomicI32 = AtomicI32::new(0);
+static BAR_TOP: AtomicI32 = AtomicI32::new(0);
+static BAR_BOTTOM: AtomicI32 = AtomicI32::new(0);
+static HEADER_BOTTOM: AtomicI32 = AtomicI32::new(0);
+static PANEL_BOTTOM: AtomicI32 = AtomicI32::new(0);
 
 /// Segoe Fluent Icons code points.
 mod glyph {
@@ -122,6 +140,11 @@ struct Look {
     clock: String,
     battery: Option<Battery>,
     status: Status,
+    usage: Snapshot,
+    usage_enabled: bool,
+    active_providers: ActiveProviders,
+    expanded: bool,
+    usage_refreshing: bool,
 }
 
 pub struct MenuBar {
@@ -140,6 +163,12 @@ pub struct MenuBar {
     root: Option<ContainerVisual>,
     bounds: RECT,
     status: Status,
+    usage: Option<UsageMonitor>,
+    expanded: bool,
+    visual_height: i32,
+    island_left: f32,
+    island_right: f32,
+    refresh_button: Option<(f32, f32, f32, f32)>,
     /// Held for their callbacks; dropping them unsubscribes.
     _network: Option<NetworkWatch>,
     audio: Option<AudioWatch>,
@@ -149,10 +178,41 @@ unsafe extern "system" fn bar_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -
     match msg {
         WM_LBUTTONUP => {
             let x = (l.0 & 0xFFFF) as i16;
-            app::menu_bar_clicked(f32::from(x));
+            let y = (l.0 >> 16) as i16;
+            app::menu_bar_clicked(f32::from(x), f32::from(y));
         }
         WM_MOUSEMOVE => app::menu_bar_hover(true),
         WM_MOUSELEAVE => app::menu_bar_hover(false),
+        WM_SETCURSOR => {
+            let mut point = POINT::default();
+            // SAFETY: The point is a valid output for the current pointer location.
+            if unsafe { GetCursorPos(&mut point) }.is_ok()
+                && point.x >= ISLAND_LEFT.load(Ordering::Relaxed)
+                && point.x < ISLAND_RIGHT.load(Ordering::Relaxed)
+                && point.y >= BAR_TOP.load(Ordering::Relaxed)
+                && point.y < HEADER_BOTTOM.load(Ordering::Relaxed)
+            {
+                // SAFETY: The stock hand cursor is owned by Windows.
+                if let Ok(hand) = unsafe { LoadCursorW(None, IDC_HAND) } {
+                    unsafe { SetCursor(Some(hand)) };
+                    return LRESULT(1);
+                }
+            }
+            return unsafe { DefWindowProcW(hwnd, msg, w, l) };
+        }
+        WM_NCHITTEST => {
+            let x = (l.0 & 0xFFFF) as i16 as i32;
+            let y = (l.0 >> 16) as i16 as i32;
+            if y >= BAR_BOTTOM.load(Ordering::Relaxed)
+                && y < PANEL_BOTTOM.load(Ordering::Relaxed)
+                && (x < ISLAND_LEFT.load(Ordering::Relaxed)
+                    || x >= ISLAND_RIGHT.load(Ordering::Relaxed))
+            {
+                return LRESULT(-1);
+            }
+            // SAFETY: Default hit testing for the bar and the island.
+            return unsafe { DefWindowProcW(hwnd, msg, w, l) };
+        }
         // The minute changed, the charger was plugged or unplugged, the
         // network or volume changed, or a Windows setting (taskbar buttons).
         // Nothing the bar shows depends on the work area.
@@ -160,7 +220,7 @@ unsafe extern "system" fn bar_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -
         // Some of these are sent while the dock is busy reserving space, and
         // updating then was dropped. From the message loop the dock is never
         // busy, and a burst of them makes a single update.
-        WM_TIMER | WM_POWERBROADCAST | STATUS_CHANGED | WM_SETTINGCHANGE => {
+        WM_TIMER | WM_POWERBROADCAST | STATUS_CHANGED | USAGE_CHANGED | WM_SETTINGCHANGE => {
             if !TICK_PENDING.swap(true, Ordering::Relaxed) {
                 // SAFETY: Posting to our own live window.
                 unsafe {
@@ -187,8 +247,417 @@ fn rgba(r: u8, g: u8, b: u8, a: u8) -> Color {
     }
 }
 
+fn add_visual(
+    compositor: &Compositor,
+    layers: &VisualCollection,
+    brush: &CompositionBrush,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+) -> Result<SpriteVisual> {
+    let visual = compositor.CreateSpriteVisual()?;
+    visual.SetSize(Vector2 {
+        X: width,
+        Y: height,
+    })?;
+    visual.SetOffset(Vector3 {
+        X: x.round(),
+        Y: y.round(),
+        Z: 0.0,
+    })?;
+    visual.SetBrush(brush)?;
+    layers.InsertAtTop(&visual)?;
+    Ok(visual)
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "A rounded shape needs its rectangle, radius and two colors"
+)]
+fn add_rounded_box(
+    compositor: &Compositor,
+    layers: &VisualCollection,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    radius: f32,
+    fill: Color,
+    border: Option<Color>,
+) -> Result<()> {
+    let geometry = compositor.CreateRoundedRectangleGeometry()?;
+    let inset = if border.is_some() { 0.5 } else { 0.0 };
+    geometry.SetOffset(Vector2 { X: inset, Y: inset })?;
+    geometry.SetSize(Vector2 {
+        X: (width - inset * 2.0).max(0.0),
+        Y: (height - inset * 2.0).max(0.0),
+    })?;
+    geometry.SetCornerRadius(Vector2 {
+        X: radius.min(width / 2.0),
+        Y: radius.min(height / 2.0),
+    })?;
+    let shape = compositor.CreateSpriteShapeWithGeometry(&geometry)?;
+    shape.SetFillBrush(&compositor.CreateColorBrushWithColor(fill)?)?;
+    if let Some(border) = border {
+        shape.SetStrokeBrush(&compositor.CreateColorBrushWithColor(border)?)?;
+        shape.SetStrokeThickness(1.0)?;
+    }
+    let visual = compositor.CreateShapeVisual()?;
+    visual.SetSize(Vector2 {
+        X: width,
+        Y: height,
+    })?;
+    visual.SetOffset(Vector3 {
+        X: x.round(),
+        Y: y.round(),
+        Z: 0.0,
+    })?;
+    visual.Shapes()?.Append(&shape)?;
+    layers.InsertAtTop(&visual)?;
+    Ok(())
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Typography and placement are chosen together for panel labels"
+)]
+fn add_panel_text(
+    gfx: &Gfx,
+    layers: &VisualCollection,
+    value: &str,
+    x: f32,
+    y: f32,
+    scale: f32,
+    font_size: f32,
+    bold: bool,
+    ink: Ink,
+    opacity: f32,
+) -> Result<LabelBrush> {
+    let label = gfx.text_brush_sized(value, scale, font_size, bold, ink)?;
+    add_visual(
+        &gfx.compositor,
+        layers,
+        &label.brush.cast()?,
+        x,
+        y,
+        label.width,
+        label.height,
+    )?
+    .SetOpacity(opacity)?;
+    Ok(label)
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Right-aligned panel labels choose typography and placement together"
+)]
+fn add_panel_text_right(
+    gfx: &Gfx,
+    layers: &VisualCollection,
+    value: &str,
+    right: f32,
+    y: f32,
+    scale: f32,
+    font_size: f32,
+    bold: bool,
+    ink: Ink,
+    opacity: f32,
+) -> Result<LabelBrush> {
+    let label = gfx.text_brush_sized(value, scale, font_size, bold, ink)?;
+    add_visual(
+        &gfx.compositor,
+        layers,
+        &label.brush.cast()?,
+        right - label.width,
+        y,
+        label.width,
+        label.height,
+    )?
+    .SetOpacity(opacity)?;
+    Ok(label)
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Each provider card draws its own colors, data and measured rectangle"
+)]
+fn draw_usage_card(
+    gfx: &Gfx,
+    layers: &VisualCollection,
+    provider: Provider,
+    usage: &ProviderUsage,
+    accent: Color,
+    scale: f32,
+    light: bool,
+    island_width: f32,
+    y: f32,
+) -> Result<()> {
+    let c = &gfx.compositor;
+    let px = |logical: f32| (logical * scale).round();
+    let ink = if light { Ink::Dark } else { Ink::Light };
+    let text = strings::text();
+    let left = px(23.0);
+    let width = island_width - px(46.0);
+    let right = left + width;
+    let card_fill = if light {
+        rgba(32, 52, 77, 13)
+    } else {
+        rgba(237, 244, 255, 16)
+    };
+    let card_border = if light {
+        rgba(41, 59, 82, 26)
+    } else {
+        rgba(222, 234, 251, 31)
+    };
+    add_rounded_box(
+        c,
+        layers,
+        left,
+        y,
+        width,
+        px(ISLAND_CARD_HEIGHT),
+        px(13.0),
+        card_fill,
+        Some(card_border),
+    )?;
+    add_rounded_box(
+        c,
+        layers,
+        left + px(12.0),
+        y + px(11.0),
+        px(32.0),
+        px(32.0),
+        px(10.0),
+        rgba(accent.R, accent.G, accent.B, if light { 31 } else { 41 }),
+        None,
+    )?;
+    if let Some(image) = usage::logo(provider) {
+        let icon_size = px(20.0) as u32;
+        let image_brush = gfx.icon_brush(image, icon_size)?;
+        let brush: CompositionBrush =
+            if !matches!(provider, Provider::Claude | Provider::Gemini) && light {
+                let tinted = c.CreateMaskBrush()?;
+                tinted.SetMask(&image_brush)?;
+                tinted.SetSource(&c.CreateColorBrushWithColor(rgba(27, 34, 45, 255))?)?;
+                tinted.cast()?
+            } else {
+                image_brush.cast()?
+            };
+        add_visual(
+            c,
+            layers,
+            &brush,
+            left + px(18.0),
+            y + px(17.0),
+            icon_size as f32,
+            icon_size as f32,
+        )?;
+    }
+    add_panel_text(
+        gfx,
+        layers,
+        provider.name(),
+        left + px(53.0),
+        y + px(10.0),
+        scale,
+        14.0,
+        true,
+        ink,
+        1.0,
+    )?;
+    if let Some(main) = usage.main_window() {
+        add_panel_text(
+            gfx,
+            layers,
+            &main.title(),
+            left + px(53.0),
+            y + px(30.0),
+            scale,
+            11.5,
+            false,
+            ink,
+            0.72,
+        )?;
+        add_panel_text_right(
+            gfx,
+            layers,
+            &format!("{}%", main.used_percent),
+            right - px(14.0),
+            y + px(6.0),
+            scale,
+            20.0,
+            true,
+            ink,
+            1.0,
+        )?;
+        add_panel_text_right(
+            gfx,
+            layers,
+            text.usage_used,
+            right - px(15.0),
+            y + px(31.0),
+            scale,
+            11.0,
+            false,
+            ink,
+            0.7,
+        )?;
+        let track_left = left + px(14.0);
+        let track_width = width - px(28.0);
+        let track_y = y + px(53.0);
+        add_rounded_box(
+            c,
+            layers,
+            track_left,
+            track_y,
+            track_width,
+            px(6.0),
+            px(3.0),
+            if light {
+                rgba(54, 73, 95, 43)
+            } else {
+                rgba(224, 235, 248, 48)
+            },
+            None,
+        )?;
+        let fill = track_width * f32::from(main.used_percent) / 100.0;
+        if fill > 0.0 {
+            add_rounded_box(
+                c,
+                layers,
+                track_left,
+                track_y,
+                fill,
+                px(6.0),
+                px(3.0),
+                accent,
+                None,
+            )?;
+        }
+        if let Some(reset) = main.reset_text() {
+            add_panel_text_right(
+                gfx,
+                layers,
+                &format!("{} {reset}", text.usage_resets),
+                right - px(14.0),
+                y + px(64.0),
+                scale,
+                11.0,
+                false,
+                ink,
+                0.78,
+            )?;
+        }
+        if usage.state == State::Unavailable
+            || usage.age_minutes().is_some_and(|minutes| minutes > 5)
+        {
+            add_panel_text(
+                gfx,
+                layers,
+                text.usage_stale,
+                left + px(14.0),
+                y + px(64.0),
+                scale,
+                11.0,
+                false,
+                ink,
+                0.7,
+            )?;
+        }
+        if let Some(secondary) = usage.windows.get(1) {
+            add_visual(
+                c,
+                layers,
+                &c.CreateColorBrushWithColor(if light {
+                    rgba(50, 68, 88, 24)
+                } else {
+                    rgba(228, 236, 247, 29)
+                })?
+                .cast()?,
+                left + px(14.0),
+                y + px(83.0),
+                width - px(28.0),
+                px(1.0),
+            )?;
+            add_panel_text(
+                gfx,
+                layers,
+                &format!("{} · {}%", secondary.title(), secondary.used_percent),
+                left + px(14.0),
+                y + px(87.0),
+                scale,
+                11.5,
+                true,
+                ink,
+                0.94,
+            )?;
+            if let Some(reset) = secondary.reset_text() {
+                add_panel_text_right(
+                    gfx,
+                    layers,
+                    &format!("{} {reset}", text.usage_resets),
+                    right - px(14.0),
+                    y + px(87.0),
+                    scale,
+                    11.5,
+                    false,
+                    ink,
+                    0.76,
+                )?;
+            }
+        }
+    } else {
+        let message = match usage.state {
+            State::Loading => text.usage_loading,
+            State::SignIn => text.usage_sign_in,
+            State::Ready | State::Unavailable => text.usage_unavailable,
+        };
+        add_panel_text(
+            gfx,
+            layers,
+            message,
+            left + px(53.0),
+            y + px(43.0),
+            scale,
+            12.0,
+            false,
+            ink,
+            0.72,
+        )?;
+    }
+    Ok(())
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Text placement needs its coordinates and typography at the call site"
+)]
+fn add_text(
+    gfx: &Gfx,
+    layers: &VisualCollection,
+    value: &str,
+    x: f32,
+    y: f32,
+    scale: f32,
+    bold: bool,
+    ink: Ink,
+) -> Result<LabelBrush> {
+    let label = gfx.text_brush(value, scale, bold, ink)?;
+    add_visual(
+        &gfx.compositor,
+        layers,
+        &label.brush.cast()?,
+        x,
+        y,
+        label.width,
+        label.height,
+    )?;
+    Ok(label)
+}
+
 impl MenuBar {
-    pub fn create(gfx: &Gfx) -> Result<Self> {
+    pub fn create(gfx: &Gfx, usage_enabled: bool) -> Result<Self> {
         let class = w!("MuelleMenuBar");
         // SAFETY: Standard class registration and window creation on the UI
         // thread; the window is destroyed in `Drop`.
@@ -249,6 +718,12 @@ impl MenuBar {
                 volume: None,
                 buttons: TaskbarButtons::default(),
             },
+            usage: usage_enabled.then(|| UsageMonitor::new(hwnd.0 as isize, USAGE_CHANGED)),
+            expanded: false,
+            visual_height: 0,
+            island_left: 0.0,
+            island_right: 0.0,
+            refresh_button: None,
             _network: NetworkWatch::new(hwnd.0 as isize, STATUS_CHANGED),
             audio: AudioWatch::new(hwnd.0 as isize, STATUS_CHANGED),
         };
@@ -284,8 +759,21 @@ impl MenuBar {
         self.place()
     }
 
+    pub fn set_usage_enabled(&mut self, gfx: &Gfx, enabled: bool) -> Result<()> {
+        if self.usage.is_some() == enabled {
+            return Ok(());
+        }
+        self.usage = enabled.then(|| UsageMonitor::new(self.hwnd.0 as isize, USAGE_CHANGED));
+        self.expanded = false;
+        self.refresh(gfx)
+    }
+
     /// The pointer reached the top edge or left the bar.
-    pub fn hover(&mut self, inside: bool) -> Result<()> {
+    pub fn hover(&mut self, gfx: &Gfx, inside: bool) -> Result<()> {
+        if !inside && self.expanded {
+            self.expanded = false;
+            self.refresh(gfx)?;
+        }
         if !self.auto_hide || self.revealed == inside {
             return Ok(());
         }
@@ -301,26 +789,30 @@ impl MenuBar {
             // SAFETY: `track` is a valid structure with its size initialized.
             unsafe { TrackMouseEvent(&mut track)? };
         }
-        Ok(())
+        self.refresh(gfx)
     }
 
     /// Positions the window and reserves (or frees) its strip of the screen.
     fn place(&mut self) -> Result<()> {
         let bounds = self.bounds;
-        let height = bounds.bottom - bounds.top;
-        if height <= 0 {
+        let bar_height = bounds.bottom - bounds.top;
+        if bar_height <= 0 {
             return Ok(());
         }
         let hidden = self.auto_hide && !self.revealed;
         if let Some(appbar) = &mut self.appbar {
             // An auto-hiding bar leaves the whole screen to the windows.
-            let strip = if self.auto_hide { 0 } else { height };
+            let strip = if self.auto_hide { 0 } else { bar_height };
             appbar.reserve(Edge::Top, bounds, strip);
         }
         if let Some(root) = &self.root {
             // Hidden: the content sits above the screen edge, and only the
             // reveal strip of the window remains to catch the pointer.
-            let lift = if hidden { -(height as f32) } else { 0.0 };
+            let lift = if hidden {
+                -(self.visual_height as f32)
+            } else {
+                0.0
+            };
             root.SetOffset(Vector3 {
                 X: 0.0,
                 Y: lift,
@@ -340,7 +832,11 @@ impl MenuBar {
                 bounds.left,
                 bounds.top,
                 bounds.right - bounds.left,
-                if hidden { REVEAL_STRIP } else { height },
+                if hidden {
+                    REVEAL_STRIP
+                } else {
+                    self.visual_height
+                },
                 SWP_NOACTIVATE | show,
             )?;
         }
@@ -378,7 +874,49 @@ impl MenuBar {
         }
     }
 
-    pub fn click(&self, x: f32) {
+    pub fn click(&mut self, gfx: &Gfx, x: f32, y: f32) -> Result<()> {
+        if x >= self.island_left && x < self.island_right {
+            let bar_height = self.bounds.bottom as f32 - self.bounds.top as f32;
+            if self.expanded
+                && self
+                    .refresh_button
+                    .is_some_and(|(left, top, right, bottom)| {
+                        x >= left && x < right && y >= top && y < bottom
+                    })
+            {
+                if let Some(usage) = &mut self.usage {
+                    usage.refresh(true);
+                }
+                return self.refresh(gfx);
+            }
+            let header_bottom = if self.expanded {
+                49.0 * self.look.as_ref().map_or(1.0, |look| look.scale)
+            } else {
+                bar_height
+            };
+            if y < header_bottom {
+                self.expanded = !self.expanded;
+                if self.expanded {
+                    if let Some(usage) = &mut self.usage {
+                        usage.refresh(false);
+                    }
+                    let mut track = TRACKMOUSEEVENT {
+                        cbSize: size_of::<TRACKMOUSEEVENT>() as u32,
+                        dwFlags: TME_LEAVE,
+                        hwndTrack: self.hwnd,
+                        dwHoverTime: 0,
+                    };
+                    // SAFETY: `track` describes our live window.
+                    unsafe { TrackMouseEvent(&mut track)? };
+                }
+                return self.refresh(gfx);
+            }
+            return Ok(());
+        }
+        if self.expanded {
+            self.expanded = false;
+            self.refresh(gfx)?;
+        }
         let hit = self
             .zones
             .iter()
@@ -392,6 +930,7 @@ impl MenuBar {
             Some(Action::Widgets) => launcher::open_widgets(),
             None => {}
         }
+        Ok(())
     }
 
     /// Redraws the bar if anything it shows has changed.
@@ -399,6 +938,22 @@ impl MenuBar {
         let Some(monitor) = system::primary_monitor() else {
             return Ok(());
         };
+        let active_providers = if self.usage.is_some() {
+            usage::active_providers()
+        } else {
+            ActiveProviders::default()
+        };
+        if !active_providers.any() {
+            self.expanded = false;
+            if let Some(usage) = &mut self.usage {
+                usage.mark_inactive();
+            }
+        } else if self.visible
+            && (!self.auto_hide || self.revealed)
+            && let Some(usage) = &mut self.usage
+        {
+            usage.refresh(false);
+        }
         let look = Look {
             screen: monitor.screen,
             scale: monitor.scale,
@@ -408,6 +963,14 @@ impl MenuBar {
             clock: system::clock_text(),
             battery: system::battery(),
             status: self.status,
+            usage: self
+                .usage
+                .as_ref()
+                .map_or_else(Snapshot::default, UsageMonitor::snapshot),
+            usage_enabled: self.usage.is_some() && active_providers.any(),
+            active_providers,
+            expanded: self.expanded,
+            usage_refreshing: self.usage.as_ref().is_some_and(UsageMonitor::is_refreshing),
         };
         if self.look.as_ref() == Some(&look) {
             return Ok(());
@@ -423,12 +986,17 @@ impl MenuBar {
         let px = |logical: f32| (logical * scale).round();
         let screen = monitor.screen;
         let (width, height) = ((screen.right - screen.left) as f32, px(HEIGHT));
+        let visual_height = if look.expanded {
+            px(74.0 + look.active_providers.count() as f32 * ISLAND_ROW_HEIGHT)
+        } else {
+            height
+        };
         let ink = if look.light { Ink::Dark } else { Ink::Light };
 
         let root = c.CreateContainerVisual()?;
         root.SetSize(Vector2 {
             X: width,
-            Y: height,
+            Y: visual_height,
         })?;
         let layers = root.Children()?;
         // Without transparency the bar is solid, as macOS draws it with
@@ -448,7 +1016,10 @@ impl MenuBar {
             [c.CreateColorBrushWithColor(tint)?.cast()?];
         for brush in backdrop.iter().chain(&fills) {
             let fill = c.CreateSpriteVisual()?;
-            fill.SetRelativeSizeAdjustment(Vector2 { X: 1.0, Y: 1.0 })?;
+            fill.SetSize(Vector2 {
+                X: width,
+                Y: height,
+            })?;
             fill.SetBrush(brush)?;
             layers.InsertAtTop(&fill)?;
         }
@@ -473,9 +1044,11 @@ impl MenuBar {
         };
 
         self.zones.clear();
+        let mut left_end = px(SIDE_MARGIN);
         if !look.app_name.is_empty() {
             let name = gfx.text_brush(&look.app_name, scale, true, ink)?;
             place(&layers, &name, px(SIDE_MARGIN))?;
+            left_end += name.width;
         }
 
         // Right side, from the edge inward.
@@ -530,13 +1103,347 @@ impl MenuBar {
             right = left - px(ITEM_GAP);
         }
 
+        if look.usage_enabled {
+            self.draw_island(gfx, look, &layers, width, height, left_end, right)?;
+        } else {
+            self.island_left = 0.0;
+            self.island_right = 0.0;
+            self.refresh_button = None;
+        }
+
         self.target.SetRoot(&root)?;
         self.root = Some(root);
+        self.visual_height = visual_height as i32;
         self.bounds = RECT {
             bottom: screen.top + height as i32,
             ..screen
         };
+        ISLAND_LEFT.store(screen.left + self.island_left as i32, Ordering::Relaxed);
+        ISLAND_RIGHT.store(screen.left + self.island_right as i32, Ordering::Relaxed);
+        BAR_TOP.store(screen.top, Ordering::Relaxed);
+        BAR_BOTTOM.store(screen.top + height as i32, Ordering::Relaxed);
+        HEADER_BOTTOM.store(
+            screen.top
+                + if look.expanded {
+                    px(49.0) as i32
+                } else {
+                    height as i32
+                },
+            Ordering::Relaxed,
+        );
+        PANEL_BOTTOM.store(screen.top + self.visual_height, Ordering::Relaxed);
         self.place()
+    }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "The island receives the measured bar bounds from the current layout"
+    )]
+    fn draw_island(
+        &mut self,
+        gfx: &Gfx,
+        look: &Look,
+        layers: &VisualCollection,
+        width: f32,
+        bar_height: f32,
+        left_end: f32,
+        right_start: f32,
+    ) -> Result<()> {
+        let c = &gfx.compositor;
+        let scale = look.scale;
+        let px = |logical: f32| (logical * scale).round();
+        let requested = px(if look.expanded {
+            ISLAND_EXPANDED_WIDTH
+        } else if look.active_providers.count() == 1 {
+            ISLAND_SINGLE_WIDTH
+        } else {
+            134.0 * look.active_providers.count() as f32
+        });
+        let left_limit = left_end + px(8.0);
+        let usable = (right_start - left_limit - px(8.0)).max(px(145.0));
+        let island_width = requested.min(usable);
+        let island_left = ((width - island_width) / 2.0)
+            .max(left_limit)
+            .min((right_start - island_width - px(8.0)).max(left_limit));
+        let island_height = if look.expanded {
+            px(74.0 + look.active_providers.count() as f32 * ISLAND_ROW_HEIGHT)
+        } else {
+            bar_height
+        };
+        self.island_left = island_left;
+        self.island_right = island_left + island_width;
+
+        let island = c.CreateContainerVisual()?;
+        island.SetSize(Vector2 {
+            X: island_width,
+            Y: island_height,
+        })?;
+        island.SetOffset(Vector3 {
+            X: island_left.round(),
+            Y: 0.0,
+            Z: 0.0,
+        })?;
+        let content = island.Children()?;
+        let silhouette = gfx.island_mask(island_width, island_height, scale)?;
+        let shadow = c.CreateDropShadow()?;
+        shadow.SetMask(&silhouette)?;
+        shadow.SetBlurRadius(px(12.0))?;
+        shadow.SetOffset(Vector3 {
+            X: 0.0,
+            Y: px(5.0),
+            Z: 0.0,
+        })?;
+        shadow.SetColor(rgba(0, 0, 0, 92))?;
+        let shadow_host = c.CreateSpriteVisual()?;
+        shadow_host.SetSize(Vector2 {
+            X: island_width,
+            Y: island_height,
+        })?;
+        shadow_host.SetShadow(&shadow)?;
+        content.InsertAtTop(&shadow_host)?;
+
+        let tint = match (look.light, look.glass) {
+            (true, true) => rgba(247, 249, 252, 243),
+            (false, true) => rgba(7, 9, 13, 242),
+            (true, false) => rgba(247, 249, 252, 255),
+            (false, false) => rgba(10, 12, 17, 255),
+        };
+        if look.glass {
+            // The backdrop cannot be used as a mask-brush source. Inset its
+            // rounded clip so it stays entirely inside the curved silhouette.
+            let inset = px(12.0);
+            let glass_width = island_width - inset * 2.0;
+            let glass = c.CreateContainerVisual()?;
+            glass.SetSize(Vector2 {
+                X: glass_width,
+                Y: island_height,
+            })?;
+            glass.SetOffset(Vector3 {
+                X: inset,
+                Y: 0.0,
+                Z: 0.0,
+            })?;
+            let outline = c.CreateRoundedRectangleGeometry()?;
+            outline.SetSize(Vector2 {
+                X: glass_width,
+                Y: island_height + px(22.0),
+            })?;
+            outline.SetOffset(Vector2 {
+                X: 0.0,
+                Y: -px(22.0),
+            })?;
+            outline.SetCornerRadius(Vector2 {
+                X: px(22.0),
+                Y: px(22.0),
+            })?;
+            glass.SetClip(&c.CreateGeometricClipWithGeometry(&outline)?)?;
+            add_visual(
+                c,
+                &glass.Children()?,
+                &c.CreateHostBackdropBrush()?.cast()?,
+                0.0,
+                0.0,
+                glass_width,
+                island_height,
+            )?;
+            content.InsertAtTop(&glass)?;
+        }
+        let masked = c.CreateMaskBrush()?;
+        masked.SetSource(&c.CreateColorBrushWithColor(tint)?)?;
+        masked.SetMask(&silhouette)?;
+        add_visual(
+            c,
+            &content,
+            &masked.cast()?,
+            0.0,
+            0.0,
+            island_width,
+            island_height,
+        )?;
+
+        let ink = if look.light { Ink::Dark } else { Ink::Light };
+        let providers = Provider::ALL
+            .into_iter()
+            .filter(|provider| look.active_providers.has(*provider))
+            .map(|provider| {
+                let accent = match provider {
+                    Provider::Claude => rgba(217, 119, 87, 255),
+                    Provider::Codex => rgba(135, 190, 245, 255),
+                    Provider::Copilot => rgba(147, 164, 186, 255),
+                    Provider::Cursor => rgba(174, 180, 189, 255),
+                    Provider::OpenCode => rgba(132, 196, 166, 255),
+                    Provider::Gemini => rgba(111, 146, 255, 255),
+                };
+                (provider, provider.name(), look.usage.get(provider), accent)
+            })
+            .collect::<Vec<_>>();
+        if look.expanded {
+            let title = strings::text();
+            add_panel_text(
+                gfx,
+                &content,
+                title.usage_title,
+                px(28.0),
+                px(15.0),
+                scale,
+                13.0,
+                true,
+                ink,
+                0.94,
+            )?;
+            let button_text = if look.usage_refreshing {
+                title.usage_refreshing
+            } else {
+                title.usage_refresh
+            };
+            let button_label = gfx.text_brush_sized(button_text, scale, 11.5, true, ink)?;
+            let button_width = button_label.width + px(37.0);
+            let button_height = px(27.0);
+            let button_left = island_width - px(23.0) - button_width;
+            let button_top = px(8.0);
+            add_rounded_box(
+                c,
+                &content,
+                button_left,
+                button_top,
+                button_width,
+                button_height,
+                px(13.5),
+                if look.light {
+                    rgba(28, 51, 79, 18)
+                } else {
+                    rgba(235, 242, 252, 26)
+                },
+                Some(if look.light {
+                    rgba(41, 62, 86, 36)
+                } else {
+                    rgba(226, 237, 251, 43)
+                }),
+            )?;
+            let refresh_icon = gfx.text_brush_sized("↻", scale, 16.0, true, ink)?;
+            add_visual(
+                c,
+                &content,
+                &refresh_icon.brush.cast()?,
+                button_left + px(10.0),
+                button_top + (button_height - refresh_icon.height) / 2.0,
+                refresh_icon.width,
+                refresh_icon.height,
+            )?;
+            add_visual(
+                c,
+                &content,
+                &button_label.brush.cast()?,
+                button_left + px(29.0),
+                button_top + (button_height - button_label.height) / 2.0,
+                button_label.width,
+                button_label.height,
+            )?;
+            self.refresh_button = Some((
+                island_left + button_left,
+                button_top,
+                island_left + button_left + button_width,
+                button_top + button_height,
+            ));
+            for (index, (provider, _name, usage, accent)) in providers.iter().enumerate() {
+                draw_usage_card(
+                    gfx,
+                    &content,
+                    *provider,
+                    usage,
+                    *accent,
+                    scale,
+                    look.light,
+                    island_width,
+                    px(53.0 + index as f32 * ISLAND_ROW_HEIGHT),
+                )?;
+            }
+            let newest_age = providers
+                .iter()
+                .filter_map(|provider| provider.2.age_minutes())
+                .min();
+            if let Some(minutes) = newest_age {
+                let status = format!("{} {minutes} min", title.usage_updated);
+                let label = gfx.text_brush_sized(&status, scale, 11.0, false, ink)?;
+                add_visual(
+                    c,
+                    &content,
+                    &label.brush.cast()?,
+                    (island_width - label.width) / 2.0,
+                    island_height - px(21.0),
+                    label.width,
+                    label.height,
+                )?
+                .SetOpacity(0.53)?;
+            }
+        } else {
+            self.refresh_button = None;
+            let half = island_width / providers.len() as f32;
+            for (index, (provider, _name, usage, accent)) in providers.iter().enumerate() {
+                let icon_size = px(18.0) as u32;
+                let start = index as f32 * half
+                    + if half < px(84.0) {
+                        (half - icon_size as f32) / 2.0
+                    } else {
+                        px(21.0)
+                    };
+                if let Some(image) = usage::logo(*provider) {
+                    let image_brush = gfx.icon_brush(image, icon_size)?;
+                    let brush: CompositionBrush =
+                        if !matches!(provider, Provider::Claude | Provider::Gemini) && look.light {
+                            let tinted = c.CreateMaskBrush()?;
+                            tinted.SetMask(&image_brush)?;
+                            tinted
+                                .SetSource(&c.CreateColorBrushWithColor(rgba(27, 34, 45, 255))?)?;
+                            tinted.cast()?
+                        } else {
+                            image_brush.cast()?
+                        };
+                    add_visual(
+                        c,
+                        &content,
+                        &brush,
+                        start,
+                        (bar_height - icon_size as f32) / 2.0,
+                        icon_size as f32,
+                        icon_size as f32,
+                    )?;
+                }
+                let percent = usage.main_window().map_or("—".to_owned(), |window| {
+                    format!("{}%", window.used_percent)
+                });
+                if half > px(106.0) {
+                    add_text(
+                        gfx,
+                        &content,
+                        &percent,
+                        start + px(25.0),
+                        px(6.0),
+                        scale,
+                        true,
+                        ink,
+                    )?;
+                }
+                if half >= px(84.0) {
+                    let ring = gfx.usage_ring(
+                        usage.main_window().map(|window| window.used_percent),
+                        scale,
+                        *accent,
+                    )?;
+                    add_visual(
+                        c,
+                        &content,
+                        &ring.brush.cast()?,
+                        (index + 1) as f32 * half - px(16.0) - ring.width,
+                        (bar_height - ring.height) / 2.0,
+                        ring.width,
+                        ring.height,
+                    )?;
+                }
+            }
+        }
+        layers.InsertAtTop(&island)?;
+        Ok(())
     }
 }
 

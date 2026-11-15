@@ -1,7 +1,19 @@
 import type { ReactNode } from "react";
 
-export function Card({ children }: { children: ReactNode }) {
-  return <section className="card">{children}</section>;
+interface CardProps {
+  /** Heading above the group, as macOS System Settings labels its groups. */
+  title?: string;
+  children: ReactNode;
+}
+
+export function Card({ title, children }: CardProps) {
+  if (!title) return <section className="card">{children}</section>;
+  return (
+    <section className="card-group" aria-label={title}>
+      <h2 className="card-title">{title}</h2>
+      <div className="card">{children}</div>
+    </section>
+  );
 }
 
 interface RowProps {

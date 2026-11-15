@@ -1,7 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 
 export type Language = "auto" | "es" | "en";
-export type ActiveAppClick = "minimize" | "nothing";
 
 /** Mirrors `muelle_config::Config`. */
 export interface Config {
@@ -13,9 +12,10 @@ export interface Config {
   magnification: boolean;
   magnifiedSize: number;
   genie: boolean;
+  showMinimized: boolean;
   menuBar: boolean;
   menuBarAutoHide: boolean;
-  activeAppClick: ActiveAppClick;
+  aiUsage: boolean;
   showIndicators: boolean;
   showRecents: boolean;
   bounceOnOpen: boolean;

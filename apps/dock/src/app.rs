@@ -22,7 +22,7 @@ use std::{
 };
 
 use anyhow::{Context, Result};
-use muelle_config::{ActiveAppClick, Config};
+use muelle_config::Config;
 use muelle_core::{
     bounce,
     layout::{ItemKind, Layout, Metrics, layout},
@@ -549,11 +549,15 @@ impl App {
             );
         }
         entries.push(separator());
-        entries.extend(
-            self.minimized
-                .iter()
-                .map(|&hwnd| icon(&window_id(hwnd), Role::Window, false)),
-        );
+        // Unless "show minimized windows" is on, minimized windows hide in
+        // their app's icon instead of getting a thumbnail here.
+        if self.config.show_minimized {
+            entries.extend(
+                self.minimized
+                    .iter()
+                    .map(|&hwnd| icon(&window_id(hwnd), Role::Window, false)),
+            );
+        }
         if let Some(downloads) = &self.downloads {
             entries.push(icon(downloads, Role::Folder, false));
         }
@@ -885,11 +889,21 @@ impl App {
         Ok(())
     }
 
-    /// Screen rectangle of a minimized window's slot, at rest, with the
-    /// window's aspect ratio.
+    /// Screen rectangle, at rest and with the window's aspect ratio, where a
+    /// minimized window lives in the dock: its app's icon, or its own
+    /// thumbnail slot with "show minimized windows". The genie flies into it
+    /// and back out of it.
     fn minimized_slot(&self, hwnd: isize, aspect: f32) -> Option<RECT> {
         let stage = self.stage.as_ref()?;
-        let id = window_id(hwnd);
+        let id = if !self.config.show_minimized {
+            self.windows
+                .iter()
+                .find(|window| window.hwnd == hwnd)?
+                .app_id
+                .clone()
+        } else {
+            window_id(hwnd)
+        };
         let index = self
             .entries
             .iter()
@@ -922,10 +936,21 @@ impl App {
         // the stand-in goes up before anything else, or the desktop shows.
         self.show_stand_ins(&[hwnd]);
         self.minimized.push(hwnd);
-        self.thumbnails.sync(&self.minimized);
+        self.sync_thumbnails();
         self.refresh()?;
         self.aim_flights();
         Ok(())
+    }
+
+    /// Live thumbnails exist only for minimized windows shown in the dock:
+    /// none while they hide in their app's icon, so DWM draws nothing extra.
+    fn sync_thumbnails(&mut self) {
+        let shown: &[isize] = if self.config.show_minimized {
+            &self.minimized
+        } else {
+            &[]
+        };
+        self.thumbnails.sync(shown);
     }
 
     /// Turns off the system's transitions for every tracked window. Windows
@@ -1000,6 +1025,9 @@ impl App {
         let Some(flight) = flight else {
             return false;
         };
+        if !self.config.show_minimized {
+            flight.tuck_under(self.visual);
+        }
         self.snapshots.remove(position);
         self.flights.push(flight);
         self.last_frame = Instant::now();
@@ -1023,6 +1051,9 @@ impl App {
         for (index, slot) in slots {
             if let (Some(slot), Some(flight)) = (slot, self.flights.get_mut(index)) {
                 flight.aim(&self.gfx, slot);
+                if !self.config.show_minimized {
+                    flight.tuck_under(self.visual);
+                }
             }
         }
     }
@@ -1433,10 +1464,7 @@ impl App {
                 Some(Outside::Open(id))
             }
             Role::App if windows.contains(&tracker::foreground_window()) => {
-                match self.config.active_app_click {
-                    ActiveAppClick::Minimize => Some(Outside::Minimize(windows)),
-                    ActiveAppClick::Nothing => None,
-                }
+                Some(Outside::Minimize(windows))
             }
             Role::App => self.activating(windows),
             Role::Start => Some(Outside::OpenStart),
@@ -1647,6 +1675,7 @@ impl App {
             self.last_frame = Instant::now();
         }
         self.config = config;
+        self.sync_thumbnails();
         self.apply_menu_bar_setting();
         self.update_menu_bar_app()?;
         self.calm_windows();
@@ -1734,7 +1763,7 @@ impl App {
                 self.minimized.push(hwnd);
             }
         }
-        self.thumbnails.sync(&self.minimized);
+        self.sync_thumbnails();
         let minimized = &self.minimized;
         self.snapshots.retain(|(hwnd, _)| minimized.contains(hwnd));
 
@@ -1813,13 +1842,14 @@ impl App {
         if !self.config.menu_bar {
             self.menubar = None;
         } else if self.menubar.is_none() {
-            self.menubar = MenuBar::create(&self.gfx)
+            self.menubar = MenuBar::create(&self.gfx, self.config.ai_usage)
                 .inspect_err(|error| eprintln!("muelle: barra superior: {error:#}"))
                 .ok();
         }
         if let Some(bar) = &mut self.menubar {
             let applied = bar
                 .set_auto_hide(self.config.menu_bar_auto_hide)
+                .and_then(|()| bar.set_usage_enabled(&self.gfx, self.config.ai_usage))
                 .and_then(|()| bar.set_visible(!self.fullscreen));
             if let Err(error) = applied {
                 eprintln!("muelle: barra superior: {error:#}");
@@ -1955,10 +1985,10 @@ fn with_app_value<T: Default>(what: &str, action: impl FnOnce(&mut App) -> Resul
     value
 }
 
-pub fn menu_bar_clicked(x: f32) {
+pub fn menu_bar_clicked(x: f32, y: f32) {
     with_app("barra superior", |app| {
-        if let Some(bar) = &app.menubar {
-            bar.click(x);
+        if let Some(bar) = &mut app.menubar {
+            bar.click(&app.gfx, x, y)?;
         }
         Ok(())
     });
@@ -1966,7 +1996,7 @@ pub fn menu_bar_clicked(x: f32) {
 
 pub fn menu_bar_hover(inside: bool) {
     with_app("barra superior", |app| match &mut app.menubar {
-        Some(bar) => bar.hover(inside),
+        Some(bar) => bar.hover(&app.gfx, inside),
         None => Ok(()),
     });
 }
