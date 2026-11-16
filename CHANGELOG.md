@@ -10,6 +10,12 @@ copia la sección de la versión que se publica a la release de GitHub.
 
 ### English
 
+- Shell icons and app names load in the background through a bounded queue,
+  keeping the dock responsive while the shell is slow. Repeated requests share
+  the same load, and unused pixel buffers are released.
+- Minimize animations prepare restore images off the UI thread and reuse
+  thumbnail dimensions between window events. Batch minimization starts one
+  capture; a stalled capture no longer keeps an overlay and frame loop alive.
 - Drag and drop into apps: hold a file (or text, or an image) over an open
   app in the dock and its window comes to the front, so you can drop it there,
   as with the Windows taskbar. Passing over icons does not switch windows.
@@ -40,6 +46,13 @@ copia la sección de la versión que se publica a la release de GitHub.
 
 ### Español
 
+- Los iconos y nombres del shell se cargan en segundo plano con una cola
+  limitada para que el dock responda mientras el shell tarda. Las solicitudes
+  repetidas comparten la misma carga y se liberan los píxeles que ya no se usan.
+- Las animaciones de minimizar preparan la imagen de restauración fuera del
+  hilo de interfaz y reutilizan las dimensiones de las miniaturas entre avisos
+  de ventanas. Al minimizar en lote se inicia una captura; una captura atascada
+  ya no mantiene una vista previa y un ciclo de fotogramas indefinidos.
 - Arrastrar y soltar en las apps: mantén un archivo (o texto, o una imagen)
   sobre una app abierta del dock y su ventana pasa al frente para que lo
   sueltes ahí, como con la barra de tareas de Windows. Pasar por encima de los

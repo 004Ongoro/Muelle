@@ -445,6 +445,46 @@ impl Gfx {
         })
     }
 
+    /// Shared temporary app tile while a shell icon is loading or unavailable.
+    pub fn placeholder_brush(&self, side: u32, light: bool) -> Result<CompositionSurfaceBrush> {
+        let size = side as f32;
+        self.draw(side, side, |dc| {
+            let tile = D2D1_ROUNDED_RECT {
+                rect: D2D_RECT_F {
+                    left: size * 0.08,
+                    top: size * 0.08,
+                    right: size * 0.92,
+                    bottom: size * 0.92,
+                },
+                radiusX: size * 0.18,
+                radiusY: size * 0.18,
+            };
+            let shade = if light { 0.72 } else { 0.36 };
+            // SAFETY: Geometry and brushes remain valid for these drawing calls.
+            unsafe {
+                let fill = dc.CreateSolidColorBrush(&rgb(shade, shade, shade, 1.0), None)?;
+                dc.FillRoundedRectangle(&tile, &fill);
+                let ink = dc.CreateSolidColorBrush(&rgb(1.0, 1.0, 1.0, 0.7), None)?;
+                dc.DrawRoundedRectangle(
+                    &D2D1_ROUNDED_RECT {
+                        rect: D2D_RECT_F {
+                            left: size * 0.27,
+                            top: size * 0.28,
+                            right: size * 0.73,
+                            bottom: size * 0.72,
+                        },
+                        radiusX: size * 0.04,
+                        radiusY: size * 0.04,
+                    },
+                    &ink,
+                    (size * 0.035).max(1.0),
+                    None,
+                );
+            }
+            Ok(())
+        })
+    }
+
     /// Start tile: a 3x3 grid of rounded squares on a blue gradient, in the
     /// style of the other dock icons (no Windows logo: it is a trademark).
     pub fn start_brush(&self, side: u32) -> Result<CompositionSurfaceBrush> {

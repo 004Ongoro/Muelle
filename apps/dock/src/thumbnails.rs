@@ -5,7 +5,7 @@
 use std::collections::HashMap;
 
 use windows::Win32::{
-    Foundation::{HWND, RECT},
+    Foundation::{HWND, RECT, SIZE},
     Graphics::Dwm::{
         DWM_THUMBNAIL_PROPERTIES, DWM_TNP_OPACITY, DWM_TNP_RECTDESTINATION,
         DWM_TNP_SOURCECLIENTAREAONLY, DWM_TNP_VISIBLE, DwmQueryThumbnailSourceSize,
@@ -18,6 +18,7 @@ const INSET: f32 = 0.06;
 
 struct Thumbnail {
     handle: isize,
+    source: SIZE,
     /// Last destination applied, to skip redundant DWM calls.
     placed: Option<(RECT, u8)>,
 }
@@ -48,7 +49,11 @@ impl Thumbnails {
     pub fn sync(&mut self, windows: &[isize]) {
         self.live.retain(|hwnd, _| windows.contains(hwnd));
         for &hwnd in windows {
-            if self.live.contains_key(&hwnd) {
+            if let Some(thumbnail) = self.live.get_mut(&hwnd) {
+                // Revalidate on window events, never on the animation path.
+                if let Ok(source) = unsafe { DwmQueryThumbnailSourceSize(thumbnail.handle) } {
+                    thumbnail.source = source;
+                }
                 continue;
             }
             // SAFETY: Both windows exist; a source that just closed makes the call fail.
@@ -59,6 +64,8 @@ impl Thumbnails {
                     hwnd,
                     Thumbnail {
                         handle,
+                        // SAFETY: The thumbnail was registered just above.
+                        source: unsafe { DwmQueryThumbnailSourceSize(handle) }.unwrap_or_default(),
                         placed: None,
                     },
                 );
@@ -75,8 +82,7 @@ impl Thumbnails {
             return;
         };
         let (x, y, width, height) = slot;
-        // SAFETY: Valid thumbnail handle; on failure the size stays zero.
-        let source = unsafe { DwmQueryThumbnailSourceSize(thumbnail.handle) }.unwrap_or_default();
+        let source = thumbnail.source;
         let ratio = if source.cx > 0 && source.cy > 0 {
             source.cx as f32 / source.cy as f32
         } else {
@@ -119,7 +125,6 @@ impl Thumbnails {
         if thumbnail.placed == Some((destination, opacity)) {
             return;
         }
-        thumbnail.placed = Some((destination, opacity));
 
         let properties = DWM_THUMBNAIL_PROPERTIES {
             dwFlags: DWM_TNP_RECTDESTINATION
@@ -134,7 +139,9 @@ impl Thumbnails {
         };
         // SAFETY: Valid handle and properties structure.
         unsafe {
-            let _ = DwmUpdateThumbnailProperties(thumbnail.handle, &properties);
+            if DwmUpdateThumbnailProperties(thumbnail.handle, &properties).is_ok() {
+                thumbnail.placed = Some((destination, opacity));
+            }
         }
     }
 }

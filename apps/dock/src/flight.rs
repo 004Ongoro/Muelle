@@ -48,6 +48,7 @@
 use std::{
     sync::{
         OnceLock,
+        atomic::{AtomicBool, Ordering},
         mpsc::{Receiver, TryRecvError, channel},
     },
     thread,
@@ -104,6 +105,26 @@ const LANDING_START: f32 = 0.8;
 /// How long the last frame of a restore stays up, so the real window has
 /// certainly appeared underneath it.
 const SETTLE: Duration = Duration::from_millis(120);
+/// Abandon a stalled screen copy instead of keeping its overlay and frame loop alive.
+const CAPTURE_TIMEOUT: Duration = Duration::from_millis(750);
+static CAPTURE_BUSY: AtomicBool = AtomicBool::new(false);
+
+struct CapturePermit;
+
+impl CapturePermit {
+    fn acquire() -> Option<Self> {
+        CAPTURE_BUSY
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .ok()
+            .map(|_| Self)
+    }
+}
+
+impl Drop for CapturePermit {
+    fn drop(&mut self) {
+        CAPTURE_BUSY.store(false, Ordering::Release);
+    }
+}
 
 /// What a minimized window looked like, to fly it back out of the dock.
 /// Half the resolution in each direction: a quarter of the memory, and the
@@ -129,12 +150,18 @@ struct Piece {
     rows: f32,
 }
 
+struct Captured {
+    image: IconImage,
+    restore: IconImage,
+}
+
 enum Phase {
     /// The stand-in thumbnail is on screen while a worker copies the screen.
     Standing {
         thumbnail: isize,
         frames: u32,
-        shot: Receiver<Option<IconImage>>,
+        shot: Receiver<Option<Captured>>,
+        started: Instant,
     },
     Flying {
         start: Instant,
@@ -167,8 +194,7 @@ pub struct Flight {
     restoring: bool,
     /// The real window still has to be restored (restore flights only).
     restore_pending: bool,
-    /// The full-size screen copy of a minimize, reduced only once the flight
-    /// is over so that work stays out of the take-off.
+    /// Reduced restore pixels prepared on the capture worker.
     captured: Option<(IconImage, RECT)>,
 }
 
@@ -449,6 +475,9 @@ impl Flight {
     /// genie copies and flies (the work area for a maximized window, so no
     /// strip of the menu bar or desktop around it comes along).
     pub fn start(gfx: &Gfx, hwnd: isize, from: RECT, frame: RECT, screen: RECT) -> Option<Self> {
+        // A timed-out GDI call cannot be cancelled safely. Keep at most one
+        // outstanding copy, including a worker whose overlay was abandoned.
+        let capture_permit = CapturePermit::acquire()?;
         // Only what is on screen can be copied from it.
         let visible = intersect(frame, screen);
         if is_empty(visible) {
@@ -507,9 +536,25 @@ impl Flight {
         // runs on a worker from the first moment instead of holding the dock.
         // GDI reads what DWM composes next, and that includes the stand-in.
         let (sender, shot) = channel();
-        thread::spawn(move || {
-            let _ = sender.send(screen::capture(visible));
-        });
+        let capture = thread::Builder::new()
+            .name("muelle-capture".into())
+            .spawn(move || {
+                let _permit = capture_permit;
+                let shot = screen::capture(visible).map(|image| Captured {
+                    restore: halved(&image),
+                    image,
+                });
+                let _ = sender.send(shot);
+            });
+        if capture.is_err() {
+            // SAFETY: These resources were created for this failed flight.
+            unsafe {
+                let _ = DwmUnregisterThumbnail(thumbnail);
+                let _ = DestroyWindow(stand);
+                let _ = DestroyWindow(overlay);
+            }
+            return None;
+        }
         let window = local(visible, screen);
         Some(Self {
             hwnd,
@@ -528,6 +573,7 @@ impl Flight {
                 thumbnail,
                 frames: 0,
                 shot,
+                started: Instant::now(),
             },
             restoring: false,
             restore_pending: false,
@@ -600,7 +646,11 @@ impl Flight {
                 thumbnail,
                 frames,
                 shot,
+                started,
             } => {
+                if now.saturating_duration_since(*started) >= CAPTURE_TIMEOUT {
+                    return false;
+                }
                 *frames += 1;
                 // No slot to fly to: the window just stays minimized.
                 if !self.aimed {
@@ -700,10 +750,9 @@ impl Flight {
     /// The snapshot of a window that has just been minimized, to restore it
     /// with the genie later.
     pub fn take_snapshot_for_restore(&mut self) -> Option<Snapshot> {
-        self.captured.take().map(|(image, window)| Snapshot {
-            image: halved(&image),
-            window,
-        })
+        self.captured
+            .take()
+            .map(|(image, window)| Snapshot { image, window })
     }
 
     /// Opacity (0..=255) of the dock's own thumbnail for this window: it
@@ -723,7 +772,8 @@ impl Flight {
 
     /// Cuts the copy of the window (`image`) into strips, ties them to the
     /// genie and starts it.
-    fn take_off(&mut self, gfx: &Gfx, image: IconImage) -> Result<CompositionPropertySet> {
+    fn take_off(&mut self, gfx: &Gfx, captured: Captured) -> Result<CompositionPropertySet> {
+        let Captured { image, restore } = captured;
         let edges = self.genie.window;
         let window = RECT {
             left: edges.left as i32 + self.screen.left,
@@ -735,7 +785,7 @@ impl Flight {
         let size = (image.width as f32, image.height as f32);
         let drive = bind(gfx, &self.genie, &pieces, size, false)?;
         launch(gfx, &self.genie, &drive, false)?;
-        self.captured = Some((image, window));
+        self.captured = Some((restore, window));
         Ok(drive)
     }
 }
@@ -759,5 +809,43 @@ impl Drop for Flight {
             }
             let _ = DestroyWindow(self.overlay);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn restore_pixels_average_each_block_and_keep_alpha() {
+        let image = IconImage {
+            width: 2,
+            height: 2,
+            bgra: vec![
+                0, 10, 20, 255, 20, 30, 40, 255, 40, 50, 60, 255, 60, 70, 80, 255,
+            ],
+        };
+        let reduced = halved(&image);
+        assert_eq!((reduced.width, reduced.height), (1, 1));
+        assert_eq!(reduced.bgra, [30, 40, 50, 255]);
+    }
+
+    #[test]
+    fn restore_pixels_accept_a_single_pixel_window() {
+        let image = IconImage {
+            width: 1,
+            height: 1,
+            bgra: vec![1, 2, 3, 255],
+        };
+        assert_eq!(halved(&image), image);
+    }
+
+    #[test]
+    fn stalled_capture_keeps_its_slot_until_the_worker_finishes() {
+        let first = CapturePermit::acquire();
+        assert!(first.is_some());
+        assert!(CapturePermit::acquire().is_none());
+        drop(first);
+        assert!(CapturePermit::acquire().is_some());
     }
 }

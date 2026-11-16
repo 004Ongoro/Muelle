@@ -32,10 +32,7 @@ use muelle_core::{
 };
 use muelle_shell::{
     appbar::{ABN_FULLSCREENAPP, AppBar, Edge},
-    files,
-    icon_cache::IconCache,
-    launcher,
-    names::display_name,
+    files, launcher,
     pins::{app_exists, link_target, taskbar_pins, taskbar_pins_if_readable, unpin_from_taskbar},
     power,
     recycle_bin::{self, BinWatch},
@@ -91,6 +88,7 @@ use windows::{
 };
 
 use crate::{
+    assets::{Visuals, fallback_name},
     drop::DropTarget,
     flight::{Flight, Snapshot},
     gfx::{Gfx, LabelBrush},
@@ -133,8 +131,8 @@ const DRAG_CANCELLED: u32 = WM_APP + 5;
 const DROP_RUN: u32 = WM_APP + 6;
 /// Posted when apps are pinned to or unpinned from the Windows taskbar.
 const PINS_CHANGED: u32 = WM_APP + 7;
+const ASSETS_READY: u32 = WM_APP + 8;
 
-const ICON_SOURCE_SIZE: u32 = 256;
 /// Magnification range, in icons on either side of the cursor.
 const RANGE_IN_ICONS: f32 = 3.0;
 /// Speed of magnification entry and exit (about 200 ms).
@@ -192,6 +190,9 @@ const SWITCHER_APPEAR: std::time::Duration = std::time::Duration::from_millis(40
 /// Recheck full-screen state while hidden in case Windows drops the exit event.
 const FULLSCREEN_TIMER: usize = 10;
 const FULLSCREEN_RECHECK_MS: u32 = 3_000;
+/// Shell results arriving together cause one scene rebuild.
+const ASSETS_TIMER: usize = 11;
+const ASSETS_DELAY_MS: u32 = 16;
 
 /// Auto-hide slide speed (about 250 ms).
 const SLIDE_OMEGA: f32 = 24.0;
@@ -414,7 +415,7 @@ struct App {
     /// the genie of snapped windows (see `tracker::rect_before_minimize`).
     last_rects: HashMap<isize, RECT>,
     entries: Vec<Entry>,
-    icons: IconCache,
+    icons: Visuals,
     downloads: Option<String>,
     bin_full: bool,
     _bin_watch: Option<BinWatch>,
@@ -423,6 +424,7 @@ struct App {
     assets: HashMap<String, Asset>,
     /// Scale, theme and icon pixel size the cached assets were drawn for.
     assets_for: (f32, bool, u32),
+    placeholder: Option<CompositionSurfaceBrush>,
     remove_label: Option<LabelBrush>,
     config: Config,
     /// 0 = shown, 1 = hidden (auto-hide).
@@ -637,12 +639,26 @@ impl App {
         if self.assets_for != (scale, light, wanted) {
             self.assets.clear();
             self.remove_label = None;
+            self.placeholder = None;
             self.assets_for = (scale, light, wanted);
         }
         if self.remove_label.is_none() {
             self.remove_label = self.gfx.label_brush(text().remove, scale, light).ok();
         }
+        if self.placeholder.is_none() {
+            self.placeholder = self.gfx.placeholder_brush(wanted, light).ok();
+        }
         for id in self.entries.iter().filter_map(|entry| entry.id.as_ref()) {
+            let variant = if id == recycle_bin::PARSING_NAME {
+                if self.bin_full { "llena" } else { "vacia" }
+            } else {
+                ""
+            };
+            let visual = if id == START_ID || window_of(id).is_some() {
+                None
+            } else {
+                self.icons.get(id, variant)
+            };
             if self.assets.contains_key(id) {
                 continue;
             }
@@ -659,22 +675,16 @@ impl App {
                 continue;
             }
             // A missing icon should not prevent the rest of the dock from rendering.
-            let visual = if id == recycle_bin::PARSING_NAME {
-                let state = if self.bin_full { "llena" } else { "vacia" };
-                self.icons.get_variant(id, state, ICON_SOURCE_SIZE)
-            } else {
-                self.icons.get(id, ICON_SOURCE_SIZE)
-            }
-            .inspect_err(|error| eprintln!("muelle: {error}"))
-            .ok();
-            let icon = visual.as_ref().and_then(|visual| {
-                let side = wanted.min(visual.icon.width);
-                self.gfx
-                    .icon_brush(&visual.icon, side)
-                    .inspect_err(|error| eprintln!("muelle: icono de `{id}`: {error:#}"))
-                    .ok()
-            });
-            let name = visual.map_or_else(|| display_name(id), |visual| visual.name);
+            let icon = visual
+                .and_then(|visual| {
+                    let side = wanted.min(visual.icon.width);
+                    self.gfx
+                        .icon_brush(&visual.icon, side)
+                        .inspect_err(|error| eprintln!("muelle: icono de `{id}`: {error:#}"))
+                        .ok()
+                })
+                .or_else(|| self.placeholder.clone());
+            let name = visual.map_or_else(|| fallback_name(id), |visual| visual.name.clone());
             let label = self
                 .gfx
                 .label_brush(&name, scale, light)
@@ -685,6 +695,27 @@ impl App {
         let entries = &self.entries;
         self.assets
             .retain(|id, _| entries.iter().any(|entry| entry.id.as_ref() == Some(id)));
+        let windows = &self.windows;
+        let explorer = explorer_id();
+        self.icons.retain(|id| {
+            id == explorer
+                || entries.iter().any(|entry| entry.id.as_deref() == Some(id))
+                || windows.iter().any(|window| window.app_id == id)
+        });
+    }
+
+    fn assets_ready(&mut self) -> Result<()> {
+        let loaded = self.icons.collect();
+        if loaded.is_empty() {
+            return Ok(());
+        }
+        for id in &loaded {
+            self.assets.remove(id);
+            self.names.remove(id);
+        }
+        self.stage = None;
+        self.refresh()?;
+        self.update_menu_bar_app()
     }
 
     /// Recalculates sizes, positions, and scene for the current state. Does
@@ -1142,6 +1173,7 @@ impl App {
             if let Some(flight) = Flight::start(&self.gfx, hwnd, from, frame, screen) {
                 self.flights.push(flight);
                 self.last_frame = Instant::now();
+                break;
             }
         }
     }
@@ -2329,8 +2361,8 @@ impl App {
         if !self.names.contains_key(&id) {
             let name = self
                 .icons
-                .get(&id, ICON_SOURCE_SIZE)
-                .map_or_else(|_| display_name(&id), |visual| visual.name);
+                .get(&id, "")
+                .map_or_else(|| fallback_name(&id), |visual| visual.name.clone());
             self.names.insert(id.clone(), name);
         }
         let name = self.names.get(&id).map_or("", String::as_str);
@@ -2673,6 +2705,17 @@ fn run_outside(outside: Outside) {
 
 unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LRESULT {
     match msg {
+        ASSETS_READY => {
+            // SAFETY: Coalesce background results on this UI window.
+            unsafe { SetTimer(Some(hwnd), ASSETS_TIMER, ASSETS_DELAY_MS, None) };
+        }
+        WM_TIMER if w.0 == ASSETS_TIMER => {
+            // SAFETY: This UI thread owns the one-shot timer.
+            unsafe {
+                let _ = KillTimer(Some(hwnd), ASSETS_TIMER);
+            }
+            with_app("iconos del shell", App::assets_ready);
+        }
         WM_MOUSEMOVE => with_app("movimiento del ratón", App::on_mouse_move),
         WM_MOUSELEAVE => with_app("salida del ratón", App::on_mouse_leave),
         WM_LBUTTONDOWN => with_app("pulsación", App::on_press),
@@ -2936,13 +2979,14 @@ pub fn run() -> Result<()> {
             windows: Vec::new(),
             last_rects: HashMap::new(),
             entries: Vec::new(),
-            icons: IconCache::default(),
+            icons: Visuals::new(visual, ASSETS_READY)?,
             downloads: downloads_folder(),
             bin_full: false,
             _bin_watch: BinWatch::register(input, BIN_CHANGED),
             pin_watch: muelle_shell::pins::watch(visual.0 as isize, PINS_CHANGED),
             assets: HashMap::new(),
             assets_for: (0.0, false, 0),
+            placeholder: None,
             remove_label: None,
             config,
             slide: Spring::at(if auto_hide { 1.0 } else { 0.0 }, SLIDE_OMEGA),
