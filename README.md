@@ -20,7 +20,7 @@ Smooth magnification, live window previews, and an optional Genie-style minimize
 | :---: | :---: |
 | ![GIF showing the Dock and Menu Bar automatically hiding and reappearing](https://github.com/user-attachments/assets/7127c478-aada-49e4-9813-7b578fef0d63) | ![GIF showing a window minimizing into the Dock with the Genie effect](https://github.com/user-attachments/assets/878503a8-7286-445d-826b-41c18da013bc) |
 | **Usage preview** | **Usage detail** |
-| ![GIF showing the Dock and Menu Bar automatically hiding and reappearing](https://github.com/user-attachments/assets/8e185167-eb9a-4355-8b7d-7d02ab102112) | ![GIF showing a window minimizing into the Dock with the Genie effect](https://github.com/user-attachments/assets/9af22cd9-c938-456d-bf9c-64103d9c328f) |
+| ![GIF showing the Dock and Menu Bar automatically hiding and reappearing](https://github.com/user-attachments/assets/8e185167-eb9a-4355-8b7d-7d02ab102112) | ![GIF showing a window minimizing into the Dock with the Genie effect](https://github.com/user-attachments/assets/fbf21cf6-c1c0-4173-9d68-ae883f0d2a45) |
 
 ## Features
 
