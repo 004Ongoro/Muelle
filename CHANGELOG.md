@@ -10,6 +10,12 @@ copia la sección de la versión que se publica a la release de GitHub.
 
 ### English
 
+- Opening apps and shell file operations run in temporary helper processes so
+  slow shell handlers and native progress dialogs keep the dock responsive.
+  Transfers run in order; ordinary launch helpers time out after 30 seconds,
+  while file operations and administrator launches keep their native user controls.
+- Recycle Bin notifications share one drive scan at a time, preserving changes
+  that arrive during a scan without starting overlapping disk queries.
 - Shell icons and app names load in the background through a bounded queue,
   keeping the dock responsive while the shell is slow. Repeated requests share
   the same load, and unused pixel buffers are released.
@@ -46,6 +52,13 @@ copia la sección de la versión que se publica a la release de GitHub.
 
 ### Español
 
+- Abrir apps y ejecutar operaciones de archivos del shell se hace en procesos
+  auxiliares temporales para mantener la respuesta del dock mientras el shell
+  tarda o muestra el progreso. Las transferencias se ejecutan en orden; las
+  aperturas normales tienen un límite de 30 segundos, mientras las operaciones
+  de archivos y las aperturas como administrador conservan sus controles nativos.
+- Los avisos de Papelera comparten una sola lectura de discos a la vez y
+  conservan los cambios que lleguen durante esa lectura, sin consultas solapadas.
 - Los iconos y nombres del shell se cargan en segundo plano con una cola
   limitada para que el dock responda mientras el shell tarda. Las solicitudes
   repetidas comparten la misma carga y se liberan los píxeles que ya no se usan.

@@ -1,6 +1,7 @@
 //! Shell file operations with the standard Windows progress, confirmation,
 //! and undo behavior.
 
+use thiserror::Error;
 use windows::{
     Win32::{
         Foundation::HWND,
@@ -11,19 +12,34 @@ use windows::{
     core::PCWSTR,
 };
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Outcome {
+    Completed,
+    Cancelled,
+}
+
+#[derive(Debug, Error)]
+#[error("la operación de archivos del shell falló (código {0})")]
+pub struct FileError(i32);
+
 /// Sends files to the recycle bin.
-pub fn recycle(owner: HWND, files: &[String]) {
-    run(owner, FO_DELETE, files, None);
+pub fn recycle(owner: HWND, files: &[String]) -> Result<Outcome, FileError> {
+    run(owner, FO_DELETE, files, None)
 }
 
 /// Moves (or copies) files into `folder`.
-pub fn transfer(owner: HWND, files: &[String], folder: &str, copy: bool) {
+pub fn transfer(
+    owner: HWND,
+    files: &[String],
+    folder: &str,
+    copy: bool,
+) -> Result<Outcome, FileError> {
     run(
         owner,
         if copy { FO_COPY } else { FO_MOVE },
         files,
         Some(folder),
-    );
+    )
 }
 
 /// `true` if both paths are on the same volume, where Explorer moves instead of copying.
@@ -44,9 +60,14 @@ fn path_list<'a>(paths: impl IntoIterator<Item = &'a str>) -> Vec<u16> {
     list
 }
 
-fn run(owner: HWND, operation: u32, files: &[String], destination: Option<&str>) {
+fn run(
+    owner: HWND,
+    operation: u32,
+    files: &[String],
+    destination: Option<&str>,
+) -> Result<Outcome, FileError> {
     if files.is_empty() {
-        return;
+        return Ok(Outcome::Completed);
     }
     let from = path_list(files.iter().map(String::as_str));
     let to = destination.map(|folder| path_list([folder]));
@@ -58,16 +79,29 @@ fn run(owner: HWND, operation: u32, files: &[String], destination: Option<&str>)
         fFlags: FOF_ALLOWUNDO.0 as u16,
         ..Default::default()
     };
-    // SAFETY: The path buffers outlive the call. Cancelling or failing shows
-    // the shell's own message, so the result needs no handling here.
-    unsafe {
-        let _ = SHFileOperationW(&mut request);
+    // SAFETY: The path buffers outlive the call. Preserve the native shell's
+    // confirmations and progress UI, and distinguish cancellation from failure.
+    let code = unsafe { SHFileOperationW(&mut request) };
+    if request.fAnyOperationsAborted.as_bool() {
+        Ok(Outcome::Cancelled)
+    } else if code == 0 {
+        Ok(Outcome::Completed)
+    } else {
+        Err(FileError(code))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn empty_transfer_finishes_without_calling_the_shell() {
+        assert_eq!(
+            transfer(HWND::default(), &[], "", true).ok(),
+            Some(Outcome::Completed)
+        );
+    }
 
     #[test]
     fn path_list_should_end_with_two_nuls() {

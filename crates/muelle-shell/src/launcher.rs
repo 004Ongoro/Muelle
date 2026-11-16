@@ -15,7 +15,7 @@ use windows::{
                 KEYEVENTF_KEYUP, SendInput, VIRTUAL_KEY, VK_A, VK_B, VK_D, VK_ESCAPE, VK_LCONTROL,
                 VK_LWIN, VK_N, VK_RETURN, VK_S, VK_SPACE, VK_TAB, VK_V, VK_W,
             },
-            Shell::ShellExecuteW,
+            Shell::{SEE_MASK_NOASYNC, SHELLEXECUTEINFOW, ShellExecuteExW},
             WindowsAndMessaging::{
                 ASFW_ANY, AllowSetForegroundWindow, FindWindowW, GetForegroundWindow,
                 GetWindowRect, GetWindowThreadProcessId, HWND_TOP, IsIconic, IsWindowVisible,
@@ -46,56 +46,43 @@ fn allow_foreground() {
 }
 
 pub fn open(id: &str) -> Result<(), LaunchError> {
-    shell_execute(w!("open"), id)
+    shell_execute(w!("open"), id, None)
 }
 
 /// Opens `id` as administrator, with the UAC prompt, as the taskbar's
 /// "Run as administrator" and Ctrl+Shift+click do.
 pub fn open_as_admin(id: &str) -> Result<(), LaunchError> {
-    shell_execute(w!("runas"), id)
+    shell_execute(w!("runas"), id, None)
 }
 
-fn shell_execute(verb: PCWSTR, id: &str) -> Result<(), LaunchError> {
+fn shell_execute(verb: PCWSTR, id: &str, arguments: Option<&str>) -> Result<(), LaunchError> {
     allow_foreground();
+    let file = HSTRING::from(id);
+    let arguments = arguments.map(HSTRING::from);
+    let mut request = SHELLEXECUTEINFOW {
+        cbSize: size_of::<SHELLEXECUTEINFOW>() as u32,
+        // A disposable caller must finish activation (including DDE) before
+        // its thread exits. This does not wait for the launched app to close.
+        fMask: SEE_MASK_NOASYNC,
+        lpVerb: verb,
+        lpFile: PCWSTR(file.as_ptr()),
+        lpParameters: arguments
+            .as_ref()
+            .map_or(PCWSTR::null(), |value| PCWSTR(value.as_ptr())),
+        nShow: SW_SHOWNORMAL.0,
+        ..Default::default()
+    };
     // SAFETY: The strings live for the duration of the call.
-    let result =
-        unsafe { ShellExecuteW(None, verb, &HSTRING::from(id), None, None, SW_SHOWNORMAL) };
-    // ShellExecute returns a value greater than 32 on success.
-    let code = result.0 as isize;
-    if code > 32 {
-        Ok(())
-    } else {
-        Err(LaunchError {
-            id: id.to_owned(),
-            code,
-        })
-    }
+    unsafe { ShellExecuteExW(&mut request) }.map_err(|error| LaunchError {
+        id: id.to_owned(),
+        code: error.code().0 as isize,
+    })
 }
 
 /// Opens `files` with the executable `app`.
 pub fn open_with(app: &str, files: &[String]) -> Result<(), LaunchError> {
     let arguments: Vec<String> = files.iter().map(|file| format!("\"{file}\"")).collect();
-    allow_foreground();
-    // SAFETY: The strings live for the duration of the call.
-    let result = unsafe {
-        ShellExecuteW(
-            None,
-            w!("open"),
-            &HSTRING::from(app),
-            &HSTRING::from(arguments.join(" ")),
-            None,
-            SW_SHOWNORMAL,
-        )
-    };
-    let code = result.0 as isize;
-    if code > 32 {
-        Ok(())
-    } else {
-        Err(LaunchError {
-            id: app.to_owned(),
-            code,
-        })
-    }
+    shell_execute(w!("open"), app, Some(&arguments.join(" ")))
 }
 
 /// `true` if the window in front belongs to a program running as
@@ -355,28 +342,11 @@ fn keep_under(flyout: HWND, (center, top): (i32, i32)) {
 }
 
 pub fn reveal(path: &str) -> Result<(), LaunchError> {
-    let arguments = HSTRING::from(format!("/select,\"{path}\""));
-    allow_foreground();
-    // SAFETY: The strings live for the duration of the call.
-    let result = unsafe {
-        ShellExecuteW(
-            None,
-            w!("open"),
-            w!("explorer.exe"),
-            &arguments,
-            None,
-            SW_SHOWNORMAL,
-        )
-    };
-    let code = result.0 as isize;
-    if code > 32 {
-        Ok(())
-    } else {
-        Err(LaunchError {
-            id: path.to_owned(),
-            code,
-        })
-    }
+    shell_execute(
+        w!("open"),
+        "explorer.exe",
+        Some(&format!("/select,\"{path}\"")),
+    )
 }
 
 /// Asks the windows to close, as the close button does; each app can prompt

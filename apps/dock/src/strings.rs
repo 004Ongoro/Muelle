@@ -34,9 +34,11 @@ pub struct Strings {
     pub usage_resets: &'static str,
     pub usage_updated: &'static str,
     pub usage_used: &'static str,
+    pub shell_operation_failed: &'static str,
 }
 
 const ES: Strings = Strings {
+    shell_operation_failed: "No se pudo iniciar la operación. Inténtalo de nuevo en un momento.",
     open: "&Abrir",
     new_window: "&Nueva ventana",
     keep_in_dock: "&Mantener en el Dock",
@@ -66,6 +68,7 @@ const ES: Strings = Strings {
 };
 
 const EN: Strings = Strings {
+    shell_operation_failed: "The operation could not start. Please try again in a moment.",
     open: "&Open",
     new_window: "&New Window",
     keep_in_dock: "&Keep in Dock",

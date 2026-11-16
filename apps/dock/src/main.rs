@@ -7,6 +7,7 @@
 //! - `muelle --autostart on|off`  enables or disables startup with Windows
 //! - `muelle --guard <pid>`       internal watchdog process
 //! - `muelle --usage-worker`      internal one-shot quota reader
+//! - `muelle --shell-worker`      internal one-shot shell action
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
@@ -19,6 +20,7 @@ mod guard;
 mod menu;
 mod menubar;
 mod scene;
+mod shell_work;
 mod strings;
 mod thumbnails;
 mod usage;
@@ -67,6 +69,7 @@ fn main() -> Result<()> {
         ["--autostart", "off"] => Ok(autostart::set(None)?),
         [guard::FLAG, pid] => guard::run(pid.parse().context("pid no válido")?),
         ["--usage-worker"] => usage::worker_main(),
+        [shell_work::FLAG] => shell_work::worker_main(),
         _ => bail!("uso: muelle [--quit | --restore | --autostart on|off]"),
     }
 }

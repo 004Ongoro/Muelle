@@ -15,7 +15,7 @@ use std::{
     env,
     sync::{
         OnceLock,
-        atomic::{AtomicIsize, Ordering},
+        atomic::{AtomicIsize, AtomicU8, Ordering},
     },
     thread,
     time::Instant,
@@ -33,7 +33,7 @@ use muelle_core::{
 use muelle_shell::{
     appbar::{ABN_FULLSCREENAPP, AppBar, Edge},
     files, launcher,
-    pins::{app_exists, link_target, taskbar_pins, taskbar_pins_if_readable, unpin_from_taskbar},
+    pins::{app_exists, link_target, taskbar_pins, taskbar_pins_if_readable},
     power,
     recycle_bin::{self, BinWatch},
     status,
@@ -95,6 +95,7 @@ use crate::{
     menu::{self, MenuItem},
     menubar::MenuBar,
     scene::{Drag, Frame, Scene, SceneInput, SlotContent, Theme},
+    shell_work::{self, Action as ShellAction},
     strings::{self, text},
     thumbnails::Thumbnails,
 };
@@ -237,6 +238,44 @@ static CLOAK_HOOK: AtomicIsize = AtomicIsize::new(0);
 static FOREGROUND_HOOK: AtomicIsize = AtomicIsize::new(0);
 /// The window in front before the Alt+Tab switcher opened.
 static LAST_FRONT: AtomicIsize = AtomicIsize::new(0);
+
+/// One drive scan at a time; changes during a scan request one more pass.
+struct BinQueryGate(AtomicU8);
+
+impl BinQueryGate {
+    const RUNNING: u8 = 1;
+    const DIRTY: u8 = 2;
+
+    const fn new() -> Self {
+        Self(AtomicU8::new(0))
+    }
+
+    fn request(&self) -> bool {
+        if self.0.fetch_or(Self::DIRTY, Ordering::AcqRel) & Self::RUNNING != 0 {
+            return false;
+        }
+        self.0
+            .compare_exchange(
+                Self::DIRTY,
+                Self::RUNNING | Self::DIRTY,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .is_ok()
+    }
+
+    fn begin_pass(&self) {
+        self.0.fetch_and(!Self::DIRTY, Ordering::AcqRel);
+    }
+
+    fn needs_another_pass(&self) -> bool {
+        self.0
+            .compare_exchange(Self::RUNNING, 0, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+    }
+}
+
+static BIN_QUERY: BinQueryGate = BinQueryGate::new();
 
 #[derive(Clone, PartialEq)]
 struct Entry {
@@ -2617,24 +2656,40 @@ pub fn drop_files(x: i32, _y: i32) -> DROPEFFECT {
 /// (measured at 50–75 ms), so the UI is not blocked. The result arrives via
 /// `BIN_STATE`.
 fn query_bin_in_background() {
+    if !BIN_QUERY.request() {
+        return;
+    }
     let window = MAIN_WINDOW.load(Ordering::Relaxed);
-    thread::spawn(move || {
-        // SAFETY: COM is initialized and released on this thread; the message
-        // is harmless if the window no longer exists.
-        unsafe {
-            let com = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
-            let full = recycle_bin::has_items();
-            if com.is_ok() {
-                CoUninitialize();
+    let spawned = thread::Builder::new()
+        .name("muelle-recycle-query".into())
+        .spawn(move || {
+            power::set_thread_efficiency(true);
+            // SAFETY: COM is initialized and released on this thread; the message
+            // is harmless if the window no longer exists.
+            unsafe {
+                let com = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+                loop {
+                    BIN_QUERY.begin_pass();
+                    let full = recycle_bin::has_items();
+                    let _ = PostMessageW(
+                        Some(HWND(window as *mut _)),
+                        BIN_STATE,
+                        WPARAM(usize::from(full)),
+                        LPARAM(0),
+                    );
+                    if !BIN_QUERY.needs_another_pass() {
+                        break;
+                    }
+                }
+                if com.is_ok() {
+                    CoUninitialize();
+                }
             }
-            let _ = PostMessageW(
-                Some(HWND(window as *mut _)),
-                BIN_STATE,
-                WPARAM(usize::from(full)),
-                LPARAM(0),
-            );
-        }
-    });
+        });
+    if let Err(error) = spawned {
+        BIN_QUERY.0.store(0, Ordering::Release);
+        eprintln!("muelle: no se pudo consultar la Papelera: {error}");
+    }
 }
 
 fn main_window() -> HWND {
@@ -2642,46 +2697,44 @@ fn main_window() -> HWND {
 }
 
 fn run_outside(outside: Outside) {
-    let report = |result: Result<(), launcher::LaunchError>| {
+    let submit = |action| {
+        let result = shell_work::dispatch(action);
         if let Err(error) = result {
-            eprintln!("muelle: {error}");
+            eprintln!("muelle: operación no iniciada: {error:#}");
+            shell_work::notify_not_started();
         }
     };
     match outside {
-        Outside::Open(id) => report(launcher::open(&id)),
+        Outside::Open(id) => submit(ShellAction::Open { id }),
         Outside::OpenStart => launcher::open_start_menu(),
         Outside::Activate(windows) => launcher::activate(&windows),
         Outside::Minimize(windows) => launcher::minimize(&windows),
-        Outside::Reveal(path) => report(launcher::reveal(&path)),
-        Outside::OpenWith(app, files) => report(launcher::open_with(&app, &files)),
-        Outside::Recycle(paths) => files::recycle(main_window(), &paths),
+        Outside::Reveal(path) => submit(ShellAction::Reveal { path }),
+        Outside::OpenWith(app, files) => submit(ShellAction::OpenWith { app, files }),
+        Outside::Recycle(files) => submit(ShellAction::Recycle { files }),
         Outside::Transfer {
             folder,
             files: paths,
             copy,
-        } => files::transfer(main_window(), &paths, &folder, copy),
-        Outside::EmptyBin => {
-            let owner = HWND(MAIN_WINDOW.load(Ordering::Relaxed) as *mut _);
-            recycle_bin::empty(owner);
-        }
+        } => submit(ShellAction::Transfer {
+            files: paths,
+            folder,
+            copy,
+        }),
+        Outside::EmptyBin => submit(ShellAction::EmptyBin),
         Outside::QuitDock => request_quit(),
-        Outside::OpenAsAdmin(id) => report(launcher::open_as_admin(&id)),
+        Outside::OpenAsAdmin(id) => submit(ShellAction::OpenAsAdmin { id }),
         Outside::ShowDesktop => launcher::show_desktop(),
-        Outside::UnpinFromTaskbar(id) => {
-            // The shell command may load extensions: keep it off the UI thread.
-            thread::spawn(move || {
-                // SAFETY: COM for this short-lived thread only.
-                let _ = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
-                let _ = unpin_from_taskbar(&id);
-            });
-        }
+        Outside::UnpinFromTaskbar(id) => submit(ShellAction::Unpin { id }),
         Outside::OpenSettings => {
             // The settings app is installed next to the dock.
             let settings = env::current_exe()
                 .ok()
                 .map(|exe| exe.with_file_name("muelle-settings.exe"));
             match settings {
-                Some(path) if path.exists() => report(launcher::open(&path.to_string_lossy())),
+                Some(path) if path.exists() => submit(ShellAction::Open {
+                    id: path.to_string_lossy().into_owned(),
+                }),
                 _ => eprintln!("muelle: no se encontró muelle-settings.exe junto al dock"),
             }
         }
@@ -3130,4 +3183,32 @@ pub fn run() -> Result<()> {
     // Wait for taskbar takeover to finish before restoring it.
     let _ = taking_over.join();
     Ok(())
+}
+
+#[cfg(test)]
+mod performance_tests {
+    use super::BinQueryGate;
+
+    #[test]
+    fn recycle_notifications_share_one_scan_and_preserve_the_last_change() {
+        let gate = BinQueryGate::new();
+        assert!(gate.request());
+        gate.begin_pass();
+        for _ in 0..10_000 {
+            assert!(!gate.request());
+        }
+        assert!(gate.needs_another_pass());
+        gate.begin_pass();
+        assert!(!gate.needs_another_pass());
+        assert!(gate.request());
+    }
+
+    #[test]
+    fn quiet_recycle_scan_allows_the_next_independent_scan() {
+        let gate = BinQueryGate::new();
+        assert!(gate.request());
+        gate.begin_pass();
+        assert!(!gate.needs_another_pass());
+        assert!(gate.request());
+    }
 }
