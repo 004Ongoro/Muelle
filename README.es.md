@@ -26,7 +26,7 @@ en desarrollo activo.
 - Arrastrar y soltar archivos sobre apps, Descargas o la Papelera.
 - Ocultación automática opcional.
 - Barra superior con la app en primer plano, hora, red, volumen y batería, el idioma
-  del teclado, el micrófono/cámara/ubicación en uso y los iconos ocultos de la bandeja,
+  del teclado, el micrófono/cámara en uso y los iconos ocultos de la bandeja,
   además de los botones de búsqueda, Vista de tareas y Widgets si los tienes en la barra
   de Windows.
 - Una isla curva en la barra superior con los límites de Claude Code, Codex,

@@ -1,4 +1,7 @@
-use std::time::{Duration, Instant};
+use std::{
+    sync::atomic::{AtomicBool, Ordering},
+    time::{Duration, Instant},
+};
 
 use thiserror::Error;
 use windows::{
@@ -9,16 +12,16 @@ use windows::{
         UI::{
             Input::KeyboardAndMouse::{
                 INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBD_EVENT_FLAGS, KEYBDINPUT,
-                KEYEVENTF_KEYUP, SendInput, VIRTUAL_KEY, VK_A, VK_B, VK_D, VK_LCONTROL, VK_LWIN,
-                VK_N, VK_RETURN, VK_S, VK_SPACE, VK_TAB, VK_V, VK_W,
+                KEYEVENTF_KEYUP, SendInput, VIRTUAL_KEY, VK_A, VK_B, VK_D, VK_ESCAPE, VK_LCONTROL,
+                VK_LWIN, VK_N, VK_RETURN, VK_S, VK_SPACE, VK_TAB, VK_V, VK_W,
             },
             Shell::ShellExecuteW,
             WindowsAndMessaging::{
                 ASFW_ANY, AllowSetForegroundWindow, FindWindowW, GetForegroundWindow,
                 GetWindowRect, GetWindowThreadProcessId, HWND_TOP, IsIconic, IsWindowVisible,
-                PostMessageW, SW_MINIMIZE, SW_RESTORE, SW_SHOWNORMAL, SWP_NOACTIVATE, SWP_NOMOVE,
-                SWP_NOSIZE, SWP_NOZORDER, SetForegroundWindow, SetWindowPos, ShowWindow,
-                ShowWindowAsync, SwitchToThisWindow, WM_CLOSE,
+                PostMessageW, SW_MINIMIZE, SW_RESTORE, SW_SHOWNORMAL, SWP_ASYNCWINDOWPOS,
+                SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SetForegroundWindow,
+                SetWindowPos, ShowWindowAsync, WM_CLOSE,
             },
         },
     },
@@ -256,7 +259,29 @@ const OVERFLOW_CLASSES: [PCWSTR; 2] = [
 /// Windows opens the flyout at the bottom of the screen, above where the
 /// taskbar would be, so it is then moved under the arrow that opened it:
 /// `anchor` is the arrow's centre and the bottom of the menu bar.
-pub fn open_hidden_icons(anchor: (i32, i32)) {
+///
+/// A second click closes it, as with the taskbar's own button. Win+B with the
+/// flyout open would instead move the focus, and the pointer, to its first
+/// icon.
+pub fn toggle_hidden_icons(anchor: (i32, i32)) {
+    let was_open = OVERFLOW_OPEN_AT_PRESS.swap(false, Ordering::Relaxed);
+    if let Some(flyout) = open_overflow() {
+        // SAFETY: Focuses the flyout so that Escape reaches it and not the
+        // app the user was working in.
+        unsafe {
+            if GetForegroundWindow() != flyout {
+                bring_to_front(flyout);
+            }
+            if GetForegroundWindow() == flyout {
+                tap(&[VK_ESCAPE]);
+            }
+        }
+        return;
+    }
+    if was_open {
+        // The press itself already dismissed it.
+        return;
+    }
     tap(&[VK_LWIN, VK_B]);
     // The rest waits on its own short-lived thread so the dock never sleeps.
     std::thread::spawn(move || {
@@ -270,6 +295,15 @@ pub fn open_hidden_icons(anchor: (i32, i32)) {
             std::thread::sleep(Duration::from_millis(10));
         }
     });
+}
+
+/// Whether the hidden-icons flyout was open when the mouse button went down
+/// on the menu bar: if that press dismissed it, the click must not reopen it.
+static OVERFLOW_OPEN_AT_PRESS: AtomicBool = AtomicBool::new(false);
+
+/// Call on mouse-button down over the menu bar, before its click.
+pub fn note_menu_bar_press() {
+    OVERFLOW_OPEN_AT_PRESS.store(open_overflow().is_some(), Ordering::Relaxed);
 }
 
 /// The hidden-icons flyout, if it is open.
@@ -315,7 +349,7 @@ fn keep_under(flyout: HWND, (center, top): (i32, i32)) {
             top,
             0,
             0,
-            SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+            SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS,
         );
     }
 }
@@ -362,8 +396,8 @@ pub fn close(windows: &[isize]) {
 /// If all windows are minimized, restores only the first one, as macOS does.
 pub fn activate(windows: &[isize]) {
     let handles = || windows.iter().map(|&raw| HWND(raw as *mut _));
-    // SAFETY: These operations target other windows; calls on a window that no
-    // longer exists fail without further effect.
+    // SAFETY: Requests targeting another process are queued, so its hung UI
+    // cannot block the dock. Calls on a closed window fail without effect.
     unsafe {
         // Process from back to front to preserve their relative order.
         for hwnd in handles().rev().filter(|&hwnd| !IsIconic(hwnd).as_bool()) {
@@ -374,7 +408,7 @@ pub fn activate(windows: &[isize]) {
                 0,
                 0,
                 0,
-                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS,
             );
         }
         let Some(front) = handles()
@@ -384,13 +418,8 @@ pub fn activate(windows: &[isize]) {
             return;
         };
         if IsIconic(front).as_bool() {
-            let _ = ShowWindow(front, SW_RESTORE);
-            // Windows refuses ShowWindow on an app running as administrator
-            // (Task Manager, for one). SwitchToThisWindow, what Alt+Tab uses,
-            // restores it anyway and also brings it to the front.
-            if IsIconic(front).as_bool() {
-                SwitchToThisWindow(front, true);
-            }
+            let _ = ShowWindowAsync(front, SW_RESTORE);
+            return;
         }
         bring_to_front(front);
     }

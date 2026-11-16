@@ -33,7 +33,7 @@ Smooth magnification, live window previews, and an optional Genie-style minimize
 - Drag and drop files onto apps, Downloads, or the Recycle Bin.
 - Optional auto-hide.
 - A top menu bar with the app in front, clock, network, volume and battery, the
-  input language, microphone/camera/location in use, the hidden tray icons, plus
+  input language, microphone/camera in use, the hidden tray icons, plus
   the Search, Task View and Widgets buttons if you have them on the Windows taskbar.
 - A curved island in the menu bar for usage limits from Claude Code, Codex,
   GitHub Copilot, Cursor, OpenCode Go, Gemini CLI, and Antigravity. Gemini Pro
@@ -50,7 +50,7 @@ restored when Muelle exits.
 ## Install
 
 **[Download Muelle-Setup.exe](https://github.com/crafter-station/Muelle/releases/latest/download/Muelle-Setup.exe)**
-(Windows 10 version 1903 or later, or Windows 11; 64-bit) or pick a version from
+(Windows 10, or Windows 11; 64-bit) or pick a version from
 [Releases](https://github.com/crafter-station/Muelle/releases).
 
 1. Run `Muelle-Setup.exe`. It installs for your user only: no administrator

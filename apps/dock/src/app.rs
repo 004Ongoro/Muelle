@@ -39,6 +39,7 @@ use muelle_shell::{
     pins::{app_exists, link_target, taskbar_pins, taskbar_pins_if_readable, unpin_from_taskbar},
     power,
     recycle_bin::{self, BinWatch},
+    status,
     system::{
         animations_enabled, downloads_folder, primary_monitor, set_window_transitions,
         transparency_enabled, uses_light_theme,
@@ -64,16 +65,19 @@ use windows::{
         UI::{
             Accessibility::{HWINEVENTHOOK, SetWinEventHook, UnhookWinEvent},
             Input::KeyboardAndMouse::{
-                GetKeyState, ReleaseCapture, SetCapture, TME_LEAVE, TRACKMOUSEEVENT,
-                TrackMouseEvent, VK_CONTROL, VK_SHIFT,
+                GetAsyncKeyState, GetKeyState, ReleaseCapture, SetCapture, TME_LEAVE,
+                TRACKMOUSEEVENT, TrackMouseEvent, VIRTUAL_KEY, VK_CONTROL, VK_DELETE, VK_DOWN,
+                VK_END, VK_HOME, VK_LEFT, VK_LWIN, VK_MENU, VK_RIGHT, VK_RWIN, VK_SHIFT, VK_TAB,
+                VK_UP,
             },
             WindowsAndMessaging::{
                 CreateWindowExW, DefWindowProcW, DispatchMessageW, EVENT_OBJECT_CLOAKED,
-                EVENT_OBJECT_UNCLOAKED, EVENT_SYSTEM_MINIMIZEEND, EVENT_SYSTEM_MINIMIZESTART,
-                FindWindowW, GetCursorPos, GetMessageW, GetSystemMetrics, HWND_TOPMOST, IDC_ARROW,
-                KillTimer, LoadCursorW, MSG, OBJID_WINDOW, PM_REMOVE, PeekMessageW, PostMessageW,
-                PostQuitMessage, RegisterClassW, RegisterShellHookWindow, RegisterWindowMessageW,
-                SM_CXDRAG, SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_SHOWWINDOW, SetTimer, SetWindowPos,
+                EVENT_OBJECT_UNCLOAKED, EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_MINIMIZEEND,
+                EVENT_SYSTEM_MINIMIZESTART, FindWindowW, GetCursorPos, GetMessageW,
+                GetSystemMetrics, HWND_TOPMOST, IDC_ARROW, KillTimer, LoadCursorW, MSG,
+                OBJID_WINDOW, PM_REMOVE, PeekMessageW, PostMessageW, PostQuitMessage,
+                RegisterClassW, RegisterShellHookWindow, RegisterWindowMessageW, SM_CXDRAG,
+                SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_SHOWWINDOW, SetTimer, SetWindowPos,
                 WINDOW_EX_STYLE, WINEVENT_OUTOFCONTEXT, WINEVENT_SKIPOWNPROCESS, WM_APP,
                 WM_CAPTURECHANGED, WM_CLOSE, WM_DESTROY, WM_DISPLAYCHANGE, WM_DPICHANGED,
                 WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONUP, WM_MOUSEMOVE, WM_QUIT, WM_RBUTTONUP,
@@ -173,6 +177,21 @@ const HIDE_DELAY_MS: u32 = 300;
 /// Explorer writes a pin change in a few steps; read it once they settle.
 const PINS_TIMER: usize = 7;
 const PINS_DELAY_MS: u32 = 400;
+/// Holding a drag over an open app brings its window to the front after this
+/// long, so the drop can land in it: the Windows taskbar's drag-hover, and
+/// macOS's spring-loaded Dock icons. Passing over icons does not.
+const SPRING_TIMER: usize = 8;
+const SPRING_DELAY_MS: u32 = 600;
+/// While the Alt+Tab switcher is open, checks how long it stays: Windows
+/// reports when it comes to the front, but not reliably when it closes.
+const SWITCHER_TIMER: usize = 9;
+/// Short enough to see every Tab press (a key stays down 50-100 ms).
+const SWITCHER_POLL_MS: u32 = 16;
+/// How long the switcher may take to show after coming to the front.
+const SWITCHER_APPEAR: std::time::Duration = std::time::Duration::from_millis(400);
+/// Recheck full-screen state while hidden in case Windows drops the exit event.
+const FULLSCREEN_TIMER: usize = 10;
+const FULLSCREEN_RECHECK_MS: u32 = 3_000;
 
 /// Auto-hide slide speed (about 250 ms).
 const SLIDE_OMEGA: f32 = 24.0;
@@ -214,6 +233,9 @@ static MAIN_WINDOW: AtomicIsize = AtomicIsize::new(0);
 static DROP_WINDOW: AtomicIsize = AtomicIsize::new(0);
 static MINIMIZE_HOOK: AtomicIsize = AtomicIsize::new(0);
 static CLOAK_HOOK: AtomicIsize = AtomicIsize::new(0);
+static FOREGROUND_HOOK: AtomicIsize = AtomicIsize::new(0);
+/// The window in front before the Alt+Tab switcher opened.
+static LAST_FRONT: AtomicIsize = AtomicIsize::new(0);
 
 #[derive(Clone, PartialEq)]
 struct Entry {
@@ -268,6 +290,7 @@ enum Outside {
 }
 
 struct MenuRequest {
+    gfx: Gfx,
     target: MenuTarget,
     items: Vec<MenuItem>,
     anchor: POINT,
@@ -347,6 +370,16 @@ struct StageKey {
     entries: Vec<Entry>,
 }
 
+/// Where the Alt+Tab selection is believed to be.
+struct SwitcherFollow {
+    /// The windows the switcher lists, in its order.
+    order: Vec<isize>,
+    index: usize,
+    tab_down: bool,
+    /// Where the pointer was; hovering an item also selects it.
+    pointer: POINT,
+}
+
 struct Stage {
     key: StageKey,
     window_zone: RECT,
@@ -398,6 +431,17 @@ struct App {
     drag: Option<Dragging>,
     /// Files being dragged over the dock from another app.
     incoming: Vec<String>,
+    /// Something (files, text, an image) is being dragged over the dock.
+    drag_over: bool,
+    /// The entry a drag is resting on, which springs open on `SPRING_TIMER`.
+    spring: Option<String>,
+    /// The Alt+Tab switcher is open; an auto-hidden dock shows meanwhile.
+    switching: bool,
+    switch_started: Instant,
+    /// The selection in the switcher, as far as it can be followed.
+    follow: Option<SwitcherFollow>,
+    /// The magnifier rests on the icon selected in Alt+Tab, not the pointer.
+    pointed: bool,
     pending_drop: Option<Outside>,
     bounces: HashMap<String, Bounce>,
     /// Minimized windows, in the order they were minimized.
@@ -834,8 +878,7 @@ impl App {
             self.amount.value,
             &stage.magnifier,
         );
-        self.hovered = self
-            .hovering
+        self.hovered = (self.hovering || self.pointed)
             .then(|| state.icon_at(&stage.layout, self.cursor, stage.gap))
             .flatten();
 
@@ -1165,8 +1208,202 @@ impl App {
         self.render()
     }
 
+    /// Alt+Tab (or Task View) opened: an auto-hidden dock comes up to show
+    /// the open apps until the switcher closes. It cannot follow the
+    /// selection: Windows 11's switcher reports it to no one (no accessible
+    /// focus, selection or name on its items; checked with MSAA and UIA).
+    fn task_switcher_opened(&mut self) -> Result<()> {
+        if self.switching {
+            return Ok(());
+        }
+        self.switching = true;
+        self.switch_started = Instant::now();
+        // SAFETY: Timers on our own window.
+        unsafe {
+            SetTimer(Some(self.input), SWITCHER_TIMER, SWITCHER_POLL_MS, None);
+            let _ = KillTimer(Some(self.input), HIDE_TIMER);
+        }
+        if self.config.auto_hide && !self.fullscreen {
+            self.slide.target = 0.0;
+            self.last_frame = Instant::now();
+            self.place_windows()?;
+            self.render()?;
+        }
+        if let Err(error) = self.start_following() {
+            eprintln!("muelle: Alt+Tab: {error:#}");
+        }
+        Ok(())
+    }
+
+    fn check_task_switcher(&mut self) -> Result<()> {
+        let open = match tracker::task_switcher_state() {
+            Some(shown) => shown || self.switch_started.elapsed() < SWITCHER_APPEAR,
+            None => false,
+        };
+        if open {
+            return self.follow_selection();
+        }
+        self.switching = false;
+        // SAFETY: Our own timer.
+        unsafe {
+            let _ = KillTimer(Some(self.input), SWITCHER_TIMER);
+        }
+        self.stop_following()?;
+        self.hide_if_unused()
+    }
+
+    /// Starts following the switcher's selection, when it can be known:
+    /// opened with Alt+Tab, and listing exactly this desktop's windows.
+    ///
+    /// Windows does not say which item is selected, so it is worked out the
+    /// way the switcher moves: it lists the windows from the most recently
+    /// used, starts on the second (the last with Alt+Shift+Tab), and each Tab
+    /// moves one ahead, Shift+Tab one back.
+    fn start_following(&mut self) -> Result<()> {
+        // SAFETY: Read-only keyboard state queries.
+        let (alt, win, shift) = unsafe {
+            (
+                GetAsyncKeyState(i32::from(VK_MENU.0)) < 0,
+                GetAsyncKeyState(i32::from(VK_LWIN.0)) < 0
+                    || GetAsyncKeyState(i32::from(VK_RWIN.0)) < 0,
+                GetAsyncKeyState(i32::from(VK_SHIFT.0)) < 0,
+            )
+        };
+        if !alt || win {
+            return Ok(());
+        }
+        // Topmost first, which is the order of last use.
+        let order: Vec<isize> = self
+            .tracker
+            .list()
+            .iter()
+            .map(|window| window.hwnd)
+            .collect();
+        let edge_open = self
+            .windows
+            .iter()
+            .any(|window| window.app_id.ends_with("\\msedge.exe"));
+        if order.len() < 2 || status::alt_tab_lists_more_than_windows(edge_open) {
+            return Ok(());
+        }
+        let mut pointer = POINT::default();
+        // SAFETY: A valid output for the pointer position.
+        unsafe {
+            let _ = GetCursorPos(&mut pointer);
+        }
+        // Opened from the desktop or another unlisted window, the switcher
+        // starts on the first window rather than the second.
+        let from_listed = order.first() == Some(&LAST_FRONT.load(Ordering::Relaxed));
+        let index = match (shift, from_listed) {
+            (true, _) => order.len() - 1,
+            (false, true) => 1,
+            (false, false) => 0,
+        };
+        self.follow = Some(SwitcherFollow {
+            order,
+            index,
+            // The Tab that opened the switcher is still down: not a new press.
+            tab_down: true,
+            pointer,
+        });
+        self.point_at_selection()
+    }
+
+    /// Moves the selection with each Tab press. Arrow keys, Delete (which
+    /// closes the selected window) or the pointer moving can change it in
+    /// ways that cannot be followed: the highlight then goes away rather
+    /// than point at the wrong app.
+    fn follow_selection(&mut self) -> Result<()> {
+        let Some(follow) = &mut self.follow else {
+            return Ok(());
+        };
+        let down = |key: VIRTUAL_KEY| {
+            // SAFETY: Read-only keyboard state query.
+            unsafe { GetAsyncKeyState(i32::from(key.0)) < 0 }
+        };
+        let mut pointer = POINT::default();
+        // SAFETY: A valid output for the pointer position.
+        unsafe {
+            let _ = GetCursorPos(&mut pointer);
+        }
+        let lost = [
+            VK_LEFT, VK_RIGHT, VK_UP, VK_DOWN, VK_HOME, VK_END, VK_DELETE,
+        ]
+        .into_iter()
+        .any(down)
+            || pointer != follow.pointer;
+        if lost {
+            return self.stop_following();
+        }
+        let tab = down(VK_TAB);
+        let pressed = tab && !follow.tab_down;
+        follow.tab_down = tab;
+        if !pressed {
+            return Ok(());
+        }
+        let count = follow.order.len();
+        follow.index = if down(VK_SHIFT) {
+            (follow.index + count - 1) % count
+        } else {
+            (follow.index + 1) % count
+        };
+        self.point_at_selection()
+    }
+
+    /// Magnifies the dock icon of the selected window, as if the pointer
+    /// rested on it, and shows its name.
+    fn point_at_selection(&mut self) -> Result<()> {
+        let Some(follow) = &self.follow else {
+            return Ok(());
+        };
+        let selected = follow.order[follow.index];
+        let window_entry = window_id(selected);
+        let app = self
+            .windows
+            .iter()
+            .find(|window| window.hwnd == selected)
+            .map(|window| window.app_id.clone());
+        let index = self
+            .entries
+            .iter()
+            .position(|entry| entry.id.as_deref() == Some(window_entry.as_str()))
+            .or_else(|| {
+                let app = app?;
+                self.entries
+                    .iter()
+                    .position(|entry| entry.role == Role::App && entry.id.as_ref() == Some(&app))
+            });
+        let (Some(index), Some(stage)) = (index, &self.stage) else {
+            return self.stop_following();
+        };
+        let Some(slot) = stage.layout.slots.get(index) else {
+            return self.stop_following();
+        };
+        if self.hovering {
+            return Ok(());
+        }
+        self.cursor = slot.rect.x + slot.rect.width / 2.0;
+        self.pointed = true;
+        self.amount.target = 1.0;
+        self.last_frame = Instant::now();
+        self.render()
+    }
+
+    fn stop_following(&mut self) -> Result<()> {
+        self.follow = None;
+        if !self.pointed {
+            return Ok(());
+        }
+        self.pointed = false;
+        if !self.hovering {
+            self.amount.target = 0.0;
+            self.last_frame = Instant::now();
+        }
+        self.render()
+    }
+
     fn hide_if_unused(&mut self) -> Result<()> {
-        if !self.config.auto_hide || self.hovering || self.drag.is_some() {
+        if !self.config.auto_hide || self.hovering || self.drag.is_some() || self.switching {
             return Ok(());
         }
         self.slide.target = 1.0;
@@ -1363,20 +1600,88 @@ impl App {
 
     fn on_drag_enter(&mut self, incoming: Vec<String>, x: i32) -> Result<DROPEFFECT> {
         self.incoming = incoming;
+        self.drag_over = true;
         self.on_drag_over(x)
     }
 
     fn on_drag_over(&mut self, x: i32) -> Result<DROPEFFECT> {
         self.hover_at(x)?;
+        self.aim_spring();
         Ok(self.drop_action().effect())
     }
 
     fn on_drag_leave(&mut self) -> Result<()> {
         self.incoming.clear();
+        self.end_drag_over();
         self.on_mouse_leave()
     }
 
+    fn end_drag_over(&mut self) {
+        self.drag_over = false;
+        if self.spring.take().is_some() {
+            // SAFETY: Our own timer on our own window.
+            unsafe {
+                let _ = KillTimer(Some(self.input), SPRING_TIMER);
+            }
+        }
+    }
+
+    /// The entry under a drag that can spring open: an app with windows, or
+    /// a minimized window's thumbnail.
+    fn spring_target(&self) -> Option<String> {
+        let entry = self.hovered.and_then(|index| self.entries.get(index))?;
+        let id = entry.id.clone()?;
+        match entry.role {
+            Role::App if !self.windows_of(&id).is_empty() => Some(id),
+            Role::Window => Some(id),
+            _ => None,
+        }
+    }
+
+    /// Starts the spring delay when the drag moves onto another entry; the
+    /// delay restarts on each new entry, so sweeping across the dock opens
+    /// nothing.
+    fn aim_spring(&mut self) {
+        let target = self.spring_target();
+        if target == self.spring {
+            return;
+        }
+        // SAFETY: Our own timer on our own window; setting it again restarts it.
+        unsafe {
+            if target.is_some() {
+                SetTimer(Some(self.input), SPRING_TIMER, SPRING_DELAY_MS, None);
+            } else {
+                let _ = KillTimer(Some(self.input), SPRING_TIMER);
+            }
+        }
+        self.spring = target;
+    }
+
+    /// The drag rested on an app: bring its windows to the front, under the
+    /// pointer, so the drop lands in the app.
+    fn spring_open(&mut self) -> Result<Option<Outside>> {
+        // SAFETY: Our own timer on our own window.
+        unsafe {
+            let _ = KillTimer(Some(self.input), SPRING_TIMER);
+        }
+        if !self.drag_over || self.spring_target() != self.spring {
+            return Ok(None);
+        }
+        let Some(id) = self.spring.clone() else {
+            return Ok(None);
+        };
+        let windows = match self.hovered.and_then(|index| self.entries.get(index)) {
+            Some(entry) if entry.role == Role::Window => window_of(&id).into_iter().collect(),
+            _ => self.windows_of(&id),
+        };
+        if windows.is_empty() || windows.contains(&tracker::foreground_window()) {
+            return Ok(None);
+        }
+        Ok(self.activating(windows))
+    }
+
     fn on_drop(&mut self, x: i32) -> Result<DROPEFFECT> {
+        self.end_drag_over();
         self.hover_at(x)?;
         let action = self.drop_action();
         let effect = action.effect();
@@ -1585,6 +1890,7 @@ impl App {
         self.hovering = false;
         self.render()?;
         Ok(Some(Outside::Menu(MenuRequest {
+            gfx: self.gfx.clone(),
             target,
             items,
             anchor,
@@ -1773,9 +2079,18 @@ impl App {
             return Ok(());
         };
         let Some(previous) = self.config.taskbar_pins.replace(current.clone()) else {
-            // First look since this feature: remember, change nothing.
+            // First look since this feature: keep the dock as the user left it,
+            // but add the Store apps pinned in Windows. Versions before 0.1.7
+            // could not import them, so their absence was never a choice; on
+            // Windows 10 most default pins (Store, Mail) are Store apps.
+            for id in current
+                .iter()
+                .filter(|id| id.starts_with("shell:AppsFolder\\"))
+            {
+                self.roster.pin(id);
+            }
             save_settings(&self.roster, &self.config);
-            return Ok(());
+            return self.refresh();
         };
         if previous == current {
             if pruned {
@@ -2046,25 +2361,52 @@ impl App {
         if self.windows.iter().any(|window| window.hwnd == front) {
             self.remember_rect(front);
         }
-        self.update_menu_bar_app()?;
         let Some(monitor) = primary_monitor() else {
             return Ok(());
         };
         let fullscreen = tracker::foreground_is_fullscreen(monitor.screen);
-        if fullscreen == self.fullscreen {
-            return Ok(());
+        // Windows sometimes omits the shell event when a full-screen app
+        // closes or switches desktops. Poll only while our UI is hidden.
+        // SAFETY: `self.input` is a live window on this UI thread.
+        unsafe {
+            if fullscreen {
+                SetTimer(
+                    Some(self.input),
+                    FULLSCREEN_TIMER,
+                    FULLSCREEN_RECHECK_MS,
+                    None,
+                );
+            }
         }
-        self.fullscreen = fullscreen;
-        if let Some(bar) = &mut self.menubar {
-            bar.set_visible(!fullscreen)?;
+        if fullscreen != self.fullscreen {
+            if let Some(bar) = &mut self.menubar {
+                bar.set_visible(!fullscreen)?;
+            }
+            let previous = self.fullscreen;
+            self.fullscreen = fullscreen;
+            if fullscreen {
+                self.hovering = false;
+                self.amount = Spring::at(0.0, HOVER_OMEGA);
+                self.press = None;
+                self.drag = None;
+            }
+            if let Err(error) = self.place_windows() {
+                self.fullscreen = previous;
+                return Err(error);
+            }
         }
-        if fullscreen {
-            self.hovering = false;
-            self.amount = Spring::at(0.0, HOVER_OMEGA);
-            self.press = None;
-            self.drag = None;
+        if !fullscreen {
+            // SAFETY: This UI thread owns the timer.
+            unsafe {
+                let _ = KillTimer(Some(self.input), FULLSCREEN_TIMER);
+            }
         }
-        self.place_windows()
+        // Updating an app name can fail transiently; it must never prevent
+        // the dock or bar from returning after full-screen mode.
+        if let Err(error) = self.update_menu_bar_app() {
+            eprintln!("muelle: nombre de la barra superior: {error:#}");
+        }
+        Ok(())
     }
 
     fn on_appbar_notice(&mut self, notice: usize) -> Result<()> {
@@ -2135,6 +2477,12 @@ unsafe extern "system" fn on_win_event(
         // hook reports it, and a window the dock still thought minimized kept
         // its thumbnail and skipped the genie on its next minimize.
         with_app("restaurar", App::sync);
+    } else if event == EVENT_SYSTEM_FOREGROUND {
+        if tracker::is_task_switcher(hwnd) {
+            with_app("Alt+Tab", App::task_switcher_opened);
+        } else if !tracker::is_switch_transient(hwnd) {
+            LAST_FRONT.store(hwnd.0 as isize, Ordering::Relaxed);
+        }
     } else if event == EVENT_OBJECT_CLOAKED || event == EVENT_OBJECT_UNCLOAKED {
         // Shows the windows of the virtual desktop in front, as the Windows
         // taskbar does. A desktop switch cloaks many windows at once; the
@@ -2162,6 +2510,14 @@ pub fn menu_bar_clicked(x: f32, y: f32) {
             bar.click(&app.gfx, x, y)?;
         }
         Ok(())
+    });
+}
+
+/// The pointer rested on the top edge with the menu bar hidden.
+pub fn menu_bar_edge_rested() {
+    with_app("barra superior", |app| match &mut app.menubar {
+        Some(bar) => bar.edge_rested(&app.gfx),
+        None => Ok(()),
     });
 }
 
@@ -2299,7 +2655,13 @@ fn run_outside(outside: Outside) {
         }
         Outside::Menu(request) => {
             let owner = HWND(MAIN_WINDOW.load(Ordering::Relaxed) as *mut _);
-            let chosen = menu::show(owner, &request.items, request.anchor, request.dark);
+            let chosen = menu::show(
+                &request.gfx,
+                owner,
+                &request.items,
+                request.anchor,
+                request.dark,
+            );
             if let Some(command) = chosen {
                 with_app_then("orden del menú", |app| {
                     app.on_command(request.target, command)
@@ -2362,6 +2724,15 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) ->
                 let _ = KillTimer(Some(hwnd), w.0);
             }
             with_app("apps fijadas", App::sync_taskbar_pins);
+        }
+        WM_TIMER if w.0 == SWITCHER_TIMER => {
+            with_app("Alt+Tab", App::check_task_switcher);
+        }
+        WM_TIMER if w.0 == FULLSCREEN_TIMER => {
+            with_app("pantalla completa", App::update_fullscreen);
+        }
+        WM_TIMER if w.0 == SPRING_TIMER => {
+            with_app_then("arrastre sobre una app", App::spring_open);
         }
         WM_TIMER if w.0 == HIDE_TIMER => {
             // SAFETY: Same as above.
@@ -2482,7 +2853,11 @@ fn message_loop() {
                 // Wait for the next refresh to pace animation without timers.
                 let _ = DwmFlush();
             } else {
-                if !GetMessageW(&mut msg, None, 0, 0).as_bool() {
+                let status = GetMessageW(&mut msg, None, 0, 0);
+                if status.0 <= 0 {
+                    if status.0 < 0 {
+                        eprintln!("muelle: error al leer la cola de mensajes de Windows");
+                    }
                     return;
                 }
                 DispatchMessageW(&msg);
@@ -2574,6 +2949,12 @@ pub fn run() -> Result<()> {
             press: None,
             drag: None,
             incoming: Vec::new(),
+            drag_over: false,
+            spring: None,
+            switching: false,
+            switch_started: Instant::now(),
+            follow: None,
+            pointed: false,
             pending_drop: None,
             bounces: HashMap::new(),
             minimized: Vec::new(),
@@ -2649,6 +3030,19 @@ pub fn run() -> Result<()> {
             WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS,
         );
         CLOAK_HOOK.store(cloak_hook.0 as isize, Ordering::Relaxed);
+        // Alt+Tab: the switcher coming to the front. One event per window
+        // switch, so it costs nothing while the user works in one app.
+        let foreground_hook = SetWinEventHook(
+            EVENT_SYSTEM_FOREGROUND,
+            EVENT_SYSTEM_FOREGROUND,
+            None,
+            Some(on_win_event),
+            0,
+            0,
+            WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS,
+        );
+        FOREGROUND_HOOK.store(foreground_hook.0 as isize, Ordering::Relaxed);
+        LAST_FRONT.store(tracker::foreground_window(), Ordering::Relaxed);
         let target: IDropTarget = DropTarget.into();
         RegisterDragDrop(input, &target)?;
         DROP_WINDOW.store(input.0 as isize, Ordering::Relaxed);
@@ -2677,7 +3071,7 @@ pub fn run() -> Result<()> {
     // SAFETY: The drop target was registered on this window in this thread.
     unsafe {
         let _ = RevokeDragDrop(HWND(DROP_WINDOW.load(Ordering::Relaxed) as *mut _));
-        for hook in [&MINIMIZE_HOOK, &CLOAK_HOOK] {
+        for hook in [&MINIMIZE_HOOK, &CLOAK_HOOK, &FOREGROUND_HOOK] {
             let _ = UnhookWinEvent(HWINEVENTHOOK(hook.load(Ordering::Relaxed) as *mut _));
         }
     }

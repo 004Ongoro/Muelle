@@ -42,12 +42,15 @@ pub fn take_over() {
     let file = state_file();
     if !file.exists() {
         let original = if autohide_enabled() { "1" } else { "0" };
-        if let Some(folder) = file.parent() {
-            let _ = fs::create_dir_all(folder);
-        }
-        if let Err(error) = fs::write(&file, original) {
-            // Without a saved value, assume Windows' default: auto-hide disabled.
+        let saved = file
+            .parent()
+            .map_or(Ok(()), fs::create_dir_all)
+            .and_then(|()| fs::write(&file, original));
+        if let Err(error) = saved {
+            // Never hide the system taskbar unless the guard can restore its
+            // original state after a crash or hang.
             eprintln!("muelle: no se pudo guardar el estado de la barra: {error}");
+            return;
         }
     }
     set_autohide(true);

@@ -8,6 +8,70 @@ copia la sección de la versión que se publica a la release de GitHub.
 
 ## [Unreleased]
 
+### English
+
+- Drag and drop into apps: hold a file (or text, or an image) over an open
+  app in the dock and its window comes to the front, so you can drop it there,
+  as with the Windows taskbar. Passing over icons does not switch windows.
+- Fixed: with "Automatically hide and show the menu bar" on, the bar covered the
+  minimize, maximize and close buttons of maximized windows and took clicks
+  meant for browser tabs at the top edge. The hidden bar no longer keeps any
+  window on screen; it appears after the pointer rests briefly on the top
+  edge, and never over a window's title-bar buttons.
+- The top-right corner of the menu bar no longer shows the desktop: throwing
+  the pointer there to close a window minimized everything. "Show Desktop"
+  remains in the dock menu.
+- Fixed: clicking the menu bar's "^" again left the hidden-icons popup open
+  and moved the pointer to its first icon. The second click now closes it.
+- The dock's menu looks like a macOS menu: frosted glass in the light or dark
+  theme, compact rows and the selection in your Windows accent color. It
+  works fully from the keyboard; with a screen reader or high contrast on,
+  the native Windows menu is used instead.
+- An auto-hidden dock shows while Alt+Tab (or Task View) is open, so the
+  open apps are in view, and hides again when you let go. As you press Tab,
+  the dock magnifies the app of the selected window. Windows does not report
+  the selection, so it follows Tab and Shift+Tab; after arrow keys or the
+  mouse in the switcher, the magnifier steps aside rather than guess.
+- The menu bar no longer shows a location icon. Widgets keeps location in use
+  for the weather all the time, and Windows shows no icon for that either.
+- Windows 10: apps pinned to the taskbar from the Microsoft Store (Store, Mail
+  and others) now come to the dock. Versions before 0.1.7 could not import
+  them, and updating did not add them afterwards.
+
+### Español
+
+- Arrastrar y soltar en las apps: mantén un archivo (o texto, o una imagen)
+  sobre una app abierta del dock y su ventana pasa al frente para que lo
+  sueltes ahí, como con la barra de tareas de Windows. Pasar por encima de los
+  iconos no cambia de ventana.
+- Corregido: con «Ocultar y mostrar la barra superior automáticamente», la barra tapaba
+  los botones de minimizar, maximizar y cerrar de las ventanas maximizadas y
+  se quedaba con los clics en las pestañas del navegador del borde superior.
+  La barra oculta ya no deja ninguna ventana en pantalla: aparece cuando el
+  puntero se detiene un momento en el borde superior, y nunca encima de los
+  botones de una ventana.
+- La esquina superior derecha de la barra ya no muestra el escritorio: lanzar
+  el puntero ahí para cerrar una ventana minimizaba todo. «Mostrar escritorio»
+  sigue en el menú del dock.
+- Corregido: volver a pulsar «^» en la barra superior dejaba abierto el
+  panel de iconos ocultos y movía el puntero a su primer icono. Ahora el
+  segundo clic lo cierra.
+- El menú del dock se ve como un menú de macOS: cristal esmerilado en tema
+  claro u oscuro, filas compactas y la selección en el color de énfasis de
+  Windows. Funciona por completo con el teclado; con un lector de pantalla o
+  alto contraste activos se usa el menú nativo de Windows.
+- El dock oculto aparece mientras Alt+Tab (o la Vista de tareas) está abierto,
+  para ver las apps abiertas, y se vuelve a ocultar al soltar. Al pulsar Tab,
+  el dock amplía la app de la ventana seleccionada. Windows no informa de la
+  selección, así que sigue Tab y Mayús+Tab; si se usan las flechas o el ratón
+  en el selector, la lupa se aparta en vez de adivinar.
+- La barra superior ya no muestra el icono de ubicación. Widgets mantiene la
+  ubicación en uso todo el tiempo para el clima, y Windows tampoco muestra un
+  icono por eso.
+- Windows 10: las apps de Microsoft Store fijadas en la barra de tareas
+  (Store, Correo y otras) ahora llegan al dock. Las versiones anteriores a la
+  0.1.7 no podían importarlas, y al actualizar no se añadían después.
+
 ## [0.1.7]
 
 ### English

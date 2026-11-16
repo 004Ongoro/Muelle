@@ -8,7 +8,7 @@ use std::collections::HashMap;
 
 use windows::{
     Win32::{
-        Foundation::{CloseHandle, HWND, LPARAM, RECT},
+        Foundation::{CloseHandle, HWND, LPARAM, POINT, RECT},
         Graphics::Dwm::{DWMWA_CLOAKED, DwmGetWindowAttribute},
         Storage::{
             EnhancedStorage::PKEY_AppUserModel_ID, Packaging::Appx::GetApplicationUserModelId,
@@ -236,7 +236,7 @@ pub fn foreground_is_fullscreen(screen: RECT) -> bool {
     // SAFETY: Read-only queries on the foreground window.
     unsafe {
         let hwnd = GetForegroundWindow();
-        if hwnd.is_invalid() || DESKTOP_CLASSES.contains(&class_name(hwnd).as_str()) {
+        if hwnd.is_invalid() || is_desktop(hwnd) || is_task_switcher(hwnd) {
             return false;
         }
         let mut pid = 0u32;
@@ -254,7 +254,113 @@ pub fn foreground_is_fullscreen(screen: RECT) -> bool {
     }
 }
 
-const DESKTOP_CLASSES: [&str; 3] = ["Progman", "WorkerW", "Shell_TrayWnd"];
+/// `true` if `point` is on the minimize, maximize or close button of the
+/// window under it. `screen` is the monitor the point is on.
+pub fn caption_button_at(point: POINT, screen: RECT) -> bool {
+    use windows::Win32::{
+        Foundation::WPARAM,
+        Graphics::Dwm::{DWMWA_CAPTION_BUTTON_BOUNDS, DwmGetWindowAttribute},
+        UI::{
+            HiDpi::GetDpiForWindow,
+            WindowsAndMessaging::{
+                GA_ROOT, GetAncestor, GetWindowRect, SMTO_ABORTIFHUNG, SendMessageTimeoutW,
+                WM_NCHITTEST, WindowFromPoint,
+            },
+        },
+    };
+    const HTMINBUTTON: usize = 8;
+    const HTMAXBUTTON: usize = 9;
+    const HTCLOSE: usize = 20;
+    const HTHELP: usize = 21;
+    /// Windows' caption buttons are 46 logical pixels wide, three of them.
+    const BUTTONS_WIDTH: i32 = 3 * 46;
+    // SAFETY: Read-only queries; the message has a short timeout and is
+    // abandoned if the window does not answer.
+    unsafe {
+        let window = GetAncestor(WindowFromPoint(point), GA_ROOT);
+        let mut frame = RECT::default();
+        if window.is_invalid() || is_desktop(window) || GetWindowRect(window, &mut frame).is_err() {
+            return false;
+        }
+        // A maximized window's frame overflows the screen by its border, so
+        // its buttons reach the screen edge: the corner pixel is "close".
+        let visible_right = frame.right.min(screen.right);
+        let (x, y) = (point.x - frame.left, point.y - frame.top);
+
+        // The buttons DWM draws for standard title bars.
+        let mut buttons = RECT::default();
+        if DwmGetWindowAttribute(
+            window,
+            DWMWA_CAPTION_BUTTON_BOUNDS,
+            (&raw mut buttons).cast(),
+            size_of::<RECT>() as u32,
+        )
+        .is_ok()
+            && buttons.right > buttons.left
+        {
+            let right = buttons.right.min(visible_right - frame.left);
+            if x >= buttons.left && x <= right && y < buttons.bottom.max(1) {
+                return true;
+            }
+        }
+        // Apps that draw their own title bar (browsers, Office) answer with
+        // the same hit-test codes, which Windows needs for Snap layouts.
+        let position = ((point.y as u32 & 0xFFFF) << 16 | (point.x as u32 & 0xFFFF)) as isize;
+        let mut hit = 0usize;
+        let answered = SendMessageTimeoutW(
+            window,
+            WM_NCHITTEST,
+            WPARAM(0),
+            LPARAM(position),
+            SMTO_ABORTIFHUNG,
+            50,
+            Some(&mut hit),
+        );
+        if answered.0 != 0 && matches!(hit, HTMINBUTTON | HTMAXBUTTON | HTCLOSE | HTHELP) {
+            return true;
+        }
+        // Some draw them in web content and answer "client area" (Electron
+        // apps). Every Windows app keeps them in the top-right corner, so a
+        // window touching the top edge keeps that corner free of the bar.
+        let width = BUTTONS_WIDTH * GetDpiForWindow(window).max(96) as i32 / 96;
+        frame.top >= screen.top - 16 && point.x >= visible_right - width
+    }
+}
+
+/// The Alt+Tab switcher (and, on Windows 11, Task View and Snap Assist,
+/// which share its window class). It covers the screen but is not a
+/// full-screen app.
+pub fn is_task_switcher(hwnd: HWND) -> bool {
+    matches!(
+        class_name(hwnd).as_str(),
+        "XamlExplorerHostIslandWindow" | "MultitaskingViewFrame"
+    )
+}
+
+/// A window that is briefly in front while Windows switches between two
+/// others (Alt+Tab passes through it), never the user's choice.
+pub fn is_switch_transient(hwnd: HWND) -> bool {
+    is_task_switcher(hwnd) || class_name(hwnd) == "ForegroundStaging"
+}
+
+/// The task switcher in front: `Some(true)` once on screen, `Some(false)`
+/// while it is still appearing (it comes to the front some 50 ms before it
+/// shows) or after it closed, `None` when another window is in front.
+pub fn task_switcher_state() -> Option<bool> {
+    // SAFETY: Read-only queries on the foreground window.
+    unsafe {
+        let front = GetForegroundWindow();
+        is_task_switcher(front).then(|| IsWindowVisible(front).as_bool())
+    }
+}
+
+/// The desktop and the (hidden) taskbar: shell windows, not apps.
+pub fn is_desktop(hwnd: HWND) -> bool {
+    matches!(
+        class_name(hwnd).as_str(),
+        "Progman" | "WorkerW" | "Shell_TrayWnd"
+    )
+}
 
 fn covers(window: RECT, screen: RECT) -> bool {
     window.left <= screen.left

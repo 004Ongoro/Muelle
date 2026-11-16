@@ -298,6 +298,17 @@ fn dword(key: PCWSTR, value: &str) -> Option<u32> {
 
 /// Read when the bar redraws: three registry values, no watch needed. A value
 /// Windows has never written means the button is at its default, shown.
+/// Alt+Tab also lists Microsoft Edge tabs ("Show tabs from apps"), or the
+/// windows of every virtual desktop: then its list is not the open windows
+/// of this desktop in order.
+#[must_use]
+pub fn alt_tab_lists_more_than_windows(edge_open: bool) -> bool {
+    // Absent means the default: three Edge tabs, this desktop only.
+    let tabs = dword(ADVANCED, "MultiTaskingAltTabFilter").unwrap_or(2) != 3;
+    let all_desktops = dword(ADVANCED, "VirtualDesktopAltTabFilter").unwrap_or(1) == 0;
+    (tabs && edge_open) || all_desktops
+}
+
 #[must_use]
 pub fn taskbar_buttons() -> TaskbarButtons {
     TaskbarButtons {
@@ -309,8 +320,8 @@ pub fn taskbar_buttons() -> TaskbarButtons {
 
 /* ---------------------------------------------------------------- Privacy */
 
-/// Where Windows records which apps use the microphone, camera and
-/// location, and when: the source of its own privacy icons in the tray.
+/// Where Windows records which apps use the microphone and camera, and
+/// when: the source of its own privacy icons in the tray.
 pub const CONSENT_STORE: windows::core::PCWSTR = windows::core::w!(
     r"Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore"
 );
@@ -320,8 +331,10 @@ pub const CONSENT_STORE: windows::core::PCWSTR = windows::core::w!(
 pub struct Privacy {
     pub microphone: bool,
     pub camera: bool,
-    pub location: bool,
 }
+
+// Location is left out on purpose: Widgets keeps it "in use" all the time
+// for the weather, and Windows shows no icon for that.
 
 /// Reads [`CONSENT_STORE`]. Call it when [`watch_privacy`] reports a change,
 /// not on a timer.
@@ -330,12 +343,11 @@ pub fn privacy() -> Privacy {
     Privacy {
         microphone: capability_in_use("microphone"),
         camera: capability_in_use("webcam"),
-        location: capability_in_use("location"),
     }
 }
 
 /// Tells a window, by posting it `message`, when an app starts or stops
-/// using the microphone, camera or location.
+/// using the microphone or camera.
 #[must_use]
 pub fn watch_privacy(hwnd: isize, message: u32) -> Option<crate::watch::RegistryWatch> {
     crate::watch::RegistryWatch::new(CONSENT_STORE, true, hwnd, message)

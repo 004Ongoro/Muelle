@@ -70,6 +70,7 @@ pub struct LabelBrush {
     pub height: f32,
 }
 
+#[derive(Clone)]
 pub struct Gfx {
     pub compositor: Compositor,
     graphics: CompositionGraphicsDevice,

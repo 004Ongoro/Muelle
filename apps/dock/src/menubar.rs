@@ -43,10 +43,10 @@ use windows::{
         UI::Input::KeyboardAndMouse::{TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent},
         UI::WindowsAndMessaging::{
             CallNextHookEx, CreateWindowExW, DefWindowProcW, DestroyWindow, GetCursorPos, HHOOK,
-            HWND_TOPMOST, IDC_ARROW, IDC_HAND, LoadCursorW, MSLLHOOKSTRUCT, PostMessageW,
-            RegisterClassW, SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_SHOWWINDOW, SetCursor, SetTimer,
-            SetWindowPos, SetWindowsHookExW, UnhookWindowsHookEx, WH_MOUSE_LL, WM_APP,
-            WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MOUSEMOVE, WM_NCHITTEST,
+            HWND_TOPMOST, IDC_ARROW, IDC_HAND, KillTimer, LoadCursorW, MSLLHOOKSTRUCT,
+            PostMessageW, RegisterClassW, SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_SHOWWINDOW,
+            SetCursor, SetTimer, SetWindowPos, SetWindowsHookExW, UnhookWindowsHookEx, WH_MOUSE_LL,
+            WM_APP, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MOUSEMOVE, WM_NCHITTEST,
             WM_RBUTTONDOWN, WM_SETCURSOR, WM_SETTINGCHANGE, WM_TIMECHANGE, WM_TIMER,
             WM_XBUTTONDOWN, WNDCLASSW, WS_EX_NOACTIVATE, WS_EX_NOREDIRECTIONBITMAP,
             WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
@@ -72,8 +72,14 @@ const ITEM_GAP: f32 = 16.0;
 /// Extra clickable room around an item.
 const HIT_SLOP: f32 = 7.0;
 
-/// Height of the strip that reveals a hidden bar, in physical pixels.
-const REVEAL_STRIP: i32 = 2;
+/// How long the pointer must rest on the top edge before a hidden bar shows.
+/// Just passing through, on the way to a window's close button or a browser
+/// tab, does not reveal it.
+const REVEAL_DWELL_MS: u32 = 250;
+const REVEAL_TIMER: usize = 2;
+/// Posted by the edge hook when the pointer reaches or leaves the top edge.
+const EDGE_ENTER: u32 = WM_APP + 26;
+const EDGE_LEAVE: u32 = WM_APP + 27;
 
 const CLOCK_TIMER: usize = 1;
 const ISLAND_SINGLE_WIDTH: f32 = 145.0;
@@ -90,7 +96,7 @@ const STATUS_CHANGED: u32 = WM_APP + 21;
 const TICK: u32 = WM_APP + 22;
 const USAGE_CHANGED: u32 = WM_APP + 23;
 const DISMISS_USAGE: u32 = WM_APP + 24;
-/// Posted when an app starts or stops using the microphone, camera or location.
+/// Posted when an app starts or stops using the microphone or camera.
 const PRIVACY_CHANGED: u32 = WM_APP + 25;
 /// `wParam` of WM_SETTINGCHANGE when the work area changes, which every
 /// AppBar reservation (the dock's, this bar's) causes.
@@ -105,9 +111,14 @@ static HEADER_BOTTOM: AtomicI32 = AtomicI32::new(0);
 static PANEL_BOTTOM: AtomicI32 = AtomicI32::new(0);
 /// The hook exists only while the usage panel is open.
 static USAGE_HOOK_WINDOW: AtomicIsize = AtomicIsize::new(0);
-
-/// Width of the show-desktop strip at the right edge, in logical pixels.
-const SHOW_DESKTOP_EDGE: f32 = 5.0;
+/// The hidden bar's window, for the edge hook; 0 while no hook is installed.
+static EDGE_HOOK_WINDOW: AtomicIsize = AtomicIsize::new(0);
+/// The row of the top edge and its span, in screen pixels.
+static EDGE_TOP: AtomicI32 = AtomicI32::new(0);
+static EDGE_LEFT: AtomicI32 = AtomicI32::new(0);
+static EDGE_RIGHT: AtomicI32 = AtomicI32::new(0);
+/// The pointer is on the edge and `EDGE_ENTER` was posted.
+static EDGE_ARMED: AtomicBool = AtomicBool::new(false);
 
 /// Segoe Fluent Icons code points.
 mod glyph {
@@ -124,7 +135,6 @@ mod glyph {
     pub const HIDDEN_ICONS: char = '\u{E70E}';
     pub const MICROPHONE: char = '\u{E720}';
     pub const CAMERA: char = '\u{E722}';
-    pub const LOCATION: char = '\u{E81D}';
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -137,10 +147,8 @@ enum Action {
     Widgets,
     HiddenIcons,
     InputLanguage,
-    ShowDesktop,
     Microphone,
     Camera,
-    Location,
 }
 
 /// Network, volume and taskbar buttons, read only when Windows reports a change.
@@ -196,15 +204,18 @@ pub struct MenuBar {
     island_right: f32,
     refresh_button: Option<(f32, f32, f32, f32)>,
     outside_click_hook: Option<HHOOK>,
+    /// Watches the top edge while the bar auto-hides.
+    edge_watch: Option<EdgeWatch>,
     /// Held for their callbacks; dropping them unsubscribes.
     _network: Option<NetworkWatch>,
-    /// Hears when apps start or stop using the microphone, camera or location.
+    /// Hears when apps start or stop using the microphone or camera.
     privacy_watch: Option<RegistryWatch>,
     audio: Option<AudioWatch>,
 }
 
 unsafe extern "system" fn bar_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LRESULT {
     match msg {
+        WM_LBUTTONDOWN => launcher::note_menu_bar_press(),
         WM_LBUTTONUP => {
             let x = (l.0 & 0xFFFF) as i16;
             let y = (l.0 >> 16) as i16;
@@ -251,6 +262,19 @@ unsafe extern "system" fn bar_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -
         // network or volume changed, or a Windows setting (taskbar buttons).
         // Nothing the bar shows depends on the work area.
         WM_SETTINGCHANGE if w.0 == SPI_SETWORKAREA => {}
+        EDGE_ENTER => {
+            // SAFETY: A timer on our own window; setting it again restarts it.
+            unsafe {
+                SetTimer(Some(hwnd), REVEAL_TIMER, REVEAL_DWELL_MS, None);
+            }
+        }
+        EDGE_LEAVE => {
+            // SAFETY: Our own timer.
+            unsafe {
+                let _ = KillTimer(Some(hwnd), REVEAL_TIMER);
+            }
+        }
+        WM_TIMER if w.0 == REVEAL_TIMER => app::menu_bar_edge_rested(),
         // Some of these are sent while the dock is busy reserving space, and
         // updating then was dropped. From the message loop the dock is never
         // busy, and a burst of them makes a single update.
@@ -272,6 +296,110 @@ unsafe extern "system" fn bar_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -
         _ => return unsafe { DefWindowProcW(hwnd, msg, w, l) },
     }
     LRESULT(0)
+}
+
+/// The thread that runs `edge_proc`. A low-level mouse hook runs on the
+/// thread that installed it, and every pointer movement in the system waits
+/// for it: on the dock's thread, a busy moment (loading icons, a Genie
+/// flight) would make the whole mouse stutter, and Windows silently removes
+/// hooks that answer late. This thread does nothing else.
+struct EdgeWatch {
+    thread: u32,
+    join: Option<std::thread::JoinHandle<()>>,
+}
+
+impl EdgeWatch {
+    fn start() -> Result<Self> {
+        use windows::Win32::{
+            System::Threading::{
+                GetCurrentThread, GetCurrentThreadId, SetThreadPriority, THREAD_PRIORITY_HIGHEST,
+            },
+            UI::WindowsAndMessaging::{GetMessageW, MSG, PM_NOREMOVE, PeekMessageW},
+        };
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let join = std::thread::Builder::new()
+            .name("muelle-edge".into())
+            .spawn(move || {
+                // SAFETY: The hook procedure lives for the whole process; the
+                // hook is removed before the thread ends.
+                unsafe {
+                    let mut msg = MSG::default();
+                    // Creates the message queue before anyone posts WM_QUIT.
+                    let _ = PeekMessageW(&mut msg, None, 0, 0, PM_NOREMOVE);
+                    // Input waits for this thread: never let busy apps delay it.
+                    let _ = SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
+                    let hook = GetModuleHandleW(None).and_then(|module| {
+                        SetWindowsHookExW(WH_MOUSE_LL, Some(edge_proc), Some(module.into()), 0)
+                    });
+                    let started = hook
+                        .as_ref()
+                        .map(|_| GetCurrentThreadId())
+                        .map_err(Clone::clone);
+                    let _ = sender.send(started);
+                    let Ok(hook) = hook else {
+                        return;
+                    };
+                    // Hooks are called from inside GetMessage; nothing else arrives.
+                    while GetMessageW(&mut msg, None, 0, 0).0 > 0 {}
+                    let _ = UnhookWindowsHookEx(hook);
+                }
+            })?;
+        match receiver.recv() {
+            Ok(Ok(thread)) => Ok(Self {
+                thread,
+                join: Some(join),
+            }),
+            Ok(Err(error)) => {
+                let _ = join.join();
+                Err(error.into())
+            }
+            Err(_) => Err(anyhow::anyhow!("edge thread ended")),
+        }
+    }
+}
+
+impl Drop for EdgeWatch {
+    fn drop(&mut self) {
+        use windows::Win32::UI::WindowsAndMessaging::{PostThreadMessageW, WM_QUIT};
+        // SAFETY: Posting to a thread this struct started and still owns.
+        unsafe {
+            let _ = PostThreadMessageW(self.thread, WM_QUIT, WPARAM(0), LPARAM(0));
+        }
+        if let Some(join) = self.join.take() {
+            let _ = join.join();
+        }
+    }
+}
+
+/// Low-level mouse hook on the `EdgeWatch` thread: while the bar is hidden,
+/// posts when the pointer reaches the top edge and when it leaves it, once
+/// each. It never consumes input.
+unsafe extern "system" fn edge_proc(code: i32, w: WPARAM, l: LPARAM) -> LRESULT {
+    if code >= 0 && w.0 as u32 == WM_MOUSEMOVE {
+        // SAFETY: Windows provides an MSLLHOOKSTRUCT for mouse hook actions.
+        let point = unsafe { (*(l.0 as *const MSLLHOOKSTRUCT)).pt };
+        // The exact row: with a monitor above, the pointer only passes through.
+        let on_edge = point.y == EDGE_TOP.load(Ordering::Relaxed)
+            && point.x >= EDGE_LEFT.load(Ordering::Relaxed)
+            && point.x < EDGE_RIGHT.load(Ordering::Relaxed);
+        let message = match (on_edge, EDGE_ARMED.load(Ordering::Relaxed)) {
+            (true, false) => Some(EDGE_ENTER),
+            (false, true) => Some(EDGE_LEAVE),
+            _ => None,
+        };
+        let window = EDGE_HOOK_WINDOW.load(Ordering::Relaxed);
+        if let Some(message) = message
+            && window != 0
+        {
+            EDGE_ARMED.store(on_edge, Ordering::Relaxed);
+            // SAFETY: The window remains live until the hook is removed.
+            unsafe {
+                let _ = PostMessageW(Some(HWND(window as *mut _)), message, WPARAM(0), LPARAM(0));
+            }
+        }
+    }
+    // SAFETY: Never consume input; the window under the pointer must get it.
+    unsafe { CallNextHookEx(None, code, w, l) }
 }
 
 unsafe extern "system" fn outside_click_proc(code: i32, w: WPARAM, l: LPARAM) -> LRESULT {
@@ -794,6 +922,7 @@ impl MenuBar {
             island_right: 0.0,
             refresh_button: None,
             outside_click_hook: None,
+            edge_watch: None,
             _network: NetworkWatch::new(hwnd.0 as isize, STATUS_CHANGED),
             privacy_watch: status::watch_privacy(hwnd.0 as isize, PRIVACY_CHANGED),
             audio: AudioWatch::new(hwnd.0 as isize, STATUS_CHANGED),
@@ -906,7 +1035,11 @@ impl MenuBar {
                 Z: 0.0,
             })?;
         }
-        let show = if self.visible {
+        // Hidden, the bar keeps no window on screen, not even a thin strip:
+        // a strip along the top edge took the clicks meant for the close
+        // button of maximized windows and for browser tabs. The edge hook
+        // watches the pointer instead.
+        let show = if self.visible && !hidden {
             SWP_SHOWWINDOW
         } else {
             SWP_HIDEWINDOW
@@ -919,15 +1052,72 @@ impl MenuBar {
                 bounds.left,
                 bounds.top,
                 bounds.right - bounds.left,
-                if hidden {
-                    REVEAL_STRIP
-                } else {
-                    self.visual_height
-                },
+                self.visual_height,
                 SWP_NOACTIVATE | show,
             )?;
         }
+        EDGE_TOP.store(bounds.top, Ordering::Relaxed);
+        EDGE_LEFT.store(bounds.left, Ordering::Relaxed);
+        EDGE_RIGHT.store(bounds.right, Ordering::Relaxed);
+        self.sync_edge_hook()?;
         self.sync_outside_click_hook()
+    }
+
+    /// The edge hook runs only while the bar auto-hides and is not covered
+    /// by a full-screen app, and reports only while the bar is hidden.
+    fn sync_edge_hook(&mut self) -> Result<()> {
+        let watching = self.auto_hide && self.visible;
+        if !watching {
+            self.edge_watch = None;
+        } else if self.edge_watch.is_none() {
+            self.edge_watch = Some(EdgeWatch::start()?);
+        }
+        let hidden = watching && !self.revealed;
+        EDGE_ARMED.store(false, Ordering::Relaxed);
+        EDGE_HOOK_WINDOW.store(
+            if hidden { self.hwnd.0 as isize } else { 0 },
+            Ordering::Relaxed,
+        );
+        if !hidden {
+            // SAFETY: Our own timer.
+            unsafe {
+                let _ = KillTimer(Some(self.hwnd), REVEAL_TIMER);
+            }
+        }
+        Ok(())
+    }
+
+    /// The pointer has rested on the top edge: reveal the bar, unless it is
+    /// over a window's minimize, maximize or close button, which the bar
+    /// would cover. Then keep checking while the pointer stays on the edge.
+    pub fn edge_rested(&mut self, gfx: &Gfx) -> Result<()> {
+        let mut point = POINT::default();
+        // SAFETY: A valid output for the pointer position.
+        let on_edge = unsafe { GetCursorPos(&mut point) }.is_ok()
+            && point.y == EDGE_TOP.load(Ordering::Relaxed)
+            && EDGE_ARMED.load(Ordering::Relaxed);
+        if !on_edge {
+            // SAFETY: Our own timer.
+            unsafe {
+                let _ = KillTimer(Some(self.hwnd), REVEAL_TIMER);
+            }
+            return Ok(());
+        }
+        let screen = RECT {
+            left: EDGE_LEFT.load(Ordering::Relaxed),
+            top: EDGE_TOP.load(Ordering::Relaxed),
+            right: EDGE_RIGHT.load(Ordering::Relaxed),
+            bottom: i32::MAX,
+        };
+        if muelle_shell::tracker::caption_button_at(point, screen) {
+            return Ok(());
+        }
+        // SAFETY: Our own timer.
+        unsafe {
+            let _ = KillTimer(Some(self.hwnd), REVEAL_TIMER);
+        }
+        EDGE_ARMED.store(false, Ordering::Relaxed);
+        self.hover(gfx, true)
     }
 
     fn sync_outside_click_hook(&mut self) -> Result<()> {
@@ -956,7 +1146,7 @@ impl MenuBar {
     }
 
     /// The minute changed, or something the bar shows did: redraw what differs.
-    /// An app started or stopped using the microphone, camera or location.
+    /// An app started or stopped using the microphone or camera.
     pub fn privacy_changed(&mut self, gfx: &Gfx) -> Result<()> {
         if let Some(watch) = &mut self.privacy_watch {
             watch.arm();
@@ -1056,18 +1246,14 @@ impl MenuBar {
             Some(Action::Search) => launcher::open_search(),
             Some(Action::TaskView) => launcher::open_task_view(),
             Some(Action::Widgets) => launcher::open_widgets(),
-            Some(Action::HiddenIcons) => launcher::open_hidden_icons(anchor),
+            Some(Action::HiddenIcons) => launcher::toggle_hidden_icons(anchor),
             Some(Action::InputLanguage) => launcher::open_input_switcher(),
-            Some(Action::ShowDesktop) => launcher::show_desktop(),
             // Windows' own pages list which apps use each device.
             Some(Action::Microphone) => {
                 let _ = launcher::open("ms-settings:privacy-microphone");
             }
             Some(Action::Camera) => {
                 let _ = launcher::open("ms-settings:privacy-webcam");
-            }
-            Some(Action::Location) => {
-                let _ = launcher::open("ms-settings:privacy-location");
             }
             None => {}
         }
@@ -1206,12 +1392,11 @@ impl MenuBar {
             (gfx.control_center_brush(scale, ink)?, Action::QuickSettings),
         ];
         // Privacy indicators, as the Windows tray shows them: something is
-        // using the microphone, camera or location right now.
+        // using the microphone or camera right now.
         let privacy = status.privacy;
         for (on, glyph, action) in [
             (privacy.microphone, glyph::MICROPHONE, Action::Microphone),
             (privacy.camera, glyph::CAMERA, Action::Camera),
-            (privacy.location, glyph::LOCATION, Action::Location),
         ] {
             if on {
                 items.push((symbol(&[(glyph, 1.0)])?, action));
@@ -1259,14 +1444,6 @@ impl MenuBar {
         if status.buttons.widgets {
             items.push((symbol(&[(glyph::WIDGETS, 1.0)])?, Action::Widgets));
         }
-        // The last pixels of the right edge show the desktop, like the
-        // corner of the Windows taskbar: easy to hit by throwing the pointer
-        // there. First in the list, so it wins over the clock next to it.
-        self.zones.push((
-            width - px(SHOW_DESKTOP_EDGE),
-            width + 1.0,
-            Action::ShowDesktop,
-        ));
         for (item, action) in &items {
             let left = right - item.width;
             place(&layers, item, left)?;
@@ -1611,6 +1788,8 @@ impl MenuBar {
 impl Drop for MenuBar {
     fn drop(&mut self) {
         USAGE_HOOK_WINDOW.store(0, Ordering::Relaxed);
+        EDGE_HOOK_WINDOW.store(0, Ordering::Relaxed);
+        self.edge_watch = None;
         if let Some(hook) = self.outside_click_hook.take() {
             // SAFETY: Do not leave a callback pointing at a destroyed window.
             unsafe {

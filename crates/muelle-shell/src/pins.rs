@@ -48,21 +48,24 @@ pub fn taskbar_pins() -> Vec<String> {
 /// unpinned".
 #[must_use]
 pub fn taskbar_pins_if_readable() -> Option<Vec<String>> {
-    let favorites = favorites()?;
     let appdata = env::var("APPDATA").ok()?;
     let folder = PathBuf::from(appdata)
         .join("Microsoft\\Internet Explorer\\Quick Launch\\User Pinned\\TaskBar");
-    let mut links: Vec<PathBuf> = fs::read_dir(folder)
-        .map(|entries| {
-            entries
-                .filter_map(|entry| Some(entry.ok()?.path()))
-                .filter(|path| {
-                    path.extension()
-                        .is_some_and(|ext| ext.eq_ignore_ascii_case("lnk"))
-                })
-                .collect()
-        })
-        .unwrap_or_default();
+    let links = fs::read_dir(folder).map(|entries| {
+        entries
+            .filter_map(|entry| Some(entry.ok()?.path()))
+            .filter(|path| {
+                path.extension()
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("lnk"))
+            })
+            .collect::<Vec<PathBuf>>()
+    });
+    // Either source alone still gives pins: Windows 10 may have shortcuts
+    // and no `Favorites` value yet, if the taskbar was never edited.
+    let (favorites, mut links) = match (favorites(), links) {
+        (None, Err(_)) => return None,
+        (favorites, links) => (favorites.unwrap_or_default(), links.unwrap_or_default()),
+    };
     links.sort();
 
     // (position in Favorites, id); shortcuts it does not mention go last.

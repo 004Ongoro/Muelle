@@ -111,6 +111,31 @@ fn windows_build() -> Option<u32> {
 }
 
 /// A DWORD from the user's personalization settings.
+/// The accent color chosen in Settings → Personalization → Colors, as
+/// red, green and blue.
+#[must_use]
+pub fn accent_color() -> Option<[u8; 3]> {
+    let mut value = 0u32;
+    let mut size = size_of::<u32>() as u32;
+    // SAFETY: `value` and `size` describe a valid 4-byte buffer.
+    unsafe {
+        RegGetValueW(
+            HKEY_CURRENT_USER,
+            w!(r"Software\Microsoft\Windows\DWM"),
+            w!("AccentColor"),
+            RRF_RT_REG_DWORD,
+            None,
+            Some((&raw mut value).cast()),
+            Some(&mut size),
+        )
+    }
+    .ok()
+    .ok()?;
+    // Stored as 0xAABBGGRR.
+    let [r, g, b, _] = value.to_le_bytes();
+    Some([r, g, b])
+}
+
 fn personalize(name: PCWSTR) -> Option<u32> {
     let mut value = 0u32;
     let mut size = size_of::<u32>() as u32;
