@@ -8,6 +8,8 @@ copia la sección de la versión que se publica a la release de GitHub.
 
 ## [Unreleased]
 
+## [0.1.8]
+
 ### English
 
 - Opening apps and shell file operations run in temporary helper processes so
