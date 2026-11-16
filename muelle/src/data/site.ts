@@ -3,13 +3,16 @@
 export const site = {
   name: "Muelle",
   tagline: "The macOS Dock, made for Windows.",
-  /** Kept under ~155 characters so Google does not truncate it. */
+  /** Kept concise for search snippets while naming the supported Windows versions. */
   description:
-    "Free macOS-style Windows dock with AI usage limits for Claude Code, Codex, GitHub Copilot, Cursor, OpenCode Go, Gemini CLI and Antigravity.",
+    "Free, open-source macOS-style dock for Windows 10 and 11, with the Genie effect, optional live window previews and an AI usage menu bar.",
   /** Canonical origin. Must match `site` in astro.config.mjs and the sitemap. */
   url: "https://muellee.vercel.app",
   /** Path to the social card in `public/`. */
   ogImage: "/og-image.png",
+  ogImageWidth: 1200,
+  ogImageHeight: 630,
+  twitterHandle: "@CrisOliveraDev",
   locale: "en_US",
   repository: "https://github.com/crafter-station/Muelle",
   releases: "https://github.com/crafter-station/Muelle/releases",
