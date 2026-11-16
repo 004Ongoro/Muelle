@@ -11,7 +11,8 @@
 
 <img width="1500" height="436" alt="Frame 1116606780" src="https://github.com/user-attachments/assets/3c91b488-214d-453d-a8c2-a9e0dc7f245e" />
 
-<img width="1000" height="243" alt="ezgif-2421a892c23dc19b" src="https://github.com/user-attachments/assets/83d43043-c6a2-469f-bb87-053e5be868f1" />
+<img width="1000" height="259" alt="ezgif-6345057d171e16ef" src="https://github.com/user-attachments/assets/e5b2ce63-cec1-4d1d-8ef1-a4fa1c668c40" />
+
 
 Smooth magnification, live window previews, and an optional Genie-style minimize effect.
 
