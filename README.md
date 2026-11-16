@@ -59,17 +59,6 @@ restored when Muelle exits.
 3. Open **Muelle** from the Start menu, then choose **Dock** to
    personalize the dock and top menu bar.
 
-You can also open Settings by right-clicking the dock and choosing *Muelle
-Settings…*. It checks for updates and installs them for you.
-
-**Start with Windows:** Muelle starts from a task that runs when you sign in,
-named *Muelle (your user name)* in Task Scheduler. Turn it off in Settings →
-System.
-
-**Get the taskbar back:** right-click the dock and choose *Quit Muelle*. To
-remove it completely, go to Windows Settings → Apps → Installed apps → Muelle →
-Uninstall; the taskbar comes back and nothing is left running.
-
 ## Resource usage
 
 In one idle snapshot, Windows Task Manager showed **3.1 MB** for the grouped
