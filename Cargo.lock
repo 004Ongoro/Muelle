@@ -3933,8 +3933,10 @@ dependencies = [
 name = "spikes"
 version = "0.0.0"
 dependencies = [
+ "anyhow",
  "muelle-shell",
  "windows",
+ "windows-core",
  "windows-numerics",
 ]
 
