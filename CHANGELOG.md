@@ -8,6 +8,20 @@ copia la sección de la versión que se publica a la release de GitHub.
 
 ## [Unreleased]
 
+### English
+
+- Genie: maximized and snapped windows no longer jump to a smaller size before
+  flying into the dock, nor jump to fill the screen after flying back out. The
+  genie took the size the window has when not maximized; it now flies exactly
+  the area the window covered on screen.
+
+### Español
+
+- Genio: las ventanas maximizadas o acopladas ya no saltan a un tamaño menor antes
+  de volar al dock, ni saltan para llenar la pantalla después de volver. El genio
+  tomaba el tamaño que la ventana tiene sin maximizar; ahora vuela exactamente la
+  zona que ocupaba en pantalla.
+
 ## [0.1.6]
 
 ### English

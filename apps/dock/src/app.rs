@@ -377,6 +377,9 @@ struct App {
     roster: Roster,
     tracker: WindowTracker,
     windows: Vec<TrackedWindow>,
+    /// Where each window was last seen on screen while not maximized, for
+    /// the genie of snapped windows (see `tracker::rect_before_minimize`).
+    last_rects: HashMap<isize, RECT>,
     entries: Vec<Entry>,
     icons: IconCache,
     downloads: Option<String>,
@@ -1089,10 +1092,11 @@ impl App {
             return;
         };
         for &hwnd in windows {
-            let Some(from) = tracker::normal_rect(hwnd) else {
+            let last_seen = self.last_rects.get(&hwnd).copied();
+            let Some((from, frame)) = tracker::rect_before_minimize(hwnd, last_seen) else {
                 continue;
             };
-            if let Some(flight) = Flight::start(&self.gfx, hwnd, from, screen) {
+            if let Some(flight) = Flight::start(&self.gfx, hwnd, from, frame, screen) {
                 self.flights.push(flight);
                 self.last_frame = Instant::now();
             }
@@ -1859,6 +1863,13 @@ impl App {
     /// Refreshes open windows and recomposes the dock if anything changed.
     fn sync(&mut self) -> Result<()> {
         self.windows = self.tracker.list();
+        let windows = &self.windows;
+        self.last_rects
+            .retain(|hwnd, _| windows.iter().any(|window| window.hwnd == *hwnd));
+        let tracked: Vec<isize> = self.windows.iter().map(|window| window.hwnd).collect();
+        for hwnd in tracked {
+            self.remember_rect(hwnd);
+        }
         self.calm_windows();
         let recent_before = self.roster.recent().to_vec();
         let changed = self
@@ -2014,7 +2025,27 @@ impl App {
         }
     }
 
+    /// Notes where `hwnd` is on screen. A maximized window forgets it: its
+    /// rectangle then comes from the work area, and a stale one from before
+    /// could be taken after it is un-maximized.
+    fn remember_rect(&mut self, hwnd: isize) {
+        match tracker::screen_rect(hwnd) {
+            Some((rect, false)) => {
+                self.last_rects.insert(hwnd, rect);
+            }
+            Some((_, true)) => {
+                self.last_rects.remove(&hwnd);
+            }
+            None => {}
+        }
+    }
+
     fn update_fullscreen(&mut self) -> Result<()> {
+        // The window in front is where the user works: note where it is now.
+        let front = tracker::foreground_window();
+        if self.windows.iter().any(|window| window.hwnd == front) {
+            self.remember_rect(front);
+        }
         self.update_menu_bar_app()?;
         let Some(monitor) = primary_monitor() else {
             return Ok(());
@@ -2528,6 +2559,7 @@ pub fn run() -> Result<()> {
             roster,
             tracker: WindowTracker::default(),
             windows: Vec::new(),
+            last_rects: HashMap::new(),
             entries: Vec::new(),
             icons: IconCache::default(),
             downloads: downloads_folder(),

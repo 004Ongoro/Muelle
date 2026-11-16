@@ -22,9 +22,9 @@ use windows::{
             WindowsAndMessaging::{
                 EnumWindows, GW_OWNER, GWL_EXSTYLE, GWL_STYLE, GetClassNameW, GetForegroundWindow,
                 GetWindow, GetWindowLongW, GetWindowPlacement, GetWindowRect, GetWindowTextLengthW,
-                GetWindowTextW, GetWindowThreadProcessId, IsIconic, IsWindowVisible,
-                WINDOWPLACEMENT, WS_EX_APPWINDOW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_MAXIMIZE,
-                WS_THICKFRAME,
+                GetWindowTextW, GetWindowThreadProcessId, IsIconic, IsWindowVisible, IsZoomed,
+                SM_CXPADDEDBORDER, SM_CXSIZEFRAME, WINDOWPLACEMENT, WPF_RESTORETOMAXIMIZED,
+                WS_EX_APPWINDOW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_MAXIMIZE, WS_THICKFRAME,
             },
         },
     },
@@ -140,6 +140,85 @@ pub fn normal_rect(hwnd: isize) -> Option<RECT> {
         bottom: local.bottom + dy,
     };
     (rect.right > rect.left && rect.bottom > rect.top).then_some(rect)
+}
+
+/// Where a window is on screen now, and whether it is maximized; `None`
+/// while it is minimized. Taken whenever the dock looks at its windows, so a
+/// minimize knows where a snapped window was: Windows keeps a snapped
+/// window's pre-snap rectangle as its "normal" one.
+#[must_use]
+pub fn screen_rect(hwnd: isize) -> Option<(RECT, bool)> {
+    let window = HWND(hwnd as *mut _);
+    // SAFETY: Read-only queries on a window handle.
+    unsafe {
+        if IsIconic(window).as_bool() {
+            return None;
+        }
+        let mut rect = RECT::default();
+        GetWindowRect(window, &mut rect).ok()?;
+        Some((rect, IsZoomed(window).as_bool()))
+    }
+}
+
+/// Where a window that has just started minimizing was on screen, which by
+/// then it no longer says itself: it is already at -32000.
+///
+/// Returns the whole window, invisible resize borders included (where its
+/// live thumbnail goes), and the part that was visible on screen (what the
+/// genie copies and flies). `last_seen` is the [`screen_rect`] taken while
+/// it was not maximized, if any.
+///
+/// A maximized window fills its monitor's work area, plus its borders: its
+/// "normal" rectangle is the smaller one it returns to when un-maximized,
+/// and flying from it made the genie jump first.
+#[must_use]
+pub fn rect_before_minimize(hwnd: isize, last_seen: Option<RECT>) -> Option<(RECT, RECT)> {
+    use windows::Win32::{
+        Graphics::Gdi::{
+            GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow,
+        },
+        UI::HiDpi::{GetDpiForWindow, GetSystemMetricsForDpi},
+    };
+    let window = HWND(hwnd as *mut _);
+    let mut placement = WINDOWPLACEMENT {
+        length: size_of::<WINDOWPLACEMENT>() as u32,
+        ..Default::default()
+    };
+    // SAFETY: The structure has its size initialized and lives for the call.
+    unsafe { GetWindowPlacement(window, &mut placement) }.ok()?;
+    if placement.flags.0 & WPF_RESTORETOMAXIMIZED.0 == 0 {
+        let rect = last_seen.or_else(|| normal_rect(hwnd))?;
+        return Some((rect, rect));
+    }
+    // SAFETY: Read-only monitor, DPI and style queries.
+    unsafe {
+        let monitor = MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST);
+        let mut info = MONITORINFO {
+            cbSize: size_of::<MONITORINFO>() as u32,
+            ..Default::default()
+        };
+        if !GetMonitorInfoW(monitor, &mut info).as_bool() {
+            return None;
+        }
+        let work = info.rcWork;
+        // Windows maximizes a resizable window with its borders past the
+        // work area's edges, so that only the window itself shows.
+        let resizable = GetWindowLongW(window, GWL_STYLE) as u32 & WS_THICKFRAME.0 != 0;
+        let border = if resizable {
+            let dpi = GetDpiForWindow(window);
+            GetSystemMetricsForDpi(SM_CXSIZEFRAME, dpi)
+                + GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi)
+        } else {
+            0
+        };
+        let whole = RECT {
+            left: work.left - border,
+            top: work.top - border,
+            right: work.right + border,
+            bottom: work.bottom + border,
+        };
+        Some((whole, work))
+    }
 }
 
 #[must_use]

@@ -443,9 +443,14 @@ impl Flight {
     /// Puts up the stand-in of a window that is being minimized, where it was
     /// (`from`, a screen rectangle; `screen` is the monitor the overlay
     /// covers). The flight takes off once [`Flight::aim`] gives it its slot.
-    pub fn start(gfx: &Gfx, hwnd: isize, from: RECT, screen: RECT) -> Option<Self> {
+    ///
+    /// `from` is the whole window, invisible borders included, where its live
+    /// thumbnail goes; `frame` is the part that showed on screen, which the
+    /// genie copies and flies (the work area for a maximized window, so no
+    /// strip of the menu bar or desktop around it comes along).
+    pub fn start(gfx: &Gfx, hwnd: isize, from: RECT, frame: RECT, screen: RECT) -> Option<Self> {
         // Only what is on screen can be copied from it.
-        let visible = intersect(from, screen);
+        let visible = intersect(frame, screen);
         if is_empty(visible) {
             return None;
         }

@@ -35,7 +35,10 @@ unsafe extern "system" fn on_event(
 }
 
 fn main() {
-    let seconds: u64 = std::env::args().nth(1).and_then(|s| s.parse().ok()).unwrap_or(20);
+    let seconds: u64 = std::env::args()
+        .nth(1)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(20);
     // SAFETY: An out-of-context hook delivered through this thread's message loop.
     let hook = unsafe {
         SetWinEventHook(
@@ -63,5 +66,8 @@ fn main() {
     unsafe {
         let _ = UnhookWinEvent(hook);
     }
-    println!("cloak/uncloak events in {seconds} s: {}", EVENTS.load(Ordering::Relaxed));
+    println!(
+        "cloak/uncloak events in {seconds} s: {}",
+        EVENTS.load(Ordering::Relaxed)
+    );
 }
