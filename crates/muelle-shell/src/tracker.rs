@@ -354,6 +354,22 @@ pub fn task_switcher_state() -> Option<bool> {
     }
 }
 
+/// Hidden by the system although "visible": on another virtual desktop, or
+/// a suspended Store app.
+fn is_cloaked(hwnd: HWND) -> bool {
+    let mut cloaked = 0u32;
+    // SAFETY: `cloaked` is a valid 4-byte output.
+    unsafe {
+        let _ = DwmGetWindowAttribute(
+            hwnd,
+            DWMWA_CLOAKED,
+            (&raw mut cloaked).cast(),
+            size_of::<u32>() as u32,
+        );
+    }
+    cloaked != 0
+}
+
 /// The desktop and the (hidden) taskbar: shell windows, not apps.
 pub fn is_desktop(hwnd: HWND) -> bool {
     matches!(
@@ -386,14 +402,7 @@ fn is_app_window(hwnd: HWND) -> bool {
             return false;
         }
         // Windows hidden by the system, such as on other virtual desktops or suspended apps.
-        let mut cloaked = 0u32;
-        let _ = DwmGetWindowAttribute(
-            hwnd,
-            DWMWA_CLOAKED,
-            (&raw mut cloaked).cast(),
-            size_of::<u32>() as u32,
-        );
-        if cloaked != 0 {
+        if is_cloaked(hwnd) {
             return false;
         }
         let mut pid = 0u32;
