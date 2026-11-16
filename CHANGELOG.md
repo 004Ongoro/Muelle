@@ -8,49 +8,51 @@ copia la sección de la versión que se publica a la release de GitHub.
 
 ## [Unreleased]
 
+## [0.1.7]
+
 ### English
 
-- Genie: maximized and snapped windows no longer jump to a smaller size before
-  flying into the dock, nor jump to fill the screen after flying back out. The
-  genie took the size the window has when not maximized; it now flies exactly
-  the area the window covered on screen.
+- Faster startup: Muelle now uses a Windows sign-in task instead of the Run
+  key, and keeps the taskbar hidden when Windows shuts down or restarts.
+- Taskbar pins stay in sync with the dock, including changes made while Muelle
+  is closed. Imported pins keep their order and include Store apps; removed
+  apps no longer remain as broken dock icons.
+- The dock menu can import apps pinned to the Windows taskbar. Unchecking
+  "Keep in Dock" also unpins the app from the taskbar.
+- Middle-click or Shift-click opens another app window; Ctrl+Shift-click or
+  the dock menu opens an app as administrator. The menu bar's right edge and
+  the dock menu can show the desktop.
+- The menu bar shows the active input language and privacy indicators for
+  microphone, camera, and location use. Its clock follows time and time-zone
+  changes, and switching virtual desktops updates the dock immediately.
+- Genie: maximized and snapped windows now fly using the area they occupy on
+  screen, without jumping to a different size.
 
 ### Español
 
-- Genio: las ventanas maximizadas o acopladas ya no saltan a un tamaño menor antes
-  de volar al dock, ni saltan para llenar la pantalla después de volver. El genio
-  tomaba el tamaño que la ventana tiene sin maximizar; ahora vuela exactamente la
-  zona que ocupaba en pantalla.
+- Inicio más rápido: Muelle ahora usa una tarea de Windows al iniciar sesión
+  en lugar de la clave Run y mantiene oculta la barra de tareas al apagar o
+  reiniciar Windows.
+- Las apps fijadas en la barra de tareas se sincronizan con el dock, incluso
+  si el cambio ocurre mientras Muelle está cerrado. Las apps importadas
+  conservan su orden e incluyen las de la Store; las desinstaladas ya no quedan
+  como iconos rotos.
+- El menú del dock permite importar las apps fijadas en la barra de tareas.
+  Desmarcar «Mantener en el Dock» también desancla la app de la barra.
+- El clic central o Mayús+clic abre otra ventana; Ctrl+Mayús+clic o el menú del
+  dock abre una app como administrador. El borde derecho de la barra superior
+  y el menú del dock permiten mostrar el escritorio.
+- La barra superior muestra el idioma de entrada activo e indicadores cuando
+  se usan el micrófono, la cámara o la ubicación. El reloj sigue los cambios
+  de hora y zona horaria, y al cambiar de escritorio virtual el dock se
+  actualiza de inmediato.
+- Genio: las ventanas maximizadas o acopladas vuelan usando el área que ocupan
+  en pantalla, sin saltar a otro tamaño.
 
 ## [0.1.6]
 
 ### English
 
-- Faster start with Windows: Muelle now starts from a task that runs at
-  sign-in instead of the Run key, which Windows launches seconds after the
-  desktop at low priority. Existing installs switch over on their own.
-- The Windows taskbar no longer shows in full at every start: when Windows
-  shuts down or restarts with Muelle set to start again, the taskbar stays
-  hidden instead of being given back.
-- Pinned apps imported from the Windows taskbar now keep its order and include
-  Store apps (Media Player, WhatsApp...). The dock menu has "Add Apps Pinned to
-  the Windows Taskbar" to bring in any that are missing.
-- Uninstalling now also removes the start-with-Windows entry.
-- Pinning or unpinning an app on the Windows taskbar (from Start, Explorer or
-  the app's menu) now pins or unpins it in the dock too, right away, and also
-  when it happened while Muelle was closed.
-- Unchecking "Keep in Dock" also unpins the app from the Windows taskbar.
-- Uninstalled apps leave the dock instead of staying as a broken icon.
-- As on the Windows taskbar: middle click or Shift+click opens another window,
-  Ctrl+Shift+click and a new menu item open the app as administrator, and the
-  right edge of the menu bar (and the dock menu) shows the desktop.
-- Menu bar: an input language indicator (ES, EN...) when more than one is
-  installed; click it to switch. The clock follows time and time zone changes
-  at once.
-- Menu bar: microphone, camera and location icons while an app is using them,
-  as in the Windows tray; click one to see which apps in Windows Settings.
-- Switching virtual desktops updates the dock at once: it shows the apps of the
-  desktop in front, as the Windows taskbar does.
 - Windows 10 support (version 1903 or later). The dock used to close right
   after starting there. On Windows 10 the dock and menu bar are solid instead
   of glass, since it has no backdrop blur for desktop apps.
@@ -71,32 +73,6 @@ copia la sección de la versión que se publica a la release de GitHub.
 
 ### Español
 
-- Arranque más rápido con Windows: Muelle ahora se inicia con una tarea al
-  iniciar sesión en lugar de la clave Run, que Windows lanza segundos después del
-  escritorio y con prioridad baja. Las instalaciones existentes cambian solas.
-- La barra de tareas de Windows ya no aparece entera en cada arranque: al apagar
-  o reiniciar con Muelle configurado para iniciarse, la barra se queda oculta en
-  lugar de devolverse.
-- Las apps fijadas que se importan de la barra de Windows conservan su orden e
-  incluyen las de la Store (Reproductor multimedia, WhatsApp...). El menú del dock
-  tiene «Añadir apps fijadas en la barra de Windows» para traer las que falten.
-- Al desinstalar también se quita el inicio con Windows.
-- Anclar o desanclar una app de la barra de tareas de Windows (desde Inicio, el
-  Explorador o el menú de la app) ahora la ancla o desancla también en el dock, al
-  momento, e incluso si pasó con Muelle cerrado.
-- Quitar la marca de «Mantener en el Dock» también desancla la app de la barra de
-  tareas de Windows.
-- Las apps desinstaladas salen del dock en lugar de quedarse como icono roto.
-- Como en la barra de Windows: clic central o Mayús+clic abre otra ventana,
-  Ctrl+Mayús+clic y una opción nueva del menú abren la app como administrador, y
-  el borde derecho de la barra superior (y el menú del dock) muestra el escritorio.
-- Barra superior: indicador del idioma del teclado (ES, EN...) cuando hay más de
-  uno instalado; con un clic se cambia. El reloj sigue al momento los cambios de
-  hora y de zona horaria.
-- Barra superior: iconos de micrófono, cámara y ubicación mientras una app los
-  usa, como en la bandeja de Windows; con un clic se ve qué apps en Configuración.
-- Cambiar de escritorio virtual actualiza el dock al momento: muestra las apps del
-  escritorio que está delante, como la barra de Windows.
 - Soporte para Windows 10 (versión 1903 o posterior). Antes el dock se cerraba
   nada más arrancar ahí. En Windows 10 el dock y la barra superior son sólidos
   en lugar de cristal, porque no ofrece desenfoque de fondo a las apps de
