@@ -133,8 +133,12 @@ pnpm build
 Muelle collects no data, has no telemetry and never sends anything to the
 project. It makes two kinds of network requests, both optional:
 
-- **Update check:** Settings asks GitHub Releases for a newer version when it
-  opens. Turn it off in Settings → System → *Check for updates automatically*.
+- **Updates:** Settings asks GitHub Releases for a newer version when it
+  opens, and once a day, a couple of minutes after you turn on the computer,
+  Muelle does the same in the background and installs what it finds (the dock
+  itself never uses the network). Turn off the installing in Settings → System
+  → *Install updates automatically*, or everything with *Check for updates
+  automatically*.
 - **AI provider usage:** while a supported client is running, Muelle reads its
   existing local sign-in and asks that provider for available plan limits
   every five minutes while visible, or when you press Refresh. For Gemini CLI

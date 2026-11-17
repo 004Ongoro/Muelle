@@ -95,38 +95,68 @@ fn main() -> anyhow::Result<()> {
             menu::MenuItem::Separator,
             menu::MenuItem::action(5, "&Salir de Muelle"),
         ];
+        let scenario = std::env::args().nth(3).unwrap_or_default();
         std::thread::spawn(move || {
-            std::thread::sleep(Duration::from_millis(120));
+            use windows::Win32::UI::WindowsAndMessaging::{
+                WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
+            };
+            std::thread::sleep(Duration::from_millis(150));
             let Ok(menu) = FindWindowW(w!("MuelleMenu"), None) else {
                 return;
             };
-            // Two "down" keys: the selection lands on the second item.
-            for _ in 0..2 {
-                let _ = PostMessageW(
-                    Some(menu),
-                    windows::Win32::UI::WindowsAndMessaging::WM_KEYDOWN,
-                    WPARAM(0x28),
-                    LPARAM(0),
-                );
-            }
-            std::thread::sleep(Duration::from_millis(100));
-            let mut rect = RECT::default();
-            let _ = GetWindowRect(menu, &mut rect);
-            let pad = 24;
-            let area = RECT {
-                left: rect.left - pad,
-                top: rect.top - pad,
-                right: rect.right + pad,
-                bottom: rect.bottom + pad,
+            let at = |y: i32| LPARAM(((y as u32 & 0xFFFF) << 16 | 40) as isize);
+            let post = |msg: u32, w: usize, l: LPARAM| {
+                let _ = PostMessageW(Some(menu), msg, WPARAM(w), l);
             };
-            if let Some(shot) = screen::capture(area)
-                && let Ok(mut file) = std::fs::File::create(&out)
-            {
-                let _ = file.write_all(&((area.right - area.left) as u32).to_le_bytes());
-                let _ = file.write_all(&((area.bottom - area.top) as u32).to_le_bytes());
-                let _ = file.write_all(&shot.bgra);
+            if scenario.is_empty() {
+                std::thread::sleep(Duration::from_millis(70));
+                let mut rect = RECT::default();
+                let _ = GetWindowRect(menu, &mut rect);
+                let pad = 24;
+                let area = RECT {
+                    left: rect.left - pad,
+                    top: rect.top - pad,
+                    right: rect.right + pad,
+                    bottom: rect.bottom + pad,
+                };
+                if let Some(shot) = screen::capture(area)
+                    && let Ok(mut file) = std::fs::File::create(&out)
+                {
+                    let _ = file.write_all(&((area.right - area.left) as u32).to_le_bytes());
+                    let _ = file.write_all(&((area.bottom - area.top) as u32).to_le_bytes());
+                    let _ = file.write_all(&shot.bgra);
+                }
+                post(WM_CANCELMODE, 0, LPARAM(0));
+                return;
             }
-            let _ = PostMessageW(Some(menu), WM_CANCELMODE, WPARAM(0), LPARAM(0));
+            // Past the delay that ignores the release of the opening click.
+            std::thread::sleep(Duration::from_millis(350));
+            match scenario.as_str() {
+                "A" => {
+                    post(WM_MOUSEMOVE, 0, at(50));
+                    post(WM_LBUTTONDOWN, 1, at(50));
+                    post(WM_LBUTTONUP, 0, at(50));
+                }
+                "B" => {
+                    post(WM_MOUSEMOVE, 0, at(110));
+                    post(WM_LBUTTONDOWN, 1, at(110));
+                    post(WM_LBUTTONUP, 0, at(110));
+                    std::thread::sleep(Duration::from_millis(200));
+                    post(WM_KEYDOWN, 0x1B, LPARAM(0));
+                }
+                "C" => post(WM_KEYDOWN, 0x53, LPARAM(0)),
+                "D" => post(WM_LBUTTONDOWN, 1, LPARAM(((5u32 << 16) | 0xFFEC) as isize)),
+                "E" => {
+                    for _ in 0..4 {
+                        post(WM_KEYDOWN, 0x28, LPARAM(0));
+                    }
+                    post(WM_KEYDOWN, 0x0D, LPARAM(0));
+                }
+                _ => post(WM_CANCELMODE, 0, LPARAM(0)),
+            }
+            // Never leave a test menu open.
+            std::thread::sleep(Duration::from_millis(1500));
+            post(WM_CANCELMODE, 0, LPARAM(0));
         });
         let chosen = menu::show(&gfx, owner, &items, POINT { x: 960, y: 980 }, dark);
         println!("chosen: {chosen:?}");

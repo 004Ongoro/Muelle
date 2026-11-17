@@ -12,6 +12,9 @@ copia la sección de la versión que se publica a la release de GitHub.
 
 - Fixed: after choosing an item in the dock's menu (Muelle Settings, for
   one), the dock could stay magnified and stop reacting to the pointer.
+- Alt+Tab: the hidden dock shows only for Alt+Tab, no longer for Task View,
+  whose virtual desktops it covered at the bottom of the screen; and it no
+  longer flashes for a moment after cancelling Alt+Tab with Esc.
 - Alt+Tab: moving the mouse or clicking an empty spot no longer stops the
   dock's magnifier from following the selection, and closing a window from
   the switcher keeps it on the right app. Only the arrow keys, which move the
@@ -30,6 +33,9 @@ copia la sección de la versión que se publica a la release de GitHub.
 
 - Corregido: tras elegir una opción del menú del dock (por ejemplo, Ajustes
   de Muelle), el dock podía quedarse ampliado y dejar de responder al puntero.
+- Alt+Tab: el dock oculto aparece solo con Alt+Tab, ya no con la Vista de
+  tareas, cuyos escritorios virtuales tapaba abajo; y ya no parpadea un
+  momento después de cancelar Alt+Tab con Esc.
 - Alt+Tab: mover el ratón o hacer clic en un hueco ya no impide que la lupa
   del dock siga la selección, y cerrar una ventana desde el selector la
   mantiene en la app correcta. Solo las flechas, que mueven la selección de

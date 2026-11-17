@@ -201,6 +201,8 @@ const SWITCHER_TIMER: usize = 9;
 const SWITCHER_POLL_MS: u32 = 16;
 /// How long the switcher may take to show after coming to the front.
 const SWITCHER_APPEAR: std::time::Duration = std::time::Duration::from_millis(400);
+/// How soon after closing the switcher's window coming back means nothing.
+const SWITCHER_ECHO: std::time::Duration = std::time::Duration::from_millis(150);
 /// Recheck full-screen state while hidden in case Windows drops the exit event.
 const FULLSCREEN_TIMER: usize = 10;
 const FULLSCREEN_RECHECK_MS: u32 = 3_000;
@@ -423,6 +425,22 @@ struct StageKey {
     entries: Vec<Entry>,
 }
 
+/// Where the switcher's selection lands once the windows marked `false` in
+/// `alive` close: it stays at the same place in the list (the next window
+/// takes the closed one's place), or on the new last one. `None` if none is
+/// left.
+fn selection_after_closing(index: usize, alive: &[bool]) -> Option<usize> {
+    let left = alive.iter().filter(|&&on| on).count();
+    if left == 0 {
+        return None;
+    }
+    let closed_before = alive[..index.min(alive.len())]
+        .iter()
+        .filter(|&&on| !on)
+        .count();
+    Some((index - closed_before).min(left - 1))
+}
+
 /// Where the Alt+Tab selection is believed to be.
 struct SwitcherFollow {
     /// The windows the switcher lists, in its order.
@@ -492,8 +510,11 @@ struct App {
     /// The Alt+Tab switcher is open; an auto-hidden dock shows meanwhile.
     switching: bool,
     switch_started: Instant,
+    switch_ended: Option<Instant>,
     /// When the dock started (the update waits a little after it).
     launched: Instant,
+    /// When this dock last started a background update.
+    update_tried: Option<Instant>,
     /// The selection in the switcher, as far as it can be followed.
     follow: Option<SwitcherFollow>,
     /// The magnifier rests on the icon selected in Alt+Tab, not the pointer.
@@ -1328,7 +1349,13 @@ impl App {
         // bottom edge, where the dock would cover them.
         // SAFETY: Read-only keyboard state query.
         let alt = unsafe { GetAsyncKeyState(i32::from(VK_MENU.0)) < 0 };
-        if self.switching || !alt {
+        // After it closes, Windows sometimes hands the focus back to the
+        // switcher's hidden window for a moment: not a new Alt+Tab.
+        let echo = self
+            .switch_ended
+            .is_some_and(|ended| ended.elapsed() < SWITCHER_ECHO)
+            && tracker::task_switcher_state() != Some(true);
+        if self.switching || !alt || echo {
             return Ok(());
         }
         self.switching = true;
@@ -1359,6 +1386,7 @@ impl App {
             return self.follow_selection();
         }
         self.switching = false;
+        self.switch_ended = Some(Instant::now());
         // SAFETY: Our own timer.
         unsafe {
             let _ = KillTimer(Some(self.input), SWITCHER_TIMER);
@@ -1455,19 +1483,16 @@ impl App {
                 }
             })
             .collect();
-        let removed_before = alive[..index.min(before)].iter().filter(|&&on| !on).count();
         let mut position = 0;
         follow.order.retain(|_| {
             position += 1;
             alive[position - 1]
         });
         let closed = follow.order.len() != before;
-        if follow.order.is_empty() {
+        let Some(selected) = selection_after_closing(index, &alive) else {
             return self.stop_following();
-        }
-        if closed {
-            follow.index = (index - removed_before).min(follow.order.len() - 1);
-        }
+        };
+        follow.index = selected;
         let tab = down(VK_TAB);
         let pressed = tab && !follow.tab_down;
         follow.tab_down = tab;
@@ -1549,8 +1574,17 @@ impl App {
                 let _ = KillTimer(Some(self.input), UPDATE_TIMER);
                 return;
             }
+            // Also counted from the last try in this session: if the date
+            // could not be saved, the registry would call it due again at
+            // once, and the dock would start one update after another.
+            let since_try = self
+                .update_tried
+                .map_or(std::time::Duration::ZERO, |tried| {
+                    UPDATE_EVERY.saturating_sub(tried.elapsed())
+                });
             let wait = muelle_shell::updates::due_in(UPDATE_EVERY)
-                .max(UPDATE_AFTER_START.saturating_sub(self.launched.elapsed()));
+                .max(UPDATE_AFTER_START.saturating_sub(self.launched.elapsed()))
+                .max(since_try);
             SetTimer(Some(self.input), UPDATE_TIMER, millis(wait), None);
         }
     }
@@ -1574,6 +1608,7 @@ impl App {
         }
         // Recorded first: whatever happens, the next look is tomorrow.
         muelle_shell::updates::mark_checked();
+        self.update_tried = Some(Instant::now());
         self.schedule_update();
         let settings = env::current_exe()
             .ok()
@@ -3180,7 +3215,9 @@ pub fn run() -> Result<()> {
             spring: None,
             switching: false,
             switch_started: Instant::now(),
+            switch_ended: None,
             launched: Instant::now(),
+            update_tried: None,
             follow: None,
             pointed: false,
             pending_drop: None,
@@ -3342,5 +3379,26 @@ mod performance_tests {
         gate.begin_pass();
         assert!(!gate.needs_another_pass());
         assert!(gate.request());
+    }
+}
+
+#[cfg(test)]
+mod switcher_tests {
+    use super::selection_after_closing;
+
+    #[test]
+    fn selection_after_closing_should_keep_its_place_in_the_list() {
+        // Nothing closed.
+        assert_eq!(selection_after_closing(1, &[true, true, true]), Some(1));
+        // A window before the selection closes: the selection moves up one.
+        assert_eq!(selection_after_closing(2, &[true, false, true]), Some(1));
+        // A window after it closes: nothing moves.
+        assert_eq!(selection_after_closing(0, &[true, true, false]), Some(0));
+        // The selected window closes: the next one takes its place.
+        assert_eq!(selection_after_closing(1, &[true, false, true]), Some(1));
+        // The selected window was the last: the new last one.
+        assert_eq!(selection_after_closing(2, &[true, true, false]), Some(1));
+        // Everything closed.
+        assert_eq!(selection_after_closing(0, &[false, false]), None);
     }
 }

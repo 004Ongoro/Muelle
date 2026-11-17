@@ -132,8 +132,11 @@ pnpm build
 Muelle no recoge datos, no tiene telemetría y nunca envía nada al proyecto. Hace
 dos tipos de conexión de red, ambas opcionales:
 
-- **Búsqueda de actualizaciones:** Ajustes pregunta a GitHub Releases si hay una
-  versión nueva al abrirse. Se desactiva en Ajustes → Sistema → *Buscar
+- **Actualizaciones:** Ajustes pregunta a GitHub Releases si hay una versión
+  nueva al abrirse y, una vez al día, un par de minutos después de encender el
+  ordenador, Muelle hace lo mismo en segundo plano e instala lo que encuentre
+  (el dock en sí nunca usa la red). La instalación se desactiva en Ajustes →
+  Sistema → *Instalar actualizaciones automáticamente*, y todo con *Buscar
   actualizaciones automáticamente*.
 - **Uso de proveedores de IA:** mientras un cliente compatible está abierto,
   Muelle reutiliza su sesión local para consultar los límites disponibles de
