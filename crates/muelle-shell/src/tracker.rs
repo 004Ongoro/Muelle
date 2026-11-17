@@ -241,6 +241,13 @@ pub fn foreground_is_fullscreen(screen: RECT) -> bool {
         if hwnd.is_invalid() || is_desktop(hwnd) || is_task_switcher(hwnd) {
             return false;
         }
+        // A window that is not on screen covers nothing. Right after signing
+        // in, the foreground is often a shell host (Start, Search, the text
+        // input host) whose screen-sized window is hidden or cloaked; taken
+        // for a full-screen app, it kept the dock and the bar hidden.
+        if !IsWindowVisible(hwnd).as_bool() || IsIconic(hwnd).as_bool() || is_cloaked(hwnd) {
+            return false;
+        }
         let mut pid = 0u32;
         GetWindowThreadProcessId(hwnd, Some(&mut pid));
         if pid == GetCurrentProcessId() {
@@ -453,6 +460,12 @@ fn app_id(hwnd: HWND) -> Option<String> {
 #[must_use]
 pub fn is_shortcut(id: &str) -> bool {
     id.len() > 4 && id[id.len() - 4..].eq_ignore_ascii_case(".lnk")
+}
+
+/// The class of the window in front, to tell in the log what was there.
+pub fn foreground_class() -> String {
+    // SAFETY: Reads the foreground window handle.
+    class_name(unsafe { GetForegroundWindow() })
 }
 
 fn class_name(hwnd: HWND) -> String {

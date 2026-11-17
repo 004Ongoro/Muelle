@@ -46,6 +46,28 @@ fn main() {
         })
         .unwrap();
         let gfx = gfx::Gfx::new().unwrap();
+        // Optional exact place: `under <x> <top>` or `along <left> <right> <top>`,
+        // for the demo recording (then no frames are saved).
+        let numbers: Vec<i32> = std::env::args().skip(4).filter_map(|v| v.parse().ok()).collect();
+        let exact = match (std::env::args().nth(3).as_deref(), numbers.as_slice()) {
+            (Some("under"), [x, top]) => Some(mascot::Place::Under { x: *x, top: *top }),
+            (Some("along"), [left, right, top]) => {
+                Some(mascot::Place::Along { left: *left, right: *right, top: *top })
+            }
+            _ => None,
+        };
+        if let Some(place) = exact {
+            let mut crab = mascot::Mascot::play(&gfx, act, place, 1.25).expect("play");
+            let mut msg = MSG::default();
+            while !crab.finished() {
+                while PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).as_bool() {
+                    DispatchMessageW(&msg);
+                }
+                std::thread::sleep(Duration::from_millis(5));
+                let _ = &mut crab;
+            }
+            return;
+        }
         let (place, area) = match act {
             mascot::Act::Charging | mascot::Act::Sleepy => (
                 mascot::Place::Along {

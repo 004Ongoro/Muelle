@@ -426,7 +426,7 @@ impl Script {
 pub struct Mascot {
     hwnd: HWND,
     _target: DesktopWindowTarget,
-    hop: ContainerVisual,
+    reaction: ContainerVisual,
     poke_heart: SpriteVisual,
     script: Script,
     started: Instant,
@@ -444,7 +444,7 @@ impl Mascot {
         match Self::build(gfx, act, place, scale) {
             Ok(mascot) => Some(mascot),
             Err(error) => {
-                eprintln!("muelle: cangrejo: {error:#}");
+                muelle_shell::log::line(&format!("cangrejo: {error:#}"));
                 None
             }
         }
@@ -501,11 +501,11 @@ impl Mascot {
                     .cast::<ICompositorDesktopInterop>()?
                     .CreateDesktopWindowTarget(hwnd, true)?
             };
-            let (root, hop, poke_heart) = choreograph(gfx, &script, crab, crab_top, cell)?;
+            let (root, reaction, poke_heart) = choreograph(gfx, &script, crab, crab_top, cell)?;
             target.SetRoot(&root)?;
-            Ok((target, hop, poke_heart))
+            Ok((target, reaction, poke_heart))
         };
-        let (target, hop, poke_heart) = match built() {
+        let (target, reaction, poke_heart) = match built() {
             Ok(parts) => parts,
             Err(error) => {
                 // SAFETY: Our own window, created above.
@@ -522,7 +522,7 @@ impl Mascot {
         Ok(Self {
             hwnd,
             _target: target,
-            hop,
+            reaction,
             poke_heart,
             script,
             started: Instant::now(),
@@ -566,7 +566,13 @@ impl Mascot {
             return;
         }
         self.last_poke = Some(Instant::now());
-        let _ = react(gfx, &self.hop, &self.poke_heart, self.cell);
+        let _ = react(
+            gfx,
+            &self.reaction,
+            &self.poke_heart,
+            self.cell,
+            self.crab_top,
+        );
     }
 }
 
@@ -583,7 +589,8 @@ impl Drop for Mascot {
 ///
 /// root → path (slides along the act's path)
 ///          ├ hop (hops, trembles, pops in and out)
-///          │   └ one sprite per face and leg pose, switched on and off
+///          │   └ reaction (pointer squash and stretch)
+///          │       └ one sprite per face and leg pose, switched on and off
 ///          ├ emote (rises and fades)
 ///          └ poke heart (only on a poke)
 fn choreograph(
@@ -687,7 +694,13 @@ fn choreograph(
             poses.push(*pose);
         }
     }
-    let poses_layer = hop.Children()?;
+    // Pointer reactions have their own transform, so they cannot replace the
+    // act's entry/exit Scale animation or leave the mascot visible at the end.
+    let reaction = c.CreateContainerVisual()?;
+    reaction.SetSize(Vector2::new(crab.0, crab.1))?;
+    reaction.SetCenterPoint(Vector3::new(crab.0 / 2.0, crab.1, 0.0))?;
+    hop.Children()?.InsertAtTop(&reaction)?;
+    let poses_layer = reaction.Children()?;
     for pose in &poses {
         let sprite = sprite(gfx, &crab_image(pose.0, pose.1, cell_px))?;
         poses_layer.InsertAtTop(&sprite)?;
@@ -749,16 +762,21 @@ fn choreograph(
     let poke_heart = sprite(gfx, &emote_image(Emote::Heart, cell_px))?;
     poke_heart.SetOpacity(0.0)?;
     path.Children()?.InsertAtTop(&poke_heart)?;
-    Ok((root, hop, poke_heart))
+    Ok((root, reaction, poke_heart))
 }
 
 /// A poke: a quick hop and a heart above the head.
-fn react(gfx: &Gfx, hop: &ContainerVisual, heart: &SpriteVisual, cell: f32) -> Result<()> {
+fn react(
+    gfx: &Gfx,
+    reaction: &ContainerVisual,
+    heart: &SpriteVisual,
+    cell: f32,
+    crab_top: f32,
+) -> Result<()> {
     let c = &gfx.compositor;
     let duration = TimeSpan {
         Duration: 6_500_000,
     };
-    let base = hop.Offset()?;
     // The hop container's own animation keeps running; this one adds a
     // short squash and stretch on top, through the scale.
     let squash = c.CreateVector3KeyFrameAnimation()?;
@@ -769,12 +787,12 @@ fn react(gfx: &Gfx, hop: &ContainerVisual, heart: &SpriteVisual, cell: f32) -> R
     squash.InsertKeyFrame(0.25, Vector3::new(1.12, 0.86, 1.0))?;
     squash.InsertKeyFrame(0.6, Vector3::new(0.92, 1.12, 1.0))?;
     squash.InsertKeyFrame(1.0, Vector3::new(1.0, 1.0, 1.0))?;
-    hop.StartAnimation(h!("Scale"), &squash)?;
+    reaction.StartAnimation(h!("Scale"), &squash)?;
 
     let size = heart.Size()?;
-    let hop_size = hop.Size()?;
+    let hop_size = reaction.Size()?;
     let x = (hop_size.X - size.X) / 2.0;
-    let start = base.Y - size.Y - cell;
+    let start = crab_top - size.Y - cell;
     let rise = c.CreateVector3KeyFrameAnimation()?;
     rise.SetDuration(duration)?;
     rise.InsertKeyFrame(0.0, Vector3::new(x, start, 0.0))?;
@@ -871,5 +889,35 @@ mod tests {
         assert!((script.x_at(script.seconds) - (1000.0 - 44.0)).abs() < 0.01);
         assert_eq!(script.face_at(2.5), Face::Love);
         assert!(!script.step_at(2.5), "it stands still while hopping");
+    }
+
+    #[test]
+    #[ignore = "Requires Windows desktop composition"]
+    fn compositor_accepts_every_act_and_the_independent_pointer_reaction() -> Result<()> {
+        use windows::Win32::System::WinRT::{
+            CreateDispatcherQueueController, DQTAT_COM_STA, DQTYPE_THREAD_CURRENT,
+            DispatcherQueueOptions,
+        };
+        // SAFETY: The test owns the dispatcher for this thread.
+        let _queue = unsafe {
+            CreateDispatcherQueueController(DispatcherQueueOptions {
+                dwSize: size_of::<DispatcherQueueOptions>() as u32,
+                threadType: DQTYPE_THREAD_CURRENT,
+                apartmentType: DQTAT_COM_STA,
+            })?
+        };
+        let gfx = Gfx::new()?;
+        for act in [
+            Act::Fresh,
+            Act::Nervous,
+            Act::Exhausted,
+            Act::Charging,
+            Act::Sleepy,
+        ] {
+            let script = Script::new(act, 800.0, 44.0);
+            let (_root, reaction, heart) = choreograph(&gfx, &script, (44.0, 30.0), 28.0, 2.0)?;
+            react(&gfx, &reaction, &heart, 2.0, 28.0)?;
+        }
+        Ok(())
     }
 }

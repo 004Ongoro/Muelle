@@ -45,6 +45,9 @@ pub fn transparency_enabled() -> bool {
 /// `true` while energy saver (battery saver on Windows 10) is on.
 #[must_use]
 pub fn energy_saver_on() -> bool {
+    if let Some(on) = crate::power::notified_saver_state() {
+        return on;
+    }
     use windows::Win32::System::Power::{GetSystemPowerStatus, SYSTEM_POWER_STATUS};
     const SAVER_ON: u8 = 1;
     let mut status = SYSTEM_POWER_STATUS::default();

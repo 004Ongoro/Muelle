@@ -100,9 +100,15 @@ fn run_dock() -> Result<()> {
 
     // Start the watchdog first so it can restore the taskbar if anything fails later.
     guard::spawn()?;
-    // Moves an older `Run` autostart to the faster logon task, off the UI thread.
-    std::thread::spawn(autostart::migrate_legacy);
+    // Moves the `Run` autostart of 0.1.9-0.1.10 to the logon task, off the UI thread.
+    let _ = std::thread::Builder::new()
+        .name("muelle-autostart".into())
+        .spawn(autostart::migrate);
     let result = app::run();
+    if let Err(error) = &result {
+        muelle_shell::log::line(&format!("el dock se cerró por un error: {error:#}"));
+    }
     taskbar::give_back_on_exit();
+    muelle_shell::log::flush();
     result
 }

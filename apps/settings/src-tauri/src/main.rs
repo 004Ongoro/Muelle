@@ -82,10 +82,14 @@ fn get_autostart() -> bool {
 }
 
 #[tauri::command]
-fn set_autostart(enabled: bool) -> Result<(), String> {
+async fn set_autostart(enabled: bool) -> Result<(), String> {
     let dock = dock_exe().map_err(|error| error.to_string())?;
     let target = enabled.then(|| dock.to_string_lossy().into_owned());
-    autostart::set(target.as_deref()).map_err(|error| error.to_string())
+    tauri::async_runtime::spawn_blocking(move || {
+        autostart::set(target.as_deref()).map_err(|error| error.to_string())
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 /// The update found by the last check, kept until the user installs it.

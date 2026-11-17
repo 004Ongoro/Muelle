@@ -8,6 +8,68 @@ copia la sección de la versión que se publica a la release de GitHub.
 
 ## [Unreleased]
 
+### English
+
+- The mascot respects the Windows animation preference and stops when
+  disabled, entering full screen or changing display geometry. Initial
+  power notifications establish a baseline. Power acts start after the
+  dock refresh, and hover reactions preserve the act's exit animation.
+  Failed creation no longer reveals an auto-hidden dock or consumes the
+  charging cooldown. AI quota cues ignore failed or older measurements
+  and comparisons between different quota windows.
+- Energy-saver notifications now update the dock and menu bar directly from
+  the state sent by Windows. Standard and high-savings modes both disable
+  glass, and turning the saver off restores the transparency preference.
+- Muelle uses an interactive logon task to avoid Windows' discretionary delay
+  of `Run` entries. Windows still controls when the process can start.
+  Registration uses the Task Scheduler API with normal priority, battery
+  support and a `Run` fallback. Enabled registrations migrate only for the
+  matching installation. Migration and Settings changes are serialized,
+  and task-removal failures are reported.
+- Logon tasks use the account's SID, which survives account renames.
+  Changes to autostart run off the Settings UI thread.
+- Fixed: after turning the PC on, the dock and the menu bar could stay hidden
+  and the Windows taskbar showed instead. Right after signing in, the window
+  in front is often a hidden shell window the size of the screen (Start,
+  Search or the text input host), and the dock took it for a full-screen app.
+  Hidden and cloaked windows no longer count as full screen.
+- Diagnostics are written off the UI thread through a bounded queue.
+  `%LOCALAPPDATA%\Muelle\muelle.log` and its rotated backup each hold up to
+  256 KB. The log records errors, full-screen transitions and initialization
+  time measured from entering the dock initialization routine.
+
+### Español
+
+- La mascota respeta la opción de animaciones de Windows y se cancela al
+  desactivarla, entrar en pantalla completa o cambiar la geometría de pantalla.
+  Los avisos iniciales de energía establecen el estado de referencia.
+  Sus escenas comienzan después de actualizar el dock y las reacciones al
+  puntero conservan la animación de salida. Un fallo al crearla ya no revela
+  el dock oculto ni consume la espera entre avisos del cargador. Los avisos
+  de IA descartan lecturas fallidas, antiguas o de ventanas de cuota distintas.
+- Las notificaciones de ahorro de energía actualizan el dock y la barra
+  superior con el estado enviado por Windows. Tanto el modo estándar como
+  el ahorro máximo desactivan el cristal. Al desactivarlos, se recupera la
+  preferencia de transparencia del sistema.
+- Muelle usa una tarea de inicio de sesión interactiva para evitar el retraso
+  que Windows puede aplicar a las entradas `Run`. Windows sigue decidiendo
+  cuándo puede arrancar el proceso. La tarea se registra con la API del
+  Programador, prioridad normal, soporte para batería y respaldo mediante
+  `Run`. Se migran los registros activos de la misma instalación. Los cambios
+  desde Ajustes y la migración se ejecutan de forma serializada y los errores
+  al eliminar tareas se comunican.
+- Las tareas usan el SID de la cuenta, que se conserva al cambiar su nombre.
+  Cambiar el inicio automático se ejecuta fuera del hilo de Ajustes.
+- Corregido: al encender el PC, el dock y la barra superior podían quedarse
+  ocultos y se veía la barra de tareas de Windows. Justo al iniciar sesión, la
+  ventana al frente suele ser una ventana oculta del shell del tamaño de la
+  pantalla (Inicio, Búsqueda o el host de entrada de texto), y el dock la
+  tomaba por una app a pantalla completa. Las ventanas ocultas ya no cuentan.
+- El registro de diagnóstico se escribe fuera del hilo de la interfaz mediante
+  una cola acotada. `%LOCALAPPDATA%\Muelle\muelle.log` y su copia anterior
+  ocupan hasta 256 KB cada uno. Guarda errores, cambios de pantalla completa
+  y el tiempo medido desde que comienza la inicialización del dock.
+
 ## [0.1.10]
 
 ### English

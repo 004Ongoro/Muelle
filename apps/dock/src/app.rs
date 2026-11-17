@@ -452,6 +452,21 @@ fn selection_after_closing(index: usize, alive: &[bool]) -> Option<usize> {
     Some((index - closed_before).min(left - 1))
 }
 
+fn power_act(
+    before: Option<(Option<bool>, bool)>,
+    now: (Option<bool>, bool),
+    charging_allowed: bool,
+) -> Option<mascot::Act> {
+    let before = before?;
+    if now.1 && !before.1 {
+        Some(mascot::Act::Sleepy)
+    } else if now.0 == Some(true) && before.0 == Some(false) && charging_allowed {
+        Some(mascot::Act::Charging)
+    } else {
+        None
+    }
+}
+
 /// Where the Alt+Tab selection is believed to be.
 struct SwitcherFollow {
     /// The windows the switcher lists, in its order.
@@ -1769,7 +1784,7 @@ impl App {
     /// The crab plays `act` (see `mascot`), unless it is out already, it is
     /// turned off, or something runs full screen.
     fn perform(&mut self, act: mascot::Act, place: mascot::Place) {
-        if !self.config.mascot || self.mascot.is_some() || self.fullscreen {
+        if !self.can_perform() {
             return;
         }
         let scale = self.stage.as_ref().map_or(1.0, |stage| stage.scale);
@@ -1779,49 +1794,71 @@ impl App {
         self.mascot = Some(mascot);
         // SAFETY: A timer on our own window, killed when the act ends.
         unsafe {
-            SetTimer(Some(self.input), MASCOT_TIMER, MASCOT_POLL_MS, None);
+            if SetTimer(Some(self.input), MASCOT_TIMER, MASCOT_POLL_MS, None) == 0 {
+                self.stop_mascot();
+                return;
+            }
+        }
+        if matches!(place, mascot::Place::Along { .. }) && self.config.auto_hide {
+            // Reveal only after the mascot and its cleanup timer exist.
+            unsafe {
+                let _ = KillTimer(Some(self.input), HIDE_TIMER);
+            }
+            self.slide.target = 0.0;
+            self.last_frame = Instant::now();
+            if let Err(error) = self.place_windows().and_then(|()| self.render()) {
+                muelle_shell::log::line(&format!("mostrar el dock para la mascota: {error:#}"));
+                self.stop_mascot();
+            }
+        }
+        if self.mascot.is_some() && act == mascot::Act::Charging {
+            self.charging_shown = Some(Instant::now());
+        }
+    }
+
+    fn can_perform(&self) -> bool {
+        self.config.mascot && self.mascot.is_none() && !self.fullscreen && animations_enabled()
+    }
+
+    fn stop_mascot(&mut self) {
+        let active = self.mascot.take().is_some();
+        // SAFETY: These timers belong to this UI window. Always clear a stale
+        // mascot timer, and resume the usual dock hiding delay after an act.
+        unsafe {
+            let _ = KillTimer(Some(self.input), MASCOT_TIMER);
+            if active && self.config.auto_hide {
+                SetTimer(Some(self.input), HIDE_TIMER, HIDE_DELAY_MS, None);
+            }
         }
     }
 
     /// The top edge of the dock, for the crab to walk on. An auto-hidden
     /// dock comes up for the act and goes down after it, as the macOS Dock
     /// does when something asks for attention.
-    fn dock_edge(&mut self) -> Option<mascot::Place> {
+    fn dock_edge(&self) -> Option<mascot::Place> {
         let stage = self.stage.as_ref()?;
         let margin = (stage.icon / 2.0) as i32;
-        let place = mascot::Place::Along {
+        Some(mascot::Place::Along {
             left: stage.dock_origin.x - margin,
             right: stage.dock_origin.x + stage.layout.width as i32 + margin,
             top: stage.dock_origin.y,
-        };
-        if self.config.auto_hide && self.slide.target > 0.5 {
-            // SAFETY: Our own timer.
-            unsafe {
-                let _ = KillTimer(Some(self.input), HIDE_TIMER);
-            }
-            self.slide.target = 0.0;
-            self.last_frame = Instant::now();
-            let _ = self.place_windows();
-            let _ = self.render();
-        }
-        Some(place)
+        })
     }
 
     fn mascot_tick(&mut self) -> Result<()> {
-        let Some(mascot) = &mut self.mascot else {
+        if !self.config.mascot
+            || self.fullscreen
+            || !animations_enabled()
+            || self.mascot.as_ref().is_none_or(mascot::Mascot::finished)
+        {
+            self.stop_mascot();
             return Ok(());
-        };
-        if mascot.finished() {
-            self.mascot = None;
-            // SAFETY: Our own timer.
-            unsafe {
-                let _ = KillTimer(Some(self.input), MASCOT_TIMER);
-            }
-            return self.hide_if_unused();
         }
         let mut point = POINT::default();
         // SAFETY: A valid output for the pointer position.
-        if unsafe { GetCursorPos(&mut point) }.is_ok() {
+        if unsafe { GetCursorPos(&mut point) }.is_ok()
+            && let Some(mascot) = &mut self.mascot
+        {
             mascot.poke(&self.gfx, point);
         }
         Ok(())
@@ -1849,26 +1886,13 @@ impl App {
             muelle_shell::system::battery().map(|battery| battery.charging),
             muelle_shell::system::energy_saver_on(),
         );
-        let Some(before) = self.power_seen.replace(now) else {
-            return;
-        };
-        let act = if now.1 && !before.1 {
-            Some(mascot::Act::Sleepy)
-        } else if now.0 == Some(true)
-            && before.0 == Some(false)
-            && self
-                .charging_shown
-                .is_none_or(|shown| shown.elapsed() >= CHARGING_AGAIN)
-        {
-            self.charging_shown = Some(Instant::now());
-            Some(mascot::Act::Charging)
-        } else {
-            None
-        };
+        let before = self.power_seen.replace(now);
+        let charging_allowed = self
+            .charging_shown
+            .is_none_or(|shown| shown.elapsed() >= CHARGING_AGAIN);
+        let act = power_act(before, now, charging_allowed);
         if let Some(act) = act
-            && self.config.mascot
-            && self.mascot.is_none()
-            && !self.fullscreen
+            && self.can_perform()
             && let Some(place) = self.dock_edge()
         {
             self.perform(act, place);
@@ -2537,6 +2561,7 @@ impl App {
         if config == self.config {
             return Ok(());
         }
+        self.stop_mascot();
         if config.language != self.config.language {
             strings::set_language(config.language);
             // Labels are drawn text: redraw them in the new language.
@@ -2886,6 +2911,7 @@ impl App {
         // SAFETY: `self.input` is a live window on this UI thread.
         unsafe {
             if fullscreen {
+                self.stop_mascot();
                 self.close_preview();
                 SetTimer(
                     Some(self.input),
@@ -2896,6 +2922,11 @@ impl App {
             }
         }
         if fullscreen != self.fullscreen {
+            muelle_shell::log::line(&format!(
+                "{} por pantalla completa (al frente: {})",
+                if fullscreen { "se oculta" } else { "vuelve" },
+                tracker::foreground_class()
+            ));
             if let Some(bar) = &mut self.menubar {
                 bar.set_visible(!fullscreen)?;
             }
@@ -2975,7 +3006,7 @@ fn with_app_then(what: &str, action: impl FnOnce(&mut App) -> Result<Option<Outs
         match app.as_mut().map(action) {
             Some(Ok(outside)) => outside,
             Some(Err(error)) => {
-                eprintln!("muelle: {what}: {error:#}");
+                muelle_shell::log::line(&format!("{what}: {error:#}"));
                 None
             }
             None => None,
@@ -3326,18 +3357,26 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) ->
         }
         WM_SETTINGCHANGE if w.0 == SPI_SETWORKAREA => {}
         WM_SETTINGCHANGE | WM_DISPLAYCHANGE | WM_DPICHANGED => {
+            if matches!(msg, WM_DISPLAYCHANGE | WM_DPICHANGED) {
+                with_app("pantalla de la mascota", |app| {
+                    app.stop_mascot();
+                    Ok(())
+                });
+            }
             // SAFETY: `hwnd` is our window; scheduling the same timer resets it.
             unsafe { SetTimer(Some(hwnd), REFRESH_TIMER, REFRESH_DELAY_MS, None) };
         }
         // On battery or charging, or energy saver turned on or off: glass may
         // have to become solid, or the other way round.
         WM_POWERBROADCAST if w.0 == PBT_APMPOWERSTATUSCHANGE || w.0 == PBT_POWERSETTINGCHANGE => {
+            if w.0 == PBT_POWERSETTINGCHANGE {
+                // SAFETY: Windows owns the setting payload for this message.
+                unsafe {
+                    power::power_setting_changed(l);
+                }
+            }
             // SAFETY: `hwnd` is our window; scheduling the same timer resets it.
             unsafe { SetTimer(Some(hwnd), REFRESH_TIMER, REFRESH_DELAY_MS, None) };
-            with_app("energía", |app| {
-                app.power_moment();
-                Ok(())
-            });
         }
         WM_TIMER if w.0 == BIN_TIMER => {
             // SAFETY: `hwnd` is this live window on its owning UI thread.
@@ -3403,7 +3442,11 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) ->
                 let _ = KillTimer(Some(hwnd), w.0);
             }
             match w.0 {
-                REFRESH_TIMER => with_app("recomposición del dock", App::refresh),
+                REFRESH_TIMER => with_app("recomposición del dock", |app| {
+                    app.refresh()?;
+                    app.power_moment();
+                    Ok(())
+                }),
                 SYNC_TIMER => with_app("lectura de ventanas", App::sync),
                 _ => with_app("ocultar la barra de Windows", App::retake_taskbar),
             }
@@ -3518,6 +3561,8 @@ fn message_loop() {
 }
 
 pub fn run() -> Result<()> {
+    let startup = Instant::now();
+    muelle_shell::log::line(concat!("inicio, versión ", env!("CARGO_PKG_VERSION")));
     let gfx = Gfx::new()?;
     // SAFETY: The thread is already a single-threaded COM apartment (see
     // `main`); OLE adds drag and drop on top of it and is released at the end.
@@ -3628,11 +3673,9 @@ pub fn run() -> Result<()> {
             preview_candidate: None,
             preview: None,
             mascot: None,
-            // Read now, so the first change after starting already counts.
-            power_seen: Some((
-                muelle_shell::system::battery().map(|battery| battery.charging),
-                muelle_shell::system::energy_saver_on(),
-            )),
+            // Initial registration notifications establish the baseline after
+            // the queue starts, without playing a startup charging/saver act.
+            power_seen: None,
             charging_shown: None,
             cursor: 0.0,
             amount: Spring::at(0.0, HOVER_OMEGA),
@@ -3734,6 +3777,10 @@ pub fn run() -> Result<()> {
         }
     });
 
+    muelle_shell::log::line(&format!(
+        "interfaz inicializada en {} ms desde app::run; comienza el bucle de mensajes",
+        startup.elapsed().as_millis()
+    ));
     message_loop();
     // SAFETY: The drop target was registered on this window in this thread.
     unsafe {
@@ -3780,6 +3827,56 @@ mod performance_tests {
         gate.begin_pass();
         assert!(!gate.needs_another_pass());
         assert!(gate.request());
+    }
+}
+
+#[cfg(test)]
+mod mascot_power_tests {
+    use super::{mascot::Act, power_act};
+
+    #[test]
+    fn initial_power_state_and_repeated_notifications_do_not_play_an_act() {
+        assert_eq!(power_act(None, (Some(true), true), true), None);
+        assert_eq!(
+            power_act(Some((Some(false), true)), (Some(false), true), true),
+            None
+        );
+        assert_eq!(
+            power_act(Some((Some(true), false)), (Some(true), false), true),
+            None
+        );
+    }
+
+    #[test]
+    fn saver_entry_and_charging_have_distinct_acts() {
+        assert_eq!(
+            power_act(Some((Some(false), false)), (Some(false), true), true),
+            Some(Act::Sleepy)
+        );
+        assert_eq!(
+            power_act(Some((Some(false), false)), (Some(true), false), true),
+            Some(Act::Charging)
+        );
+        assert_eq!(
+            power_act(Some((Some(false), false)), (Some(true), true), true),
+            Some(Act::Sleepy)
+        );
+    }
+
+    #[test]
+    fn charging_cooldown_and_unknown_battery_state_suppress_false_plug_events() {
+        assert_eq!(
+            power_act(Some((Some(false), false)), (Some(true), false), false),
+            None
+        );
+        assert_eq!(
+            power_act(Some((None, false)), (Some(true), false), true),
+            None
+        );
+        assert_eq!(
+            power_act(Some((Some(true), true)), (Some(false), false), true),
+            None
+        );
     }
 }
 

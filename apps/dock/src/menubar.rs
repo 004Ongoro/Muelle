@@ -44,12 +44,12 @@ use windows::{
         UI::WindowsAndMessaging::{
             CallNextHookEx, CreateWindowExW, DefWindowProcW, DestroyWindow, GetCursorPos, HHOOK,
             HWND_TOPMOST, IDC_ARROW, IDC_HAND, KillTimer, LoadCursorW, MSLLHOOKSTRUCT,
-            PostMessageW, RegisterClassW, SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_SHOWWINDOW,
-            SetCursor, SetTimer, SetWindowPos, SetWindowsHookExW, UnhookWindowsHookEx, WH_MOUSE_LL,
-            WM_APP, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MOUSEMOVE, WM_NCHITTEST,
-            WM_RBUTTONDOWN, WM_SETCURSOR, WM_SETTINGCHANGE, WM_TIMECHANGE, WM_TIMER,
-            WM_XBUTTONDOWN, WNDCLASSW, WS_EX_NOACTIVATE, WS_EX_NOREDIRECTIONBITMAP,
-            WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+            PBT_POWERSETTINGCHANGE, PostMessageW, RegisterClassW, SWP_HIDEWINDOW, SWP_NOACTIVATE,
+            SWP_SHOWWINDOW, SetCursor, SetTimer, SetWindowPos, SetWindowsHookExW,
+            UnhookWindowsHookEx, WH_MOUSE_LL, WM_APP, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN,
+            WM_MOUSEMOVE, WM_NCHITTEST, WM_RBUTTONDOWN, WM_SETCURSOR, WM_SETTINGCHANGE,
+            WM_TIMECHANGE, WM_TIMER, WM_XBUTTONDOWN, WNDCLASSW, WS_EX_NOACTIVATE,
+            WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
         },
     },
     core::{BOOL, Interface, w},
@@ -340,6 +340,12 @@ unsafe extern "system" fn bar_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -
         // WM_TIMECHANGE: the clock or time zone was changed.
         WM_TIMER | WM_POWERBROADCAST | WM_TIMECHANGE | STATUS_CHANGED | USAGE_CHANGED
         | WM_SETTINGCHANGE => {
+            if msg == WM_POWERBROADCAST && w.0 == PBT_POWERSETTINGCHANGE as usize {
+                // SAFETY: Windows owns the setting payload for this message.
+                unsafe {
+                    muelle_shell::power::power_setting_changed(l);
+                }
+            }
             if !TICK_PENDING.swap(true, Ordering::Relaxed) {
                 // SAFETY: Posting to our own live window.
                 unsafe {
@@ -2245,8 +2251,25 @@ fn usage_moment(
         .into_iter()
         .filter(|p| active.has(*p))
         .find_map(|provider| {
-            let before = old.get(provider).main_window()?.used_percent;
-            let now = new.get(provider).main_window()?.used_percent;
+            let previous = old.get(provider);
+            let current = new.get(provider);
+            if previous.state != State::Ready || current.state != State::Ready {
+                return None;
+            }
+            let before_window = previous.main_window()?;
+            let now_window = current.main_window()?;
+            if before_window.minutes != now_window.minutes
+                || before_window.label != now_window.label
+            {
+                return None;
+            }
+            if let (Some(before), Some(now)) = (previous.fetched_at, current.fetched_at)
+                && now <= before
+            {
+                return None;
+            }
+            let before = before_window.used_percent;
+            let now = now_window.used_percent;
             let act = if now >= 100 && before < 100 {
                 mascot::Act::Exhausted
             } else if now >= 90 && before < 90 {
@@ -2569,5 +2592,31 @@ mod mascot_tests {
         assert_eq!(moment(Some(10), Some(0)), None);
         assert_eq!(moment(None, Some(0)), None);
         assert_eq!(moment(None, Some(100)), None);
+    }
+
+    #[test]
+    fn usage_moment_ignores_failed_reads_and_different_quota_windows() {
+        let before = at(Some(95));
+        let mut after = at(Some(0));
+        let mut active = ActiveProviders::default();
+        active.0[Provider::Claude as usize] = true;
+        after.providers[Provider::Claude as usize].windows[0].minutes = 10080;
+        assert!(usage_moment(&before, &after, &active).is_none());
+        after.providers[Provider::Claude as usize].windows[0].minutes = 300;
+        after.providers[Provider::Claude as usize].state = State::Unavailable;
+        assert!(usage_moment(&before, &after, &active).is_none());
+    }
+
+    #[test]
+    fn usage_moment_ignores_out_of_order_measurements() {
+        let mut before = at(Some(95));
+        let mut after = at(Some(0));
+        let mut active = ActiveProviders::default();
+        active.0[Provider::Claude as usize] = true;
+        let now = std::time::SystemTime::now();
+        before.providers[Provider::Claude as usize].fetched_at = Some(now);
+        after.providers[Provider::Claude as usize].fetched_at =
+            now.checked_sub(std::time::Duration::from_secs(60));
+        assert!(usage_moment(&before, &after, &active).is_none());
     }
 }
