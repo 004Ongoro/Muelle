@@ -42,6 +42,8 @@
   "showRecents": "Show recent apps",
   "showRecentsHint": "The last three you opened that are not pinned.",
   "bounceOnOpen": "Animate opening apps",
+  "mascot": "Crab on special moments",
+  "mascotHint": "A pixel crab comes out when an AI plan resets or runs out, when you plug in the charger, or when energy saver starts. Hover over it.",
   "reset": "Restore defaults",
   "resetHint": "Back to the out-of-the-box look and behavior. Your pinned apps stay.",
   "resetConfirmHint": "Click again to confirm.",

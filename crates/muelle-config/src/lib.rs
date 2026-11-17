@@ -67,6 +67,9 @@ pub struct Config {
     pub show_recents: bool,
     /// Icons bounce while the app they open is starting.
     pub bounce_on_open: bool,
+    /// The crab comes out for moments worth it (an AI plan resetting or
+    /// running out, the charger, energy saver).
+    pub mascot: bool,
     /// Settings asks GitHub Releases for a newer version when it opens. The
     /// only network access in Muelle, so it can be turned off.
     pub check_updates: bool,
@@ -130,6 +133,7 @@ impl Default for Config {
             show_indicators: true,
             show_recents: true,
             bounce_on_open: true,
+            mascot: true,
             check_updates: true,
             auto_update: true,
             language: Language::Auto,

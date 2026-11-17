@@ -10,6 +10,13 @@ copia la sección de la versión que se publica a la release de GitHub.
 
 ### English
 
+- A pixel crab comes out for moments worth it, and only then: it hops with a
+  heart under an AI provider whose limit just reset, trembles with a drop
+  past 90 %, falls asleep at 100 %, scurries along the dock when the charger
+  is plugged in, and dozes off on it when energy saver starts. Hover over it
+  and it reacts. An auto-hidden dock comes up for the moment, as the macOS
+  Dock does. While no crab is out it costs nothing; its acts run in the system
+  compositor. It can be turned off in Settings → Dock.
 - Fixed (issue #8): apps pinned from a Windows shortcut with arguments, such
   as `wscript.exe "script.vbs"`, a browser profile or a web app, opened the
   program alone. They now open through their shortcut, exactly as from
@@ -21,6 +28,14 @@ copia la sección de la versión que se publica a la release de GitHub.
 
 ### Español
 
+- Un cangrejo pixelado aparece en los momentos que lo merecen, y solo
+  entonces: salta con un corazón bajo el proveedor de IA cuyo límite se acaba
+  de reiniciar, tiembla con una gota al pasar del 90 %, se duerme al llegar al
+  100 %, cruza el dock corriendo al enchufar el cargador y se echa una siesta
+  encima al activarse el ahorro de energía. Si pasas el puntero por encima,
+  reacciona. El dock oculto sube durante ese momento, como hace el Dock de
+  macOS. Mientras no hay cangrejo no consume nada; sus escenas las ejecuta el
+  compositor del sistema. Se desactiva en Ajustes → Dock.
 - Corregido (issue #8): las apps fijadas desde un acceso directo de Windows con
   argumentos, como `wscript.exe "script.vbs"`, un perfil de navegador o una
   app web, abrían solo el programa. Ahora se abren a través de su acceso

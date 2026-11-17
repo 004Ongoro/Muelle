@@ -17,6 +17,7 @@ mod drop;
 mod flight;
 mod gfx;
 mod guard;
+mod mascot;
 mod media;
 mod menu;
 mod menubar;

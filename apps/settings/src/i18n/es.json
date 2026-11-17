@@ -42,6 +42,8 @@
   "showRecents": "Mostrar apps recientes",
   "showRecentsHint": "Las tres últimas que abriste sin tenerlas fijadas.",
   "bounceOnOpen": "Animar al abrir apps",
+  "mascot": "Cangrejo en momentos especiales",
+  "mascotHint": "Un cangrejo pixelado aparece cuando un plan de IA se reinicia o se agota, al enchufar el cargador o al activarse el ahorro de energía. Pasa el puntero por encima.",
   "reset": "Restablecer valores",
   "resetHint": "Vuelve al aspecto y comportamiento de fábrica. Tus apps fijadas se mantienen.",
   "resetConfirmHint": "Pulsa otra vez para confirmar.",

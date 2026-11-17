@@ -59,6 +59,7 @@ use windows_numerics::{Vector2, Vector3};
 use crate::{
     app,
     gfx::{Gfx, Ink, LabelBrush},
+    mascot,
     media::{self, Control as MediaControl, Track},
     scene::Theme,
     strings,
@@ -252,6 +253,10 @@ pub struct MenuBar {
     bounds: RECT,
     status: Status,
     usage: Option<UsageMonitor>,
+    /// Where each provider sits in the closed island, as screen x.
+    usage_anchors: Vec<(Provider, i32)>,
+    /// A moment for the crab, waiting for the dock (see `take_cue`).
+    cue: Option<(mascot::Act, i32)>,
     media: Option<media::Watch>,
     panel: Option<Island>,
     visual_height: i32,
@@ -953,6 +958,8 @@ impl MenuBar {
                 privacy: Privacy::default(),
             },
             usage: usage_enabled.then(|| UsageMonitor::new(hwnd.0 as isize, USAGE_CHANGED)),
+            usage_anchors: Vec::new(),
+            cue: None,
             media: media::Watch::start(hwnd, MEDIA_CHANGED),
             panel: None,
             visual_height: 0,
@@ -1361,9 +1368,32 @@ impl MenuBar {
         if self.look.as_ref() == Some(&look) {
             return Ok(());
         }
+        let moment = self
+            .look
+            .as_ref()
+            .and_then(|old| usage_moment(&old.usage, &look.usage, &look.active_providers));
         self.build(gfx, &look)?;
         self.look = Some(look);
+        if let Some((provider, act)) = moment
+            && let Some(&(_, x)) = self.usage_anchors.iter().find(|(p, _)| *p == provider)
+        {
+            self.cue = Some((act, x));
+        }
         Ok(())
+    }
+
+    /// A moment worth the crab, found by the last update: the act and the
+    /// screen x of the provider in the island. Taken once.
+    pub fn take_cue(&mut self) -> Option<(mascot::Act, POINT)> {
+        let (act, x) = self.cue.take()?;
+        let shown = self.visible && (!self.auto_hide || self.revealed);
+        shown.then_some((
+            act,
+            POINT {
+                x,
+                y: self.bounds.bottom,
+            },
+        ))
     }
 
     fn build(&mut self, gfx: &Gfx, look: &Look) -> Result<()> {
@@ -1632,7 +1662,12 @@ impl MenuBar {
                     }
                 }
                 Island::Usage => {
-                    draw_compact_usage(gfx, &content, geometry, bar_height, &providers)?
+                    let anchors =
+                        draw_compact_usage(gfx, &content, geometry, bar_height, &providers)?;
+                    self.usage_anchors = anchors
+                        .into_iter()
+                        .map(|(provider, x)| (provider, look.screen.left + (span.left + x) as i32))
+                        .collect();
                 }
             }
             let (left, right) = match kind {
@@ -2195,13 +2230,43 @@ fn island_surface(
     Ok(content)
 }
 
+/// Draws the providers in the closed island and returns where each one's
+/// figure sits (its centre, from the segment's left edge), for the crab.
+/// The moment an AI plan's figure crosses a line worth showing, comparing
+/// the previous update with this one: a limit reset to 0 % (after being in
+/// use), past 90 %, or at 100 %. Nothing on the first figures after starting,
+/// which have nothing to compare with.
+fn usage_moment(
+    old: &usage::Snapshot,
+    new: &usage::Snapshot,
+    active: &ActiveProviders,
+) -> Option<(Provider, mascot::Act)> {
+    Provider::ALL
+        .into_iter()
+        .filter(|p| active.has(*p))
+        .find_map(|provider| {
+            let before = old.get(provider).main_window()?.used_percent;
+            let now = new.get(provider).main_window()?.used_percent;
+            let act = if now >= 100 && before < 100 {
+                mascot::Act::Exhausted
+            } else if now >= 90 && before < 90 {
+                mascot::Act::Nervous
+            } else if now <= 1 && before >= 20 {
+                mascot::Act::Fresh
+            } else {
+                return None;
+            };
+            Some((provider, act))
+        })
+}
+
 fn draw_compact_usage(
     gfx: &Gfx,
     content: &VisualCollection,
     geometry: IslandGeometry,
     bar_height: f32,
     providers: &[IslandProvider<'_>],
-) -> Result<()> {
+) -> Result<Vec<(Provider, f32)>> {
     let c = &gfx.compositor;
     let px = |v| geometry.px(v);
     let ink = geometry.ink();
@@ -2219,9 +2284,15 @@ fn draw_compact_usage(
             icon.width,
             icon.height,
         )?;
-        return Ok(());
+        let centre = geometry.width / 2.0;
+        return Ok(providers
+            .iter()
+            .map(|(provider, ..)| (*provider, centre))
+            .collect());
     }
+    let mut anchors = Vec::with_capacity(providers.len());
     for (index, (provider, usage, accent)) in providers.iter().enumerate() {
+        anchors.push((*provider, inset + (index as f32 + 0.5) * half));
         // When space is tight the full list is still available in the panel.
         if half < px(20.0) {
             break;
@@ -2287,7 +2358,7 @@ fn draw_compact_usage(
             )?;
         }
     }
-    Ok(())
+    Ok(anchors)
 }
 
 fn track_title(track: &Track) -> &str {
@@ -2455,5 +2526,48 @@ mod island_tests {
             popup_surface(&gfx, theme, &root.Children()?, geometry, 136.0)?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod mascot_tests {
+    use super::*;
+    use crate::usage::{ProviderUsage, Snapshot, State, Window};
+
+    fn at(percent: Option<u8>) -> Snapshot {
+        let mut snapshot = Snapshot::default();
+        if let Some(percent) = percent {
+            snapshot.providers[Provider::Claude as usize] = ProviderUsage {
+                state: State::Ready,
+                windows: vec![Window {
+                    label: None,
+                    minutes: 300,
+                    used_percent: percent,
+                    resets_at: None,
+                }],
+                fetched_at: None,
+            };
+        }
+        snapshot
+    }
+
+    fn moment(before: Option<u8>, now: Option<u8>) -> Option<mascot::Act> {
+        let mut active = ActiveProviders::default();
+        active.0[Provider::Claude as usize] = true;
+        usage_moment(&at(before), &at(now), &active).map(|(_, act)| act)
+    }
+
+    #[test]
+    fn usage_moment_should_fire_only_when_a_line_is_crossed() {
+        assert_eq!(moment(Some(60), Some(0)), Some(mascot::Act::Fresh));
+        assert_eq!(moment(Some(85), Some(91)), Some(mascot::Act::Nervous));
+        assert_eq!(moment(Some(95), Some(100)), Some(mascot::Act::Exhausted));
+        // Straight to 100 is "exhausted", not "nervous".
+        assert_eq!(moment(Some(50), Some(100)), Some(mascot::Act::Exhausted));
+        // Staying above a line, a small reset, or the first figure: nothing.
+        assert_eq!(moment(Some(92), Some(95)), None);
+        assert_eq!(moment(Some(10), Some(0)), None);
+        assert_eq!(moment(None, Some(0)), None);
+        assert_eq!(moment(None, Some(100)), None);
     }
 }

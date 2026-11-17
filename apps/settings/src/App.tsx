@@ -276,6 +276,13 @@ export function App() {
                     onChange={(bounceOnOpen) => update({ bounceOnOpen })}
                   />
                 </Row>
+                <Row label={t.mascot} hint={t.mascotHint}>
+                  <Toggle
+                    label={t.mascot}
+                    checked={config.mascot}
+                    onChange={(mascot) => update({ mascot })}
+                  />
+                </Row>
                 <Row label={t.showIndicators}>
                   <Toggle
                     label={t.showIndicators}

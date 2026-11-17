@@ -19,6 +19,7 @@ export interface Config {
   showIndicators: boolean;
   showRecents: boolean;
   bounceOnOpen: boolean;
+  mascot: boolean;
   checkUpdates: boolean;
   autoUpdate: boolean;
   language: Language;

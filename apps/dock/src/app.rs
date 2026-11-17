@@ -91,6 +91,7 @@ use crate::{
     drop::DropTarget,
     flight::{Flight, Snapshot},
     gfx::{Gfx, LabelBrush},
+    mascot,
     menu::{self, MenuItem},
     menubar::MenuBar,
     multi_window_view::MultiWindowView,
@@ -193,6 +194,11 @@ fn millis(duration: std::time::Duration) -> u32 {
 /// moment the next look is due (see `schedule_update`).
 const UPDATE_TIMER: usize = 12;
 const PREVIEW_TIMER: usize = 13;
+/// While the crab is out (a few seconds): is its act over, is the pointer on it.
+const MASCOT_TIMER: usize = 14;
+const MASCOT_POLL_MS: u32 = 50;
+/// The charger act at most this often, however many times it is plugged.
+const CHARGING_AGAIN: std::time::Duration = std::time::Duration::from_secs(10 * 60);
 const PREVIEW_DWELL_MS: u32 = 420;
 const UPDATE_EVERY: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
 /// After the dock starts, the look waits this long, so it never slows signing in.
@@ -547,6 +553,12 @@ struct App {
     hovered: Option<usize>,
     preview_candidate: Option<String>,
     preview: Option<MultiWindowView>,
+    /// The crab, while it is out (see `perform`).
+    mascot: Option<mascot::Mascot>,
+    /// Charging and energy saver at the last power change.
+    power_seen: Option<(Option<bool>, bool)>,
+    /// When the charger act last played.
+    charging_shown: Option<Instant>,
     /// Horizontal cursor position relative to the resting dock.
     cursor: f32,
     /// 0 = resting, 1 = full magnification.
@@ -1754,8 +1766,118 @@ impl App {
         }
     }
 
+    /// The crab plays `act` (see `mascot`), unless it is out already, it is
+    /// turned off, or something runs full screen.
+    fn perform(&mut self, act: mascot::Act, place: mascot::Place) {
+        if !self.config.mascot || self.mascot.is_some() || self.fullscreen {
+            return;
+        }
+        let scale = self.stage.as_ref().map_or(1.0, |stage| stage.scale);
+        let Some(mascot) = mascot::Mascot::play(&self.gfx, act, place, scale) else {
+            return;
+        };
+        self.mascot = Some(mascot);
+        // SAFETY: A timer on our own window, killed when the act ends.
+        unsafe {
+            SetTimer(Some(self.input), MASCOT_TIMER, MASCOT_POLL_MS, None);
+        }
+    }
+
+    /// The top edge of the dock, for the crab to walk on. An auto-hidden
+    /// dock comes up for the act and goes down after it, as the macOS Dock
+    /// does when something asks for attention.
+    fn dock_edge(&mut self) -> Option<mascot::Place> {
+        let stage = self.stage.as_ref()?;
+        let margin = (stage.icon / 2.0) as i32;
+        let place = mascot::Place::Along {
+            left: stage.dock_origin.x - margin,
+            right: stage.dock_origin.x + stage.layout.width as i32 + margin,
+            top: stage.dock_origin.y,
+        };
+        if self.config.auto_hide && self.slide.target > 0.5 {
+            // SAFETY: Our own timer.
+            unsafe {
+                let _ = KillTimer(Some(self.input), HIDE_TIMER);
+            }
+            self.slide.target = 0.0;
+            self.last_frame = Instant::now();
+            let _ = self.place_windows();
+            let _ = self.render();
+        }
+        Some(place)
+    }
+
+    fn mascot_tick(&mut self) -> Result<()> {
+        let Some(mascot) = &mut self.mascot else {
+            return Ok(());
+        };
+        if mascot.finished() {
+            self.mascot = None;
+            // SAFETY: Our own timer.
+            unsafe {
+                let _ = KillTimer(Some(self.input), MASCOT_TIMER);
+            }
+            return self.hide_if_unused();
+        }
+        let mut point = POINT::default();
+        // SAFETY: A valid output for the pointer position.
+        if unsafe { GetCursorPos(&mut point) }.is_ok() {
+            mascot.poke(&self.gfx, point);
+        }
+        Ok(())
+    }
+
+    /// A moment found by the menu bar (an AI plan's figure): the crab comes
+    /// out under that provider.
+    fn take_bar_cue(&mut self) {
+        let cue = self.menubar.as_mut().and_then(MenuBar::take_cue);
+        if let Some((act, point)) = cue {
+            self.perform(
+                act,
+                mascot::Place::Under {
+                    x: point.x,
+                    top: point.y,
+                },
+            );
+        }
+    }
+
+    /// The charger plugged in, or energy saver turned on: the crab walks
+    /// along the dock. Only on the change itself, never at startup.
+    fn power_moment(&mut self) {
+        let now = (
+            muelle_shell::system::battery().map(|battery| battery.charging),
+            muelle_shell::system::energy_saver_on(),
+        );
+        let Some(before) = self.power_seen.replace(now) else {
+            return;
+        };
+        let act = if now.1 && !before.1 {
+            Some(mascot::Act::Sleepy)
+        } else if now.0 == Some(true)
+            && before.0 == Some(false)
+            && self
+                .charging_shown
+                .is_none_or(|shown| shown.elapsed() >= CHARGING_AGAIN)
+        {
+            self.charging_shown = Some(Instant::now());
+            Some(mascot::Act::Charging)
+        } else {
+            None
+        };
+        if let Some(act) = act
+            && self.config.mascot
+            && self.mascot.is_none()
+            && !self.fullscreen
+            && let Some(place) = self.dock_edge()
+        {
+            self.perform(act, place);
+        }
+    }
+
     fn hide_if_unused(&mut self) -> Result<()> {
         if !self.config.auto_hide
+            || self.mascot.is_some()
             || self.hovering
             || self.drag.is_some()
             || self.switching
@@ -3023,9 +3145,12 @@ pub fn menu_bar_dismiss_island() {
 /// Redraws the menu bar from what it reads on each draw (input language,
 /// clock), without asking the network or audio again.
 pub fn menu_bar_refresh() {
-    with_app("barra superior", |app| match &mut app.menubar {
-        Some(bar) => bar.refresh(&app.gfx),
-        None => Ok(()),
+    with_app("barra superior", |app| {
+        if let Some(bar) = &mut app.menubar {
+            bar.refresh(&app.gfx)?;
+        }
+        app.take_bar_cue();
+        Ok(())
     });
 }
 
@@ -3037,9 +3162,12 @@ pub fn menu_bar_privacy_changed() {
 }
 
 pub fn menu_bar_tick() {
-    with_app("barra superior", |app| match &mut app.menubar {
-        Some(bar) => bar.tick(&app.gfx),
-        None => Ok(()),
+    with_app("barra superior", |app| {
+        if let Some(bar) = &mut app.menubar {
+            bar.tick(&app.gfx)?;
+        }
+        app.take_bar_cue();
+        Ok(())
     });
 }
 
@@ -3206,6 +3334,10 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) ->
         WM_POWERBROADCAST if w.0 == PBT_APMPOWERSTATUSCHANGE || w.0 == PBT_POWERSETTINGCHANGE => {
             // SAFETY: `hwnd` is our window; scheduling the same timer resets it.
             unsafe { SetTimer(Some(hwnd), REFRESH_TIMER, REFRESH_DELAY_MS, None) };
+            with_app("energía", |app| {
+                app.power_moment();
+                Ok(())
+            });
         }
         WM_TIMER if w.0 == BIN_TIMER => {
             // SAFETY: `hwnd` is this live window on its owning UI thread.
@@ -3246,6 +3378,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) ->
         WM_TIMER if w.0 == SPRING_TIMER => {
             with_app_then("arrastre sobre una app", App::spring_open);
         }
+        WM_TIMER if w.0 == MASCOT_TIMER => with_app("cangrejo", App::mascot_tick),
         WM_TIMER if w.0 == PREVIEW_TIMER => with_app("selector de ventanas", App::preview_tick),
         WM_TIMER if w.0 == HIDE_TIMER => {
             // SAFETY: Same as above.
@@ -3494,6 +3627,13 @@ pub fn run() -> Result<()> {
             hovered: None,
             preview_candidate: None,
             preview: None,
+            mascot: None,
+            // Read now, so the first change after starting already counts.
+            power_seen: Some((
+                muelle_shell::system::battery().map(|battery| battery.charging),
+                muelle_shell::system::energy_saver_on(),
+            )),
+            charging_shown: None,
             cursor: 0.0,
             amount: Spring::at(0.0, HOVER_OMEGA),
             last_frame: Instant::now(),

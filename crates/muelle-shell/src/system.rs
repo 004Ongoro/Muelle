@@ -35,17 +35,21 @@ pub fn uses_light_theme() -> bool {
 /// `false` there.
 #[must_use]
 pub fn transparency_enabled() -> bool {
-    use windows::Win32::System::Power::{GetSystemPowerStatus, SYSTEM_POWER_STATUS};
     if !is_windows_11() {
         return false;
     }
+    // Missing means never changed, and the default is on.
+    !energy_saver_on() && personalize(w!("EnableTransparency")) != Some(0)
+}
+
+/// `true` while energy saver (battery saver on Windows 10) is on.
+#[must_use]
+pub fn energy_saver_on() -> bool {
+    use windows::Win32::System::Power::{GetSystemPowerStatus, SYSTEM_POWER_STATUS};
     const SAVER_ON: u8 = 1;
     let mut status = SYSTEM_POWER_STATUS::default();
     // SAFETY: `status` is a valid structure the call fills in.
-    let saver = unsafe { GetSystemPowerStatus(&mut status) }.is_ok()
-        && status.SystemStatusFlag & SAVER_ON != 0;
-    // Missing means never changed, and the default is on.
-    !saver && personalize(w!("EnableTransparency")) != Some(0)
+    unsafe { GetSystemPowerStatus(&mut status) }.is_ok() && status.SystemStatusFlag & SAVER_ON != 0
 }
 
 /// The input language of the window in front as two capital letters
