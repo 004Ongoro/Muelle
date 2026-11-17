@@ -10,6 +10,10 @@ copia la sección de la versión que se publica a la release de GitHub.
 
 ### English
 
+- The Genie effect follows Windows' "Animation effects" setting, which
+  "Adjust for best performance" also turns off, and did so silently: the
+  switch in Settings stayed on and nothing happened. Settings now says when
+  Windows animations are off and opens the right Windows page to turn them on.
 - A pixel crab comes out for moments worth it, and only then: it hops with a
   heart under an AI provider whose limit just reset, trembles with a drop
   past 90 %, falls asleep at 100 %, scurries along the dock when the charger
@@ -28,6 +32,11 @@ copia la sección de la versión que se publica a la release de GitHub.
 
 ### Español
 
+- El efecto genio sigue el ajuste «Efectos de animación» de Windows, que también
+  apaga «Ajustar para obtener el mejor rendimiento», y lo hacía en silencio: el
+  interruptor de Ajustes seguía activo y no pasaba nada. Ahora Ajustes avisa
+  cuando las animaciones de Windows están desactivadas y abre la página de
+  Windows correcta para activarlas.
 - Un cangrejo pixelado aparece en los momentos que lo merecen, y solo
   entonces: salta con un corazón bajo el proveedor de IA cuyo límite se acaba
   de reiniciar, tiembla con una gota al pasar del 90 %, se duerme al llegar al

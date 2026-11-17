@@ -57,6 +57,25 @@ fn set_config(config: Config) -> Result<Config, String> {
     Ok(config)
 }
 
+/// Windows' own animation setting, which the genie follows: off, the
+/// genie does not play, and the window says so.
+#[tauri::command]
+fn windows_animations() -> bool {
+    muelle_shell::system::animations_enabled()
+}
+
+/// The page of Windows Settings with that switch: "Animation effects" on
+/// Windows 11, "Show animations in Windows" on Windows 10.
+#[tauri::command]
+fn open_animation_settings() -> Result<(), String> {
+    let page = if muelle_shell::system::is_windows_11() {
+        "ms-settings:easeofaccess-visualeffects"
+    } else {
+        "ms-settings:easeofaccess-display"
+    };
+    launcher::open(page).map_err(|error| error.to_string())
+}
+
 #[tauri::command]
 fn get_autostart() -> bool {
     autostart::is_enabled()
@@ -236,6 +255,8 @@ fn main() {
             set_config,
             get_autostart,
             set_autostart,
+            windows_animations,
+            open_animation_settings,
             check_update,
             install_update,
             open_release_notes

@@ -11,6 +11,8 @@ import {
   checkUpdate,
   defaultConfig,
   getAutostart,
+  openAnimationSettings,
+  windowsAnimations,
   installUpdate,
   loadConfig,
   openReleaseNotes,
@@ -61,6 +63,19 @@ function textsFor(language: Language): Texts {
 export function App() {
   const [config, setConfig] = useState<Config | null>(null);
   const [autostart, setAutostartState] = useState(false);
+  // Assumed on until asked, so the notice never flashes on a normal PC.
+  const [animations, setAnimations] = useState(true);
+  useEffect(() => {
+    const check = () => {
+      windowsAnimations()
+        .then(setAnimations)
+        .catch(() => {});
+    };
+    check();
+    // Back from Windows Settings after turning them on: the notice goes.
+    window.addEventListener("focus", check);
+    return () => window.removeEventListener("focus", check);
+  }, []);
   const [section, setSection] = useState<SectionId>("dock");
   const [failed, setFailed] = useState(false);
   const [version, setVersion] = useState("");
@@ -309,6 +324,11 @@ export function App() {
                     onChange={(genie) => update({ genie })}
                   />
                 </Row>
+                <SubRow label={t.genieOff} hint={t.genieOffHint} open={config.genie && !animations}>
+                  <button type="button" className="push" onClick={() => void openAnimationSettings()}>
+                    {t.genieOffAction}
+                  </button>
+                </SubRow>
                 <Row label={t.showMinimized} hint={t.showMinimizedHint}>
                   <Toggle
                     label={t.showMinimized}
