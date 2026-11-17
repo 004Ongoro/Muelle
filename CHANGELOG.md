@@ -8,8 +8,13 @@ copia la sección de la versión que se publica a la release de GitHub.
 
 ## [Unreleased]
 
+## [0.1.11]
+
 ### English
 
+- Removed the manual option to import apps pinned to the Windows taskbar from
+  the dock's context menu. Changes to Windows taskbar pins still sync
+  automatically.
 - Clicking an app while a shell flyout has focus accepts native pointer
   activation before opening it. Minimized windows are restored even if the
   subsequent foreground request is refused. Hidden stale windows are skipped.
@@ -47,6 +52,9 @@ copia la sección de la versión que se publica a la release de GitHub.
 
 ### Español
 
+- Se eliminó del menú contextual del dock la opción manual para añadir las
+  apps fijadas en la barra de tareas de Windows. Los cambios en esos pines
+  siguen sincronizándose automáticamente.
 - Al pulsar una app mientras un panel del sistema conserva el foco, el dock
   acepta la activación nativa del clic antes de abrirla. Las ventanas
   minimizadas se restauran aunque se rechace la petición posterior de foco.

@@ -48,12 +48,17 @@ fn main() {
         let gfx = gfx::Gfx::new().unwrap();
         // Optional exact place: `under <x> <top>` or `along <left> <right> <top>`,
         // for the demo recording (then no frames are saved).
-        let numbers: Vec<i32> = std::env::args().skip(4).filter_map(|v| v.parse().ok()).collect();
+        let numbers: Vec<i32> = std::env::args()
+            .skip(4)
+            .filter_map(|v| v.parse().ok())
+            .collect();
         let exact = match (std::env::args().nth(3).as_deref(), numbers.as_slice()) {
             (Some("under"), [x, top]) => Some(mascot::Place::Under { x: *x, top: *top }),
-            (Some("along"), [left, right, top]) => {
-                Some(mascot::Place::Along { left: *left, right: *right, top: *top })
-            }
+            (Some("along"), [left, right, top]) => Some(mascot::Place::Along {
+                left: *left,
+                right: *right,
+                top: *top,
+            }),
             _ => None,
         };
         if let Some(place) = exact {

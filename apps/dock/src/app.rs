@@ -242,7 +242,6 @@ const CMD_QUIT_APP: u32 = 4;
 const CMD_EMPTY_BIN: u32 = 5;
 const CMD_QUIT_DOCK: u32 = 6;
 const CMD_TOGGLE_HIDING: u32 = 7;
-const CMD_IMPORT_PINS: u32 = 10;
 const CMD_RUN_AS_ADMIN: u32 = 11;
 const CMD_SHOW_DESKTOP: u32 = 12;
 const CMD_TASK_MANAGER: u32 = 13;
@@ -2435,7 +2434,6 @@ impl App {
                     MenuItem::action(CMD_TASK_MANAGER, text().task_manager),
                     MenuItem::action(CMD_TASKBAR_SETTINGS, text().taskbar_settings),
                     MenuItem::Separator,
-                    MenuItem::action(CMD_IMPORT_PINS, text().import_pins),
                     MenuItem::action(CMD_SETTINGS, text().settings),
                     MenuItem::Separator,
                     MenuItem::action(CMD_QUIT_DOCK, text().quit_dock),
@@ -2527,7 +2525,6 @@ impl App {
             return match command {
                 CMD_QUIT_DOCK => Ok(Some(Outside::QuitDock)),
                 CMD_TOGGLE_HIDING => self.toggle_hiding().map(|()| None),
-                CMD_IMPORT_PINS => self.import_taskbar_pins().map(|()| None),
                 CMD_SHOW_DESKTOP => Ok(Some(Outside::ShowDesktop)),
                 CMD_TASK_MANAGER => Ok(Some(Outside::Open("taskmgr.exe".into()))),
                 CMD_TASKBAR_SETTINGS => Ok(Some(Outside::Open("ms-settings:taskbar".into()))),
@@ -2689,14 +2686,6 @@ impl App {
             self.roster.unpin(id);
         }
         !missing.is_empty()
-    }
-
-    fn import_taskbar_pins(&mut self) -> Result<()> {
-        for id in taskbar_pins() {
-            self.roster.pin(&id);
-        }
-        save_settings(&self.roster, &self.config);
-        self.refresh()
     }
 
     fn toggle_hiding(&mut self) -> Result<()> {
