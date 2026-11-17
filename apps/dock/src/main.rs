@@ -20,7 +20,7 @@ mod guard;
 mod media;
 mod menu;
 mod menubar;
-mod previews;
+mod multi_window_view;
 mod scene;
 mod shell_work;
 mod strings;
