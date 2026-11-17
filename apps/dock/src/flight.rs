@@ -750,7 +750,7 @@ impl Flight {
     /// A delayed restore belongs to the original activation request. Once
     /// another app wins the foreground, the overlay and request are stale.
     pub fn is_current(&self, foreground: isize) -> bool {
-        foreground == 0 || foreground == self.foreground || foreground == self.hwnd
+        activation_is_current(self.restoring, self.foreground, self.hwnd, foreground)
     }
 
     /// Width of the flying window divided by its height.
@@ -810,6 +810,17 @@ impl Flight {
     }
 }
 
+fn activation_is_current(
+    restoring: bool,
+    requested_from: isize,
+    target: isize,
+    foreground: isize,
+) -> bool {
+    // Minimization normally hands focus to the next app. Only a delayed
+    // restoration could steal focus back and must be cancelled on that switch.
+    !restoring || foreground == 0 || foreground == requested_from || foreground == target
+}
+
 impl Drop for Flight {
     fn drop(&mut self) {
         // SAFETY: The handles were created in `start` or `restore` and are
@@ -835,6 +846,19 @@ impl Drop for Flight {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn minimizing_keeps_its_capture_when_focus_passes_to_the_next_window() {
+        assert!(activation_is_current(false, 10, 10, 20));
+    }
+
+    #[test]
+    fn restoring_cannot_take_focus_back_after_the_user_switches_apps() {
+        assert!(!activation_is_current(true, 10, 30, 20));
+        assert!(activation_is_current(true, 10, 30, 10));
+        assert!(activation_is_current(true, 10, 30, 30));
+        assert!(activation_is_current(true, 10, 30, 0));
+    }
 
     #[test]
     fn restore_pixels_average_each_block_and_keep_alpha() {

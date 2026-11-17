@@ -10,6 +10,13 @@ copia la sección de la versión que se publica a la release de GitHub.
 
 ### English
 
+- Clicking an app while a shell flyout has focus accepts native pointer
+  activation before opening it. Minimized windows are restored even if the
+  subsequent foreground request is refused. Hidden stale windows are skipped.
+- Dock button clicks resolve the current pointer position instead of relying
+  on a potentially coalesced mouse-move event.
+- Minimization flights keep their capture when Windows focuses the next app.
+  Deferred restores still cancel when the user switches to a different app.
 - The mascot respects the Windows animation preference and stops when
   disabled, entering full screen or changing display geometry. Initial
   power notifications establish a baseline. Power acts start after the
@@ -40,6 +47,15 @@ copia la sección de la versión que se publica a la release de GitHub.
 
 ### Español
 
+- Al pulsar una app mientras un panel del sistema conserva el foco, el dock
+  acepta la activación nativa del clic antes de abrirla. Las ventanas
+  minimizadas se restauran aunque se rechace la petición posterior de foco.
+  Las ventanas ocultas que hayan quedado en la lista se descartan.
+- Los clics del dock consultan la posición actual del puntero, evitando usar
+  el icono de un movimiento anterior cuando Windows agrupa eventos del ratón.
+- El efecto de minimización conserva la captura cuando Windows enfoca la
+  siguiente app. Las restauraciones aplazadas se cancelan si el usuario
+  cambia a otra aplicación.
 - La mascota respeta la opción de animaciones de Windows y se cancela al
   desactivarla, entrar en pantalla completa o cambiar la geometría de pantalla.
   Los avisos iniciales de energía establecen el estado de referencia.

@@ -70,16 +70,16 @@ use windows::{
                 CreateWindowExW, DefWindowProcW, DispatchMessageW, EVENT_OBJECT_CLOAKED,
                 EVENT_OBJECT_UNCLOAKED, EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_MINIMIZEEND,
                 EVENT_SYSTEM_MINIMIZESTART, FindWindowW, GetCursorPos, GetMessageW,
-                GetSystemMetrics, HWND_TOPMOST, IDC_ARROW, KillTimer, LoadCursorW, MSG,
-                OBJID_WINDOW, PM_REMOVE, PeekMessageW, PostMessageW, PostQuitMessage,
-                RegisterClassW, RegisterShellHookWindow, RegisterWindowMessageW, SM_CXDRAG,
-                SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_SHOWWINDOW, SetTimer, SetWindowPos,
+                GetSystemMetrics, HWND_TOPMOST, IDC_ARROW, KillTimer, LoadCursorW, MA_ACTIVATE,
+                MA_NOACTIVATE, MSG, OBJID_WINDOW, PM_REMOVE, PeekMessageW, PostMessageW,
+                PostQuitMessage, RegisterClassW, RegisterShellHookWindow, RegisterWindowMessageW,
+                SM_CXDRAG, SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_SHOWWINDOW, SetTimer, SetWindowPos,
                 WINDOW_EX_STYLE, WINEVENT_OUTOFCONTEXT, WINEVENT_SKIPOWNPROCESS, WM_APP,
                 WM_CAPTURECHANGED, WM_CLOSE, WM_DESTROY, WM_DISPLAYCHANGE, WM_DPICHANGED,
-                WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONUP, WM_MOUSEMOVE, WM_QUIT, WM_RBUTTONUP,
-                WM_SETTINGCHANGE, WM_TIMER, WNDCLASSW, WS_EX_LAYERED, WS_EX_NOACTIVATE,
-                WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT,
-                WS_POPUP,
+                WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEACTIVATE,
+                WM_MOUSEMOVE, WM_QUIT, WM_RBUTTONUP, WM_SETTINGCHANGE, WM_TIMER, WNDCLASSW,
+                WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOOLWINDOW,
+                WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
             },
         },
     },
@@ -1218,7 +1218,11 @@ impl App {
         let Some(&hwnd) = windows.first() else {
             return false;
         };
-        if !windows.iter().all(|window| self.minimized.contains(window)) {
+        // The tracker can lag behind a rapid restore/minimize. Never play an
+        // old snapshot over a window that is already visible again.
+        if !windows.iter().all(|window| unsafe {
+            windows::Win32::UI::WindowsAndMessaging::IsIconic(HWND(*window as *mut _)).as_bool()
+        }) {
             return false;
         }
         let Some(position) = self.snapshots.iter().position(|(owner, _)| *owner == hwnd) else {
@@ -1925,21 +1929,49 @@ impl App {
 
     fn on_press(&mut self) -> Result<()> {
         self.close_preview();
+        let Some(at) = self.pointer_at_click()? else {
+            return Ok(());
+        };
         let Some(entry) = self.hovered.and_then(|index| self.entries.get(index)) else {
             return Ok(());
         };
         if !self.is_draggable(entry) {
             return Ok(());
         }
-        let mut at = POINT::default();
-        // SAFETY: `at` lives for the call; capture keeps mouse input while dragging
-        // outside the input window.
+        // SAFETY: Capture keeps mouse input while dragging outside the dock.
         unsafe {
-            GetCursorPos(&mut at)?;
             SetCapture(self.input);
         }
         self.press = entry.id.clone().map(|id| Press { id, at });
         Ok(())
+    }
+
+    /// Button messages can arrive before a coalesced WM_MOUSEMOVE. Resolve
+    /// the actual pointer again so a quick click never uses an older icon.
+    fn pointer_at_click(&mut self) -> Result<Option<POINT>> {
+        let mut point = POINT::default();
+        // SAFETY: Read-only queries with a live point buffer.
+        unsafe {
+            GetCursorPos(&mut point)?;
+            if windows::Win32::UI::WindowsAndMessaging::WindowFromPoint(point) != self.input {
+                return Ok(None);
+            }
+        }
+        self.hover_at(point.x)?;
+        self.track_leave()?;
+        Ok(Some(point))
+    }
+
+    fn activate_for_pointer(&self) -> bool {
+        let front = tracker::foreground_window();
+        // Ordinary app clicks stay non-activating so clicking the active app
+        // still minimizes it. Shell flyouts are not tracked application
+        // windows: accepting this real click deactivates them before launch.
+        self.stage.is_some()
+            && front != 0
+            && front != self.input.0 as isize
+            && !tracker::is_desktop(HWND(front as *mut _))
+            && !self.windows.iter().any(|window| window.hwnd == front)
     }
 
     /// Starts a drag once the cursor moves past the system drag threshold.
@@ -2291,6 +2323,9 @@ impl App {
     /// foreground. Clicking the app that is already in front minimizes it, as
     /// the Windows taskbar does; the next click brings it back.
     fn on_click(&mut self) -> Result<Option<Outside>> {
+        if self.pointer_at_click()?.is_none() {
+            return Ok(None);
+        }
         let Some(entry) = self.hovered.and_then(|index| self.entries.get(index)) else {
             return Ok(None);
         };
@@ -2338,6 +2373,9 @@ impl App {
     /// taskbar.
     fn on_middle_click(&mut self) -> Result<Option<Outside>> {
         self.close_preview();
+        if self.pointer_at_click()?.is_none() {
+            return Ok(None);
+        }
         let Some(entry) = self.hovered.and_then(|index| self.entries.get(index)) else {
             return Ok(None);
         };
@@ -2352,6 +2390,9 @@ impl App {
     /// menu when over empty space or a divider.
     fn on_right_click(&mut self) -> Result<Option<Outside>> {
         self.close_preview();
+        if self.pointer_at_click()?.is_none() {
+            return Ok(None);
+        }
         let Some(stage) = &self.stage else {
             return Ok(None);
         };
@@ -3325,6 +3366,16 @@ fn run_outside(outside: Outside) {
 
 unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LRESULT {
     match msg {
+        WM_MOUSEACTIVATE => {
+            let mouse = ((l.0 >> 16) & 0xFFFF) as u32;
+            let activate = matches!(mouse, WM_LBUTTONDOWN | WM_MBUTTONDOWN)
+                && with_app_value("activación por clic", |app| {
+                    Ok(hwnd == app.input && app.activate_for_pointer())
+                });
+            // This is Windows' actual pointer activation negotiation. Preserve
+            // the button message so the same click also opens the chosen app.
+            return LRESULT(if activate { MA_ACTIVATE } else { MA_NOACTIVATE } as isize);
+        }
         ASSETS_READY => {
             // SAFETY: Coalesce background results on this UI window.
             unsafe { SetTimer(Some(hwnd), ASSETS_TIMER, ASSETS_DELAY_MS, None) };

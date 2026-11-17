@@ -366,22 +366,32 @@ pub fn close(windows: &[isize]) {
 ///
 /// If all windows are minimized, restores only the first one, as macOS does.
 pub fn activate(windows: &[isize]) {
+    activate_with(windows, |front| {
+        // SAFETY: The activation helper validates the handle before calling us.
+        unsafe { bring_to_front(front) }
+    });
+}
+
+fn activate_with(windows: &[isize], request_focus: impl FnOnce(HWND) -> bool) {
     let handles = || windows.iter().map(|&raw| HWND(raw as *mut _));
     // SAFETY: Requests targeting another process are queued, so its hung UI
     // cannot block the dock. Calls on a closed window fail without effect.
     unsafe {
+        let valid = |hwnd: HWND| IsWindow(Some(hwnd)).as_bool() && IsWindowVisible(hwnd).as_bool();
         let Some(front) = handles()
-            .find(|&hwnd| IsWindow(Some(hwnd)).as_bool() && !IsIconic(hwnd).as_bool())
-            .or_else(|| handles().find(|&hwnd| IsWindow(Some(hwnd)).as_bool()))
+            .find(|&hwnd| valid(hwnd) && !IsIconic(hwnd).as_bool())
+            .or_else(|| handles().find(|&hwnd| valid(hwnd)))
         else {
             return;
         };
-        if !bring_to_front(front) {
-            return;
-        }
         if IsIconic(front).as_bool() && !ShowWindowAsync(front, SW_RESTORE).as_bool() {
             // As in native Alt+Tab, this also restores elevated applications.
             SwitchToThisWindow(front, true);
+        }
+        // Restoration and focus are separate requests. A transient shell
+        // flyout can reject activation, but must not leave the app minimized.
+        if !request_focus(front) {
+            return;
         }
         // Foreground activation is asynchronous across input queues. Wait
         // briefly for it to settle; never stack background peers on refusal.
@@ -535,6 +545,37 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    #[ignore = "Requires a Windows desktop; briefly restores only a test-owned window"]
+    fn native_minimized_window_restores_even_when_the_focus_request_is_refused()
+    -> windows::core::Result<()> {
+        use windows::Win32::UI::WindowsAndMessaging::{
+            DispatchMessageW, MSG, PM_REMOVE, PeekMessageW, SW_SHOWMINNOACTIVE,
+        };
+        let desktop = Desktop::new()?;
+        let target = desktop.windows[0];
+        // SAFETY: Minimize only a window this fixture owns without activating it.
+        unsafe {
+            let _ = ShowWindow(target, SW_SHOWMINNOACTIVE);
+        }
+        assert!(unsafe { IsIconic(target) }.as_bool());
+        activate_with(&[target.0 as isize], |_| false);
+        let deadline = Instant::now() + Duration::from_millis(300);
+        let mut message = MSG::default();
+        // SAFETY: Drain this test thread's queue so asynchronous restoration
+        // can complete. All windows are destroyed by the fixture afterwards.
+        while unsafe { IsIconic(target) }.as_bool() && Instant::now() < deadline {
+            unsafe {
+                while PeekMessageW(&mut message, None, 0, 0, PM_REMOVE).as_bool() {
+                    DispatchMessageW(&message);
+                }
+            }
+            std::thread::yield_now();
+        }
+        assert!(!unsafe { IsIconic(target) }.as_bool());
+        Ok(())
     }
 
     #[test]
