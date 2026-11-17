@@ -64,6 +64,98 @@ impl Theme {
             }
         }
     }
+
+    /// A fixed-size panel using the dock's backdrop, tint, sheen and rim.
+    pub fn panel(
+        &self,
+        gfx: &Gfx,
+        size: Vector2,
+        radius: f32,
+        scale: f32,
+    ) -> Result<ContainerVisual> {
+        let stroke = scale.max(1.0);
+        let material = GlassSurface::build(gfx, *self, radius, stroke)?;
+        material.glass.SetSize(size)?;
+        material.outline.SetSize(size)?;
+        material.rim.SetSize(size)?;
+        material
+            .rim_geometry
+            .SetSize(v2(size.X - stroke, size.Y - stroke))?;
+        let root = gfx.compositor.CreateContainerVisual()?;
+        root.SetSize(size)?;
+        root.Children()?.InsertAtTop(&material.glass)?;
+        root.Children()?.InsertAtTop(&material.rim)?;
+        Ok(root)
+    }
+}
+
+/// The material is shared so dock and preview panels follow the same theme
+/// and opaque fallback when Windows transparency is disabled.
+struct GlassSurface {
+    glass: ContainerVisual,
+    outline: CompositionRoundedRectangleGeometry,
+    rim: ShapeVisual,
+    rim_geometry: CompositionRoundedRectangleGeometry,
+}
+
+impl GlassSurface {
+    fn build(gfx: &Gfx, theme: Theme, radius: f32, stroke: f32) -> Result<Self> {
+        let c = &gfx.compositor;
+        let glass = c.CreateContainerVisual()?;
+        let outline = c.CreateRoundedRectangleGeometry()?;
+        outline.SetCornerRadius(v2(radius, radius))?;
+        glass.SetClip(&c.CreateGeometricClipWithGeometry(&outline)?)?;
+
+        let sheen = c.CreateLinearGradientBrush()?;
+        sheen.SetStartPoint(v2(0.0, 0.0))?;
+        sheen.SetEndPoint(v2(0.0, 1.0))?;
+        let stops = sheen.ColorStops()?;
+        stops
+            .Append(&c.CreateColorGradientStopWithOffsetAndColor(0.0, rgba(255, 255, 255, 38))?)?;
+        stops
+            .Append(&c.CreateColorGradientStopWithOffsetAndColor(0.55, rgba(255, 255, 255, 0))?)?;
+
+        let backdrop: Option<CompositionBrush> = if theme.glass {
+            Some(c.CreateHostBackdropBrush()?.cast()?)
+        } else {
+            None
+        };
+        let fills = [
+            c.CreateColorBrushWithColor(theme.tint)?.cast()?,
+            sheen.cast()?,
+        ];
+        for brush in backdrop.iter().chain(&fills) {
+            let fill = c.CreateSpriteVisual()?;
+            fill.SetRelativeSizeAdjustment(v2(1.0, 1.0))?;
+            fill.SetBrush(brush)?;
+            glass.Children()?.InsertAtTop(&fill)?;
+        }
+
+        let rim_brush = c.CreateLinearGradientBrush()?;
+        rim_brush.SetStartPoint(v2(0.0, 0.0))?;
+        rim_brush.SetEndPoint(v2(1.0, 1.0))?;
+        rim_brush.SetInterpolationSpace(CompositionColorSpace::RgbLinear)?;
+        let stops = rim_brush.ColorStops()?;
+        for (at, alpha) in [(0.0, 150), (0.35, 40), (0.65, 30), (1.0, 105)] {
+            stops.Append(
+                &c.CreateColorGradientStopWithOffsetAndColor(at, rgba(255, 255, 255, alpha))?,
+            )?;
+        }
+        let rim_geometry = c.CreateRoundedRectangleGeometry()?;
+        rim_geometry.SetOffset(v2(stroke / 2.0, stroke / 2.0))?;
+        rim_geometry.SetCornerRadius(v2(radius - stroke / 2.0, radius - stroke / 2.0))?;
+        let rim_shape = c.CreateSpriteShapeWithGeometry(&rim_geometry)?;
+        rim_shape.SetStrokeBrush(&rim_brush)?;
+        rim_shape.SetStrokeThickness(stroke)?;
+        let rim = c.CreateShapeVisual()?;
+        rim.Shapes()?.Append(&rim_shape)?;
+        Ok(Self {
+            glass,
+            outline,
+            rim,
+            rim_geometry,
+        })
+    }
 }
 
 const fn rgba(r: u8, g: u8, b: u8, a: u8) -> Color {
@@ -195,56 +287,14 @@ impl Scene {
         shadow_host.SetShadow(&shadow)?;
         layers.InsertAtTop(&shadow_host)?;
 
-        let glass = c.CreateContainerVisual()?;
-        let outline = c.CreateRoundedRectangleGeometry()?;
-        outline.SetCornerRadius(v2(radius, radius))?;
-        glass.SetClip(&c.CreateGeometricClipWithGeometry(&outline)?)?;
-
-        let sheen = c.CreateLinearGradientBrush()?;
-        sheen.SetStartPoint(v2(0.0, 0.0))?;
-        sheen.SetEndPoint(v2(0.0, 1.0))?;
-        let stops = sheen.ColorStops()?;
-        stops
-            .Append(&c.CreateColorGradientStopWithOffsetAndColor(0.0, rgba(255, 255, 255, 38))?)?;
-        stops
-            .Append(&c.CreateColorGradientStopWithOffsetAndColor(0.55, rgba(255, 255, 255, 0))?)?;
-
-        let backdrop: Option<CompositionBrush> = if theme.glass {
-            Some(c.CreateHostBackdropBrush()?.cast()?)
-        } else {
-            None
-        };
-        let fills = [
-            c.CreateColorBrushWithColor(theme.tint)?.cast()?,
-            sheen.cast()?,
-        ];
-        for brush in backdrop.iter().chain(&fills) {
-            let fill = c.CreateSpriteVisual()?;
-            fill.SetRelativeSizeAdjustment(v2(1.0, 1.0))?;
-            fill.SetBrush(brush)?;
-            glass.Children()?.InsertAtTop(&fill)?;
-        }
-        layers.InsertAtTop(&glass)?;
-
         let stroke = scale.max(1.0);
-        let rim_brush = c.CreateLinearGradientBrush()?;
-        rim_brush.SetStartPoint(v2(0.0, 0.0))?;
-        rim_brush.SetEndPoint(v2(1.0, 1.0))?;
-        rim_brush.SetInterpolationSpace(CompositionColorSpace::RgbLinear)?;
-        let stops = rim_brush.ColorStops()?;
-        for (at, alpha) in [(0.0, 150), (0.35, 40), (0.65, 30), (1.0, 105)] {
-            stops.Append(
-                &c.CreateColorGradientStopWithOffsetAndColor(at, rgba(255, 255, 255, alpha))?,
-            )?;
-        }
-        let rim_geometry = c.CreateRoundedRectangleGeometry()?;
-        rim_geometry.SetOffset(v2(stroke / 2.0, stroke / 2.0))?;
-        rim_geometry.SetCornerRadius(v2(radius - stroke / 2.0, radius - stroke / 2.0))?;
-        let rim_shape = c.CreateSpriteShapeWithGeometry(&rim_geometry)?;
-        rim_shape.SetStrokeBrush(&rim_brush)?;
-        rim_shape.SetStrokeThickness(stroke)?;
-        let rim = c.CreateShapeVisual()?;
-        rim.Shapes()?.Append(&rim_shape)?;
+        let GlassSurface {
+            glass,
+            outline,
+            rim,
+            rim_geometry,
+        } = GlassSurface::build(gfx, theme, radius, stroke)?;
+        layers.InsertAtTop(&glass)?;
         layers.InsertAtTop(&rim)?;
 
         let content = c.CreateContainerVisual()?;

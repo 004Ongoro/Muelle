@@ -26,6 +26,9 @@ Smooth magnification, live window previews, and an optional Genie-style minimize
 
 - Glass-style dock with smooth, cursor-based icon magnification.
 - Launch, pin, reorder, and manage apps, including recent apps and open windows.
+- Hover over an app with multiple windows to show live, titled previews;
+  click a preview to switch to that window. Scroll over the previews for more
+  windows, or press Escape to dismiss it.
 - Minimized windows fold into their app's icon with the Genie effect; turn on
   Settings → Windows → *Show minimized windows* to keep them as live thumbnails
   on the right side of the dock instead.
