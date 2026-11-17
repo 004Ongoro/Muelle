@@ -10,6 +10,15 @@ copia la sección de la versión que se publica a la release de GitHub.
 
 ### English
 
+- Fixed: some antivirus programs flagged Muelle 0.1.6–0.1.8 as a trojan and
+  deleted it, often right after updating. Two things looked like malware: to
+  show GitHub Copilot and Cursor usage, Muelle decrypted VS Code's stored
+  secrets and read Cursor's database (what password stealers do), and since
+  0.1.7 it set itself up to start with Windows by running `schtasks.exe`
+  hidden. Muelle no longer does either: it starts from the usual `Run`
+  registry entry (an existing startup task is moved there once), Copilot
+  usage comes only from the Copilot CLI sign-in or `GH_TOKEN`/`GITHUB_TOKEN`,
+  and Cursor usage was removed. The dock is also 28% smaller.
 - Fixed: after choosing an item in the dock's menu (Muelle Settings, for
   one), the dock could stay magnified and stop reacting to the pointer.
 - Alt+Tab: the hidden dock shows only for Alt+Tab, no longer for Task View,
@@ -31,6 +40,16 @@ copia la sección de la versión que se publica a la release de GitHub.
 
 ### Español
 
+- Corregido: algunos antivirus marcaban Muelle 0.1.6–0.1.8 como troyano y lo
+  borraban, a menudo justo al actualizar. Dos cosas parecían malware: para
+  mostrar el uso de GitHub Copilot y Cursor, Muelle descifraba los secretos
+  guardados de VS Code y leía la base de datos de Cursor (lo que hacen los
+  ladrones de contraseñas), y desde la 0.1.7 se configuraba para iniciar con
+  Windows ejecutando `schtasks.exe` oculto. Muelle ya no hace ninguna de las
+  dos: arranca desde la entrada habitual `Run` del registro (una tarea de
+  inicio existente se traslada ahí una vez), el uso de Copilot sale solo de la
+  sesión de Copilot CLI o de `GH_TOKEN`/`GITHUB_TOKEN`, y se quitó el uso de
+  Cursor. Además, el dock ocupa un 28 % menos.
 - Corregido: tras elegir una opción del menú del dock (por ejemplo, Ajustes
   de Muelle), el dock podía quedarse ampliado y dejar de responder al puntero.
 - Alt+Tab: el dock oculto aparece solo con Alt+Tab, ya no con la Vista de

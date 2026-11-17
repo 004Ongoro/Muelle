@@ -1621,7 +1621,6 @@ impl MenuBar {
                     Provider::Claude => rgba(217, 119, 87, 255),
                     Provider::Codex => rgba(135, 190, 245, 255),
                     Provider::Copilot => rgba(147, 164, 186, 255),
-                    Provider::Cursor => rgba(174, 180, 189, 255),
                     Provider::OpenCode => rgba(132, 196, 166, 255),
                     Provider::Gemini => rgba(111, 146, 255, 255),
                 };

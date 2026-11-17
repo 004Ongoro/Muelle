@@ -14,19 +14,14 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-use aes_gcm::{Aes256Gcm, KeyInit, Nonce, aead::Aead};
 use chrono::{DateTime, Local, NaiveDate, Utc};
 use muelle_shell::icons::IconImage;
 use reqwest::blocking::Client;
-use rusqlite::{Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use windows::Win32::{
-    Foundation::{CloseHandle, HLOCAL, HWND, LPARAM, LocalFree, WPARAM},
-    Security::{
-        Credentials::{CRED_TYPE_GENERIC, CREDENTIALW, CredFree, CredReadW},
-        Cryptography::{CRYPT_INTEGER_BLOB, CryptUnprotectData},
-    },
+    Foundation::{CloseHandle, HWND, LPARAM, WPARAM},
+    Security::Credentials::{CRED_TYPE_GENERIC, CREDENTIALW, CredFree, CredReadW},
     System::Diagnostics::ToolHelp::{
         CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW,
         TH32CS_SNAPPROCESS,
@@ -123,18 +118,16 @@ pub enum Provider {
     Claude,
     Codex,
     Copilot,
-    Cursor,
     OpenCode,
     Gemini,
 }
 
 impl Provider {
-    pub const COUNT: usize = 6;
+    pub const COUNT: usize = 5;
     pub const ALL: [Self; Self::COUNT] = [
         Self::Claude,
         Self::Codex,
         Self::Copilot,
-        Self::Cursor,
         Self::OpenCode,
         Self::Gemini,
     ];
@@ -144,7 +137,6 @@ impl Provider {
             Self::Claude => "Claude",
             Self::Codex => "Codex",
             Self::Copilot => "Copilot",
-            Self::Cursor => "Cursor",
             Self::OpenCode => "OpenCode",
             Self::Gemini => "Gemini",
         }
@@ -196,7 +188,6 @@ pub fn active_providers() -> ActiveProviders {
                     Some(Provider::Copilot)
                 }
                 "copilot-runtime.exe" => Some(Provider::Copilot),
-                "cursor.exe" | "cursor-agent.exe" => Some(Provider::Cursor),
                 "opencode.exe" => Some(Provider::OpenCode),
                 "gemini.exe" | "antigravity.exe" | "agy.exe" => Some(Provider::Gemini),
                 _ => None,
@@ -252,7 +243,6 @@ pub fn logo(provider: Provider) -> Option<&'static IconImage> {
     static CLAUDE: std::sync::OnceLock<Option<IconImage>> = std::sync::OnceLock::new();
     static CODEX: std::sync::OnceLock<Option<IconImage>> = std::sync::OnceLock::new();
     static COPILOT: std::sync::OnceLock<Option<IconImage>> = std::sync::OnceLock::new();
-    static CURSOR: std::sync::OnceLock<Option<IconImage>> = std::sync::OnceLock::new();
     static OPENCODE: std::sync::OnceLock<Option<IconImage>> = std::sync::OnceLock::new();
     static GEMINI: std::sync::OnceLock<Option<IconImage>> = std::sync::OnceLock::new();
     match provider {
@@ -264,9 +254,6 @@ pub fn logo(provider: Provider) -> Option<&'static IconImage> {
             .as_ref(),
         Provider::Copilot => COPILOT
             .get_or_init(|| decode_logo(include_bytes!("../../../assets/usage/copilot.png")))
-            .as_ref(),
-        Provider::Cursor => CURSOR
-            .get_or_init(|| decode_logo(include_bytes!("../../../assets/usage/cursor.png")))
             .as_ref(),
         Provider::OpenCode => OPENCODE
             .get_or_init(|| decode_logo(include_bytes!("../../../assets/usage/opencode.png")))
@@ -434,7 +421,6 @@ fn fetch_all() -> Snapshot {
                 Provider::Claude => fetch_claude(&client),
                 Provider::Codex => fetch_codex(&client),
                 Provider::Copilot => fetch_copilot(&client),
-                Provider::Cursor => fetch_cursor(&client),
                 Provider::OpenCode => fetch_opencode(&client),
                 Provider::Gemini => fetch_gemini(&client),
             }
@@ -495,122 +481,6 @@ fn credential_text(target: windows::core::PCWSTR) -> Option<String> {
     // SAFETY: `credential` belongs to this successful CredReadW call.
     unsafe { CredFree(credential.cast()) };
     token.map(|value| value.trim_matches('\0').trim().to_owned())
-}
-
-fn vscode_github_tokens() -> Vec<String> {
-    let Some(root) = home() else {
-        return Vec::new();
-    };
-    let Some(profile) = env::var_os("APPDATA").map(PathBuf::from) else {
-        return Vec::new();
-    };
-    let key_file = profile.join("Code/Local State");
-    let Ok(key_file) = fs::read(key_file) else {
-        return Vec::new();
-    };
-    let Ok(key_json) = serde_json::from_slice::<Value>(&key_file) else {
-        return Vec::new();
-    };
-    let Some(key_b64) = key_json
-        .pointer("/os_crypt/encrypted_key")
-        .and_then(Value::as_str)
-    else {
-        return Vec::new();
-    };
-    use base64::Engine;
-    let Ok(wrapped) = base64::engine::general_purpose::STANDARD.decode(key_b64) else {
-        return Vec::new();
-    };
-    let Some(wrapped) = wrapped.strip_prefix(b"DPAPI") else {
-        return Vec::new();
-    };
-    let Some(key) = dpapi_unprotect(wrapped) else {
-        return Vec::new();
-    };
-    let db_path = root.join(".vscode-shared/sharedStorage/state.vscdb");
-    let Ok(db) = Connection::open_with_flags(db_path, OpenFlags::SQLITE_OPEN_READ_ONLY) else {
-        return Vec::new();
-    };
-    let Ok(blob) = db.query_row(
-        "SELECT value FROM ItemTable WHERE key = ?1 LIMIT 1",
-        [r#"secret://{"extensionId":"vscode.github-authentication","key":"github.auth"}"#],
-        |row| row.get::<_, String>(0),
-    ) else {
-        return Vec::new();
-    };
-    let Ok(wrapper) = serde_json::from_str::<Value>(&blob) else {
-        return Vec::new();
-    };
-    let Some(bytes) = wrapper.get("data").and_then(Value::as_array) else {
-        return Vec::new();
-    };
-    let Some(encrypted) = bytes
-        .iter()
-        .map(|value| value.as_u64().and_then(|byte| u8::try_from(byte).ok()))
-        .collect::<Option<Vec<_>>>()
-    else {
-        return Vec::new();
-    };
-    if encrypted.len() < 3 + 12 + 16 || !encrypted.starts_with(b"v10") {
-        return Vec::new();
-    }
-    let Ok(cipher) = Aes256Gcm::new_from_slice(&key) else {
-        return Vec::new();
-    };
-    let Ok(plain) = cipher.decrypt(Nonce::from_slice(&encrypted[3..15]), &encrypted[15..]) else {
-        return Vec::new();
-    };
-    let Ok(sessions) = serde_json::from_slice::<Value>(&plain) else {
-        return Vec::new();
-    };
-    let mut tokens = Vec::new();
-    collect_github_tokens(&sessions, &mut tokens);
-    tokens
-}
-
-fn dpapi_unprotect(encrypted: &[u8]) -> Option<Vec<u8>> {
-    let input = CRYPT_INTEGER_BLOB {
-        cbData: u32::try_from(encrypted.len()).ok()?,
-        pbData: encrypted.as_ptr().cast_mut(),
-    };
-    let mut output = CRYPT_INTEGER_BLOB::default();
-    // SAFETY: Both blobs have valid buffers; Windows owns and frees the output.
-    unsafe { CryptUnprotectData(&input, None, None, None, None, 0, &mut output).ok()? };
-    if output.pbData.is_null() {
-        return None;
-    }
-    // SAFETY: CryptUnprotectData returned `cbData` bytes at `pbData`.
-    let plain =
-        unsafe { std::slice::from_raw_parts(output.pbData, output.cbData as usize).to_vec() };
-    // SAFETY: CryptUnprotectData allocated this buffer with LocalAlloc.
-    unsafe {
-        let _ = LocalFree(Some(HLOCAL(output.pbData.cast())));
-    }
-    Some(plain)
-}
-
-fn collect_github_tokens(value: &Value, tokens: &mut Vec<String>) {
-    match value {
-        Value::Object(object) => {
-            if let Some(token) = object
-                .get("accessToken")
-                .or_else(|| object.get("access_token"))
-                .and_then(Value::as_str)
-                .filter(|token| token.starts_with("gh") && token.len() < 512)
-            {
-                tokens.push(token.to_owned());
-            }
-            for item in object.values() {
-                collect_github_tokens(item, tokens);
-            }
-        }
-        Value::Array(items) => {
-            for item in items {
-                collect_github_tokens(item, tokens);
-            }
-        }
-        _ => {}
-    }
 }
 
 fn fetch_claude(client: &Client) -> ProviderUsage {
@@ -704,7 +574,7 @@ fn fetch_codex(client: &Client) -> ProviderUsage {
 }
 
 fn fetch_copilot(client: &Client) -> ProviderUsage {
-    let mut tokens = [
+    let tokens = [
         env::var("COPILOT_GITHUB_TOKEN").ok(),
         env::var("GH_TOKEN").ok(),
         env::var("GITHUB_TOKEN").ok(),
@@ -714,7 +584,6 @@ fn fetch_copilot(client: &Client) -> ProviderUsage {
     .into_iter()
     .flatten()
     .collect::<Vec<_>>();
-    tokens.extend(vscode_github_tokens());
     for token in tokens.into_iter().filter(|value| !value.is_empty()) {
         let response = client
             .get("https://api.github.com/copilot_internal/user")
@@ -793,116 +662,6 @@ fn parse_copilot(value: &Value) -> Vec<Window> {
         })
     })
     .collect()
-}
-
-fn fetch_cursor(client: &Client) -> ProviderUsage {
-    let Some(path) = env::var_os("APPDATA")
-        .map(PathBuf::from)
-        .map(|path| path.join("Cursor/User/globalStorage/state.vscdb"))
-    else {
-        return sign_in();
-    };
-    if !path.is_file() {
-        return sign_in();
-    }
-    let Ok(db) = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY) else {
-        return unavailable();
-    };
-    let Ok(token) = db.query_row(
-        "SELECT value FROM ItemTable WHERE key = 'cursorAuth/accessToken' LIMIT 1",
-        [],
-        |row| row.get::<_, String>(0),
-    ) else {
-        return sign_in();
-    };
-    let Some(cookie) = cursor_cookie(&token) else {
-        return sign_in();
-    };
-    let Ok(response) = client
-        .get("https://cursor.com/api/usage-summary")
-        .header("Cookie", cookie)
-        .header("Accept", "application/json")
-        .send()
-    else {
-        return unavailable();
-    };
-    if matches!(response.status().as_u16(), 401 | 403) {
-        return sign_in();
-    }
-    let Ok(body) = response
-        .error_for_status()
-        .and_then(|response| response.text())
-    else {
-        return unavailable();
-    };
-    let Ok(value) = serde_json::from_str::<Value>(&body) else {
-        return unavailable();
-    };
-    let windows = parse_cursor(&value);
-    if windows.is_empty() {
-        unavailable()
-    } else {
-        ready(windows)
-    }
-}
-
-fn cursor_cookie(token: &str) -> Option<String> {
-    use base64::Engine;
-    let parts = token.split('.').collect::<Vec<_>>();
-    let payload = parts.get(1)?;
-    let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD
-        .decode(payload)
-        .ok()?;
-    let claims = serde_json::from_slice::<Value>(&decoded).ok()?;
-    let expiry = claims.get("exp")?.as_i64()?;
-    if expiry < Utc::now().timestamp() + 60 {
-        return None;
-    }
-    let user = claims.get("sub")?.as_str()?.rsplit('|').next()?;
-    if user.is_empty()
-        || !user
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || b"._-".contains(&byte))
-    {
-        return None;
-    }
-    Some(format!("WorkosCursorSessionToken={user}%3A%3A{token}"))
-}
-
-fn parse_cursor(value: &Value) -> Vec<Window> {
-    let plan = value
-        .pointer("/individualUsage/plan")
-        .or_else(|| value.pointer("/individual_usage/plan"));
-    let Some(plan) = plan else {
-        return Vec::new();
-    };
-    let used = plan.get("totalPercentUsed").and_then(percent).or_else(|| {
-        let amount = plan.get("used")?.as_f64()?;
-        let limit = plan.get("limit")?.as_f64()?;
-        (limit > 0.0).then(|| (amount * 100.0 / limit).clamp(0.0, 100.0).round() as u8)
-    });
-    let Some(used_percent) = used else {
-        return Vec::new();
-    };
-    let resets_at = value
-        .get("billingCycleEnd")
-        .and_then(Value::as_str)
-        .and_then(|text| DateTime::parse_from_rfc3339(text).ok())
-        .map(|date| date.with_timezone(&Utc));
-    let minutes = value
-        .get("billingCycleStart")
-        .and_then(Value::as_str)
-        .and_then(|text| DateTime::parse_from_rfc3339(text).ok())
-        .zip(resets_at)
-        .map_or(30 * 24 * 60, |(start, end)| {
-            (end.signed_duration_since(start).num_minutes()).max(1)
-        });
-    vec![Window {
-        label: None,
-        minutes,
-        used_percent,
-        resets_at,
-    }]
 }
 
 fn fetch_opencode(client: &Client) -> ProviderUsage {
@@ -1474,35 +1233,6 @@ mod tests {
             "premiumInteractions": {"percentRemaining": 62}
         }}));
         assert_eq!(camel[0].used_percent, 38);
-    }
-
-    #[test]
-    fn github_session_parser_only_returns_tokens() {
-        let mut tokens = Vec::new();
-        collect_github_tokens(
-            &json!({"sessions": [
-                {"accessToken": "gho_test", "account": {"id": "private"}},
-                {"accessToken": "unrelated", "account": {"id": "private"}}
-            ]}),
-            &mut tokens,
-        );
-        assert_eq!(tokens, ["gho_test"]);
-    }
-
-    #[test]
-    fn cursor_rejects_expired_session_and_parses_billing_cycle() {
-        use base64::Engine;
-        let claims = json!({"sub": "auth0|abc123", "exp": 1});
-        let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(claims.to_string());
-        assert!(cursor_cookie(&format!("x.{payload}.y")).is_none());
-        let windows = parse_cursor(&json!({
-            "individualUsage": {"plan": {"totalPercentUsed": 45}},
-            "billingCycleStart": "2026-11-01T00:00:00Z",
-            "billingCycleEnd": "2026-12-01T00:00:00Z"
-        }));
-        assert_eq!(windows[0].used_percent, 45);
-        assert_eq!(windows[0].title(), "30 d");
-        assert!(windows[0].resets_at.is_some());
     }
 
     #[test]
