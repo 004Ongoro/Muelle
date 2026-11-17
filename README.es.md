@@ -50,16 +50,12 @@ dibujar su animación; las devuelve al cerrarse.
    administrador, sin asistente, en unos dos segundos.
 2. Muelle es nuevo, así que SmartScreen puede no reconocerlo todavía y decir que
    protegió tu PC. Elige **Más información → Ejecutar de todas formas**. Ver la
-   [política de firma de código](#política-de-firma-de-código).
+   [política de firma de código](https://muellee.vercel.app/code-signing-policy).
 3. Aparece el dock y se oculta la barra de tareas de Windows. Desde entonces Muelle
    se abre al iniciar Windows; puedes desactivarlo en Ajustes → Sistema.
 
 Abre **Muelle** desde el menú Inicio (o clic derecho en el dock → *Ajustes de
 Muelle…*) para cambiar el dock. Ajustes también busca actualizaciones y las instala.
-
-**Inicio con Windows:** Muelle se inicia con una tarea que se ejecuta al iniciar
-sesión, llamada *Muelle (tu usuario)* en el Programador de tareas. Se desactiva en
-Ajustes → Sistema.
 
 **Recuperar la barra de tareas:** clic derecho en el dock → *Salir de Muelle*.
 Para quitarlo del todo: Configuración de Windows → Aplicaciones → Aplicaciones
@@ -130,43 +126,6 @@ pnpm build
 | `crates/muelle-shell` | Integración con el shell de Windows |
 | `crates/muelle-config` | Ajustes compartidos y su guardado |
 | `muelle/` | La web (Astro) |
-
-## Compilar el instalador
-
-```powershell
-cd apps\settings
-pnpm install
-cd ..\..
-.\scripts\build-installer.ps1
-```
-
-El script compila las dos apps y genera `Muelle_<versión>_x64-setup.exe` en
-`target\release\bundle\nsis`. El instalador es por usuario, no pide permisos de
-administrador ni muestra asistente: instala en `%LOCALAPPDATA%\Programs\Muelle`,
-activa el inicio con Windows y abre el dock. Al desinstalar (Configuración →
-Aplicaciones) se cierra el dock y vuelve la barra de tareas de Windows.
-
-Al subir una etiqueta que coincida con la versión (por ejemplo `v0.1.1`), GitHub
-Actions compila el instalador y lo adjunta a un borrador de release, junto con
-`Muelle-Setup.exe` (el enlace de descarga de la web), `latest.json` (lo lee el
-actualizador de Ajustes) y las notas de esa versión sacadas de `CHANGELOG.md`.
-El repositorio necesita los secretos `TAURI_SIGNING_PRIVATE_KEY` y
-`TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. Publica el borrador para que pase a ser la
-descarga y la actualización.
-
-## Estado
-
-El dock, Ajustes y el instalador funcionan en Windows 11. El soporte de Windows 10
-es nuevo; avisa si algo se ve mal ahí. Algunas funciones e
-interacciones aún se están verificando.
-
-## Política de firma de código
-
-Free code signing provided by [SignPath.io](https://about.signpath.io),
-certificate by [SignPath Foundation](https://signpath.org). Las versiones se
-compilan desde este repositorio con `.github/workflows/release.yml` en máquinas
-de GitHub, y cada firma se aprueba a mano. Política completa y roles del equipo:
-[muellee.vercel.app/code-signing-policy](https://muellee.vercel.app/code-signing-policy).
 
 ## Privacidad
 

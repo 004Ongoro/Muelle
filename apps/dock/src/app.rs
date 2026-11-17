@@ -63,9 +63,8 @@ use windows::{
             Accessibility::{HWINEVENTHOOK, SetWinEventHook, UnhookWinEvent},
             Input::KeyboardAndMouse::{
                 GetAsyncKeyState, GetKeyState, ReleaseCapture, SetCapture, TME_LEAVE,
-                TRACKMOUSEEVENT, TrackMouseEvent, VIRTUAL_KEY, VK_CONTROL, VK_DELETE, VK_DOWN,
-                VK_END, VK_HOME, VK_LEFT, VK_LWIN, VK_MENU, VK_RIGHT, VK_RWIN, VK_SHIFT, VK_TAB,
-                VK_UP,
+                TRACKMOUSEEVENT, TrackMouseEvent, VIRTUAL_KEY, VK_CONTROL, VK_DOWN, VK_END,
+                VK_HOME, VK_LEFT, VK_LWIN, VK_MENU, VK_RIGHT, VK_RWIN, VK_SHIFT, VK_TAB, VK_UP,
             },
             WindowsAndMessaging::{
                 CreateWindowExW, DefWindowProcW, DispatchMessageW, EVENT_OBJECT_CLOAKED,
@@ -117,6 +116,7 @@ const PBT_APMRESUMEAUTOMATIC: usize = 0x0012;
 /// Sent when the charger is plugged in or out, and when energy saver turns
 /// on or off.
 const PBT_APMPOWERSTATUSCHANGE: usize = 0x000A;
+const PBT_POWERSETTINGCHANGE: usize = 0x8013;
 
 const WINDOW_CLASS: PCWSTR = muelle_shell::dock_link::DOCK_WINDOW_CLASS;
 const APPBAR_CALLBACK: u32 = WM_APP + 1;
@@ -183,6 +183,12 @@ const SPRING_TIMER: usize = 8;
 const SPRING_DELAY_MS: u32 = 600;
 /// While the Alt+Tab switcher is open, checks how long it stays: Windows
 /// reports when it comes to the front, but not reliably when it closes.
+/// Every so often the dock looks whether it is a good moment to update:
+/// a day since the last time, and the user away from the computer.
+const UPDATE_TIMER: usize = 12;
+const UPDATE_POLL_MS: u32 = 10 * 60 * 1000;
+const UPDATE_EVERY: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
+const UPDATE_IDLE: std::time::Duration = std::time::Duration::from_secs(5 * 60);
 const SWITCHER_TIMER: usize = 9;
 /// Short enough to see every Tab press (a key stays down 50-100 ms).
 const SWITCHER_POLL_MS: u32 = 16;
@@ -416,8 +422,6 @@ struct SwitcherFollow {
     order: Vec<isize>,
     index: usize,
     tab_down: bool,
-    /// Where the pointer was; hovering an item also selects it.
-    pointer: POINT,
 }
 
 struct Stage {
@@ -458,6 +462,8 @@ struct App {
     downloads: Option<String>,
     bin_full: bool,
     _bin_watch: Option<BinWatch>,
+    /// Energy saver on or off: glass follows (see `system::transparency_enabled`).
+    _saver_watch: power::SaverWatch,
     /// Hears pins and unpins on the Windows taskbar.
     pin_watch: Option<muelle_shell::watch::RegistryWatch>,
     assets: HashMap<String, Asset>,
@@ -476,6 +482,8 @@ struct App {
     drag_over: bool,
     /// The entry a drag is resting on, which springs open on `SPRING_TIMER`.
     spring: Option<String>,
+    /// When the last background update was started (see `UPDATE_TIMER`).
+    last_update: Option<Instant>,
     /// The Alt+Tab switcher is open; an auto-hidden dock shows meanwhile.
     switching: bool,
     switch_started: Instant,
@@ -1252,16 +1260,40 @@ impl App {
                 let _ = KillTimer(Some(self.input), HIDE_TIMER);
             }
             self.place_windows()?;
-            let mut track = TRACKMOUSEEVENT {
-                cbSize: size_of::<TRACKMOUSEEVENT>() as u32,
-                dwFlags: TME_LEAVE,
-                hwndTrack: self.input,
-                dwHoverTime: 0,
-            };
-            // SAFETY: `track` is a valid structure with its size initialized.
-            unsafe { TrackMouseEvent(&mut track)? };
         }
+        // Every move, not only on entering: a menu or a drag that captures
+        // the mouse cancels the request, and without it the dock would
+        // never hear the pointer leave and stay magnified.
+        self.track_leave()?;
         self.render()
+    }
+
+    fn track_leave(&self) -> Result<()> {
+        let mut track = TRACKMOUSEEVENT {
+            cbSize: size_of::<TRACKMOUSEEVENT>() as u32,
+            dwFlags: TME_LEAVE,
+            hwndTrack: self.input,
+            dwHoverTime: 0,
+        };
+        // SAFETY: `track` is a valid structure with its size initialized.
+        unsafe { TrackMouseEvent(&mut track)? };
+        Ok(())
+    }
+
+    /// A menu closed: it held the mouse, so the dock heard nothing of where
+    /// the pointer went meanwhile. Settle the magnifier on where it is now.
+    fn after_menu(&mut self) -> Result<()> {
+        let mut point = POINT::default();
+        // SAFETY: Read-only queries.
+        let over = unsafe {
+            GetCursorPos(&mut point).is_ok()
+                && windows::Win32::UI::WindowsAndMessaging::WindowFromPoint(point) == self.input
+        };
+        if over {
+            self.track_leave()
+        } else {
+            self.on_mouse_leave()
+        }
     }
 
     fn on_mouse_leave(&mut self) -> Result<()> {
@@ -1357,11 +1389,6 @@ impl App {
         if order.len() < 2 || status::alt_tab_lists_more_than_windows(edge_open) {
             return Ok(());
         }
-        let mut pointer = POINT::default();
-        // SAFETY: A valid output for the pointer position.
-        unsafe {
-            let _ = GetCursorPos(&mut pointer);
-        }
         // Opened from the desktop or another unlisted window, the switcher
         // starts on the first window rather than the second.
         let from_listed = order.first() == Some(&LAST_FRONT.load(Ordering::Relaxed));
@@ -1375,13 +1402,11 @@ impl App {
             index,
             // The Tab that opened the switcher is still down: not a new press.
             tab_down: true,
-            pointer,
         });
         self.point_at_selection()
     }
 
-    /// Moves the selection with each Tab press. Arrow keys, Delete (which
-    /// closes the selected window) or the pointer moving can change it in
+    /// Moves the selection with each Tab press. Arrow keys can change it in
     /// ways that cannot be followed: the highlight then goes away rather
     /// than point at the wrong app.
     fn follow_selection(&mut self) -> Result<()> {
@@ -1392,25 +1417,54 @@ impl App {
             // SAFETY: Read-only keyboard state query.
             unsafe { GetAsyncKeyState(i32::from(key.0)) < 0 }
         };
-        let mut pointer = POINT::default();
-        // SAFETY: A valid output for the pointer position.
-        unsafe {
-            let _ = GetCursorPos(&mut pointer);
-        }
-        let lost = [
-            VK_LEFT, VK_RIGHT, VK_UP, VK_DOWN, VK_HOME, VK_END, VK_DELETE,
-        ]
-        .into_iter()
-        .any(down)
-            || pointer != follow.pointer;
+        // Only these move the selection in ways that cannot be followed. A
+        // click on an item switches to it and closes the switcher; a click
+        // anywhere else, or moving the pointer, leaves the selection alone.
+        let lost = [VK_LEFT, VK_RIGHT, VK_UP, VK_DOWN, VK_HOME, VK_END]
+            .into_iter()
+            .any(down);
         if lost {
             return self.stop_following();
+        }
+        // A window closed from the switcher (its "x", or Delete) leaves the
+        // list, and the switcher keeps the selection on the same place.
+        let before = follow.order.len();
+        let index = follow.index;
+        let alive: Vec<bool> = follow
+            .order
+            .iter()
+            .map(|&hwnd| {
+                let window = HWND(hwnd as *mut _);
+                // SAFETY: Read-only queries; a closed window simply fails them.
+                unsafe {
+                    windows::Win32::UI::WindowsAndMessaging::IsWindow(Some(window)).as_bool()
+                        && windows::Win32::UI::WindowsAndMessaging::IsWindowVisible(window)
+                            .as_bool()
+                }
+            })
+            .collect();
+        let removed_before = alive[..index.min(before)].iter().filter(|&&on| !on).count();
+        let mut position = 0;
+        follow.order.retain(|_| {
+            position += 1;
+            alive[position - 1]
+        });
+        let closed = follow.order.len() != before;
+        if follow.order.is_empty() {
+            return self.stop_following();
+        }
+        if closed {
+            follow.index = (index - removed_before).min(follow.order.len() - 1);
         }
         let tab = down(VK_TAB);
         let pressed = tab && !follow.tab_down;
         follow.tab_down = tab;
         if !pressed {
-            return Ok(());
+            return if closed {
+                self.point_at_selection()
+            } else {
+                Ok(())
+            };
         }
         let count = follow.order.len();
         follow.index = if down(VK_SHIFT) {
@@ -1471,6 +1525,34 @@ impl App {
             self.last_frame = Instant::now();
         }
         self.render()
+    }
+
+    /// Starts the background update (Settings without a window, which does
+    /// the network part) once a day, only while nobody is using the
+    /// computer and nothing runs full screen, so restarting the dock bothers
+    /// no one. The dock itself never touches the network.
+    fn maybe_update(&mut self) {
+        if !self.config.check_updates
+            || !self.config.auto_update
+            || self.fullscreen
+            || self
+                .last_update
+                .is_some_and(|last| last.elapsed() < UPDATE_EVERY)
+            || muelle_shell::system::idle_time() < UPDATE_IDLE
+        {
+            return;
+        }
+        let Some(settings) = env::current_exe()
+            .ok()
+            .map(|exe| exe.with_file_name("muelle-settings.exe"))
+            .filter(|path| path.exists())
+        else {
+            return;
+        };
+        self.last_update = Some(Instant::now());
+        if let Err(error) = std::process::Command::new(settings).arg("--update").spawn() {
+            eprintln!("muelle: actualización: {error}");
+        }
     }
 
     fn hide_if_unused(&mut self) -> Result<()> {
@@ -2747,6 +2829,7 @@ fn run_outside(outside: Outside) {
                 request.anchor,
                 request.dark,
             );
+            with_app("menú cerrado", App::after_menu);
             if let Some(command) = chosen {
                 with_app_then("orden del menú", |app| {
                     app.on_command(request.target, command)
@@ -2793,7 +2876,9 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) ->
             // SAFETY: `hwnd` is our window; scheduling the same timer resets it.
             unsafe { SetTimer(Some(hwnd), REFRESH_TIMER, REFRESH_DELAY_MS, None) };
         }
-        WM_POWERBROADCAST if w.0 == PBT_APMPOWERSTATUSCHANGE => {
+        // On battery or charging, or energy saver turned on or off: glass may
+        // have to become solid, or the other way round.
+        WM_POWERBROADCAST if w.0 == PBT_APMPOWERSTATUSCHANGE || w.0 == PBT_POWERSETTINGCHANGE => {
             // SAFETY: `hwnd` is our window; scheduling the same timer resets it.
             unsafe { SetTimer(Some(hwnd), REFRESH_TIMER, REFRESH_DELAY_MS, None) };
         }
@@ -2820,6 +2905,12 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) ->
                 let _ = KillTimer(Some(hwnd), w.0);
             }
             with_app("apps fijadas", App::sync_taskbar_pins);
+        }
+        WM_TIMER if w.0 == UPDATE_TIMER => {
+            with_app("actualización", |app| {
+                app.maybe_update();
+                Ok(())
+            });
         }
         WM_TIMER if w.0 == SWITCHER_TIMER => {
             with_app("Alt+Tab", App::check_task_switcher);
@@ -3036,6 +3127,7 @@ pub fn run() -> Result<()> {
             downloads: downloads_folder(),
             bin_full: false,
             _bin_watch: BinWatch::register(input, BIN_CHANGED),
+            _saver_watch: power::SaverWatch::new(input.0 as isize),
             pin_watch: muelle_shell::pins::watch(visual.0 as isize, PINS_CHANGED),
             assets: HashMap::new(),
             assets_for: (0.0, false, 0),
@@ -3049,6 +3141,7 @@ pub fn run() -> Result<()> {
             drag_over: false,
             spring: None,
             switching: false,
+            last_update: None,
             switch_started: Instant::now(),
             follow: None,
             pointed: false,
@@ -3140,6 +3233,8 @@ pub fn run() -> Result<()> {
         );
         FOREGROUND_HOOK.store(foreground_hook.0 as isize, Ordering::Relaxed);
         LAST_FRONT.store(tracker::foreground_window(), Ordering::Relaxed);
+        // The first look comes after ten minutes, never during sign-in.
+        SetTimer(Some(input), UPDATE_TIMER, UPDATE_POLL_MS, None);
         let target: IDropTarget = DropTarget.into();
         RegisterDragDrop(input, &target)?;
         DROP_WINDOW.store(input.0 as isize, Ordering::Relaxed);

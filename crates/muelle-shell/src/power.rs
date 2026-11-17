@@ -83,3 +83,60 @@ pub fn run_as_background_process() {
     }
     trim_memory();
 }
+
+/// Tells a window, with `WM_POWERBROADCAST` / `PBT_POWERSETTINGCHANGE`, when
+/// energy saver (battery saver on Windows 10) turns on or off: Windows then
+/// stops or resumes see-through effects, and glass must follow. Plugging the
+/// charger in or out already arrives as `PBT_APMPOWERSTATUSCHANGE`, but
+/// turning the saver on by hand does not always.
+///
+/// Event-driven: nothing runs until Windows sends the change. The
+/// subscription ends when this is dropped.
+pub struct SaverWatch(Vec<windows::Win32::System::Power::HPOWERNOTIFY>);
+
+impl SaverWatch {
+    #[must_use]
+    pub fn new(hwnd: isize) -> Self {
+        use windows::{
+            Win32::{
+                Foundation::HANDLE,
+                System::{
+                    Power::RegisterPowerSettingNotification,
+                    SystemServices::GUID_POWER_SAVING_STATUS,
+                },
+                UI::WindowsAndMessaging::DEVICE_NOTIFY_WINDOW_HANDLE,
+            },
+            core::GUID,
+        };
+        /// Energy saver, Windows 11 22H2 and later.
+        const GUID_ENERGY_SAVER_STATUS: GUID =
+            GUID::from_u128(0x550e8400_e29b_41d4_a716_446655440000);
+        let handles = [GUID_ENERGY_SAVER_STATUS, GUID_POWER_SAVING_STATUS]
+            .iter()
+            .filter_map(|setting| {
+                // SAFETY: `hwnd` is the caller's live window; an unknown
+                // setting on an older Windows just fails.
+                unsafe {
+                    RegisterPowerSettingNotification(
+                        HANDLE(hwnd as *mut c_void),
+                        setting,
+                        DEVICE_NOTIFY_WINDOW_HANDLE,
+                    )
+                }
+                .ok()
+            })
+            .collect();
+        Self(handles)
+    }
+}
+
+impl Drop for SaverWatch {
+    fn drop(&mut self) {
+        for handle in self.0.drain(..) {
+            // SAFETY: Registered in `new` and released once.
+            unsafe {
+                let _ = windows::Win32::System::Power::UnregisterPowerSettingNotification(handle);
+            }
+        }
+    }
+}

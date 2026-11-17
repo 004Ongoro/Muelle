@@ -16,13 +16,15 @@ import { site } from "@/data/site";
 
   <h2>1. Update check</h2>
   <p>
-    When you open Settings, it asks GitHub whether a newer version exists by downloading{" "}
+    When you open Settings, and once a day while you are away from the computer, Muelle asks GitHub
+    whether a newer version exists by downloading{" "}
     <code>{updateManifest}</code>. Nothing about you or your computer is sent with it; GitHub, like any website, sees
     your IP address and handles it under the{" "}
     <a href="https://docs.github.com/site-policy/privacy-policies/github-general-privacy-statement" target="_blank" rel="noopener noreferrer">GitHub privacy statement</a>.
-    If you choose to update, the installer is downloaded from the same GitHub releases page.
+    When there is one, its signed installer is downloaded from the same GitHub releases page and
+    installed: by itself if <b>Install updates automatically</b> is on, otherwise when you choose to.
   </p>
-  <p>To turn it off: Settings → System → <b>Check for updates automatically</b>. You can still check by hand.</p>
+  <p>To turn it off: Settings → System → <b>Check for updates automatically</b> (or only <b>Install updates automatically</b>, to keep the notice in Settings). You can still check by hand.</p>
 
   <h2>2. AI provider usage</h2>
   <p>

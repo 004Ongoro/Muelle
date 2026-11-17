@@ -12,6 +12,7 @@
     "windows": [
       {
         "label": "main",
+        "create": false,
         "title": "Muelle",
         "width": 780,
         "height": 560,

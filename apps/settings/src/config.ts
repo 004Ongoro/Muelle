@@ -20,6 +20,7 @@ export interface Config {
   showRecents: boolean;
   bounceOnOpen: boolean;
   checkUpdates: boolean;
+  autoUpdate: boolean;
   language: Language;
 }
 

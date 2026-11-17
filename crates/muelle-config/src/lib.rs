@@ -70,6 +70,9 @@ pub struct Config {
     /// Settings asks GitHub Releases for a newer version when it opens. The
     /// only network access in Muelle, so it can be turned off.
     pub check_updates: bool,
+    /// With `check_updates`: once a day, while the user is away from the
+    /// computer, new versions are downloaded and installed without asking.
+    pub auto_update: bool,
     pub language: Language,
 }
 
@@ -128,6 +131,7 @@ impl Default for Config {
             show_recents: true,
             bounce_on_open: true,
             check_updates: true,
+            auto_update: true,
             language: Language::Auto,
         }
     }
@@ -227,6 +231,8 @@ mod tests {
         assert_eq!(config.icon_size, 56);
         assert!(config.show_indicators && config.show_recents && config.bounce_on_open);
         assert!(config.check_updates);
+        // Files from before automatic updates get them, like new installs.
+        assert!(config.auto_update);
         assert!(config.ai_usage);
         assert!(!config.show_minimized);
     }

@@ -8,6 +8,39 @@ copia la sección de la versión que se publica a la release de GitHub.
 
 ## [Unreleased]
 
+### English
+
+- Fixed: after choosing an item in the dock's menu (Muelle Settings, for
+  one), the dock could stay magnified and stop reacting to the pointer.
+- Alt+Tab: moving the mouse or clicking an empty spot no longer stops the
+  dock's magnifier from following the selection, and closing a window from
+  the switcher keeps it on the right app. Only the arrow keys, which move the
+  selection in ways Muelle cannot see, make it step aside.
+- Automatic updates: once a day, while you are away from the computer and
+  nothing runs full screen, Muelle installs new versions by itself; the dock
+  restarts in a moment. It can be turned off in Settings → System → "Install
+  updates automatically". The dock itself still never uses the network.
+- Glass follows energy saver: turning it on or off (by hand or at low battery)
+  switches the dock, the menu bar and the dock menu between glass and solid
+  at once.
+
+### Español
+
+- Corregido: tras elegir una opción del menú del dock (por ejemplo, Ajustes
+  de Muelle), el dock podía quedarse ampliado y dejar de responder al puntero.
+- Alt+Tab: mover el ratón o hacer clic en un hueco ya no impide que la lupa
+  del dock siga la selección, y cerrar una ventana desde el selector la
+  mantiene en la app correcta. Solo las flechas, que mueven la selección de
+  formas que Muelle no ve, hacen que se aparte.
+- Actualizaciones automáticas: una vez al día, mientras no usas el ordenador y
+  nada está a pantalla completa, Muelle instala las versiones nuevas por sí
+  solo; el dock se reinicia en un momento. Se puede desactivar en Ajustes →
+  Sistema → «Instalar actualizaciones automáticamente». El dock en sí sigue
+  sin usar la red.
+- El cristal sigue al ahorro de energía: al activarlo o desactivarlo (a mano o
+  con batería baja), el dock, la barra superior y el menú del dock cambian
+  entre cristal y sólido al momento.
+
 ## [0.1.8]
 
 ### English

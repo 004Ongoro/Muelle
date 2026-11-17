@@ -362,6 +362,13 @@ export function App() {
                     onChange={(checkUpdates) => update({ checkUpdates })}
                   />
                 </Row>
+                <SubRow label={t.autoUpdate} hint={t.autoUpdateHint} open={config.checkUpdates}>
+                  <Toggle
+                    label={t.autoUpdate}
+                    checked={config.autoUpdate}
+                    onChange={(autoUpdate) => update({ autoUpdate })}
+                  />
+                </SubRow>
                 <Row label={t.updatesNow} hint={updateHint(t, updateState, version)}>
                   {waiting && updateState.kind !== "installing" ? (
                     <button type="button" className="push push-primary" onClick={() => install(waiting)}>

@@ -210,6 +210,8 @@ pub struct MenuBar {
     _network: Option<NetworkWatch>,
     /// Hears when apps start or stop using the microphone or camera.
     privacy_watch: Option<RegistryWatch>,
+    /// Energy saver on or off arrives as `WM_POWERBROADCAST`; glass follows.
+    _saver_watch: muelle_shell::power::SaverWatch,
     audio: Option<AudioWatch>,
 }
 
@@ -925,6 +927,7 @@ impl MenuBar {
             edge_watch: None,
             _network: NetworkWatch::new(hwnd.0 as isize, STATUS_CHANGED),
             privacy_watch: status::watch_privacy(hwnd.0 as isize, PRIVACY_CHANGED),
+            _saver_watch: muelle_shell::power::SaverWatch::new(hwnd.0 as isize),
             audio: AudioWatch::new(hwnd.0 as isize, STATUS_CHANGED),
         };
         bar.update_status();

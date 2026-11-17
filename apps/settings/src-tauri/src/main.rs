@@ -1,14 +1,18 @@
 //! Muelle settings: a separate process that exists only while its window is
 //! open. It edits the configuration file and tells the dock to reload it.
+//!
+//! With `--update` it opens no window: the dock starts it that way once a
+//! day, while the user is away, to install a newer version if there is one.
+//! It exits as soon as it knows there is none.
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use std::{env, io, path::PathBuf, process::Command, sync::Mutex};
+use std::{env, io, path::PathBuf, process::Command, sync::Mutex, time::Duration};
 
 use muelle_config::Config;
 use muelle_shell::{autostart, dock_link, launcher};
 use serde::Serialize;
-use tauri::{Emitter, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State, WebviewWindowBuilder};
 use tauri_plugin_updater::{Update, UpdaterExt};
 
 /// The dock owns the pinned and recent apps; this app never overwrites them
@@ -148,25 +152,78 @@ async fn install_update(
         .map_err(|error| error.to_string())
 }
 
+/// The argument the dock starts this app with for a background update.
+const UPDATE_ARG: &str = "--update";
+
+/// Checks for a newer version and installs it without asking, as the user
+/// chose in Settings; the installer stops and restarts the dock. Exits when
+/// there is nothing to do or anything fails: the next try is tomorrow.
+async fn update_in_background(app: AppHandle) {
+    let config = get_config();
+    let allowed = config.check_updates && config.auto_update;
+    let found = match app.updater_builder().timeout(Duration::from_secs(60)) {
+        // The installer starts the dock again; this app need not come back.
+        builder if allowed => match builder.restart_after_install(false).build() {
+            Ok(updater) => updater.check().await.ok().flatten(),
+            Err(_) => None,
+        },
+        _ => None,
+    };
+    if let Some(update) = found
+        && let Err(error) = update.download_and_install(|_, _| {}, || {}).await
+    {
+        eprintln!("muelle-settings: actualización: {error}");
+    }
+    app.exit(0);
+}
+
+/// Opens the Settings window, or brings it forward if it is open.
+fn show_window(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.unminimize();
+        let _ = window.show();
+        let _ = window.set_focus();
+        return;
+    }
+    let Some(config) = app.config().app.windows.first() else {
+        return;
+    };
+    if let Err(error) =
+        WebviewWindowBuilder::from_config(app, config).and_then(|window| window.build())
+    {
+        eprintln!("muelle-settings: {error}");
+    }
+}
+
 fn main() {
     muelle_config::migrate_legacy_folder();
+    let background = env::args().any(|arg| arg == UPDATE_ARG);
     // The Start menu entry opens this app: it also brings back a dock the user quit.
-    if !dock_link::is_running()
+    if !background
+        && !dock_link::is_running()
         && let Err(error) = dock_exe().and_then(|dock| Command::new(dock).spawn())
     {
         eprintln!("muelle-settings: no se pudo abrir el dock: {error}");
     }
     let result = tauri::Builder::default()
         // First, so a second launch exits before doing anything else.
-        .plugin(tauri_plugin_single_instance::init(|app, _, _| {
-            if let Some(window) = app.get_webview_window("main") {
-                let _ = window.unminimize();
-                let _ = window.show();
-                let _ = window.set_focus();
+        .plugin(tauri_plugin_single_instance::init(|app, args, _| {
+            // The open window checks for updates itself; a background update
+            // started meanwhile has nothing to do.
+            if !args.iter().any(|arg| arg == UPDATE_ARG) {
+                show_window(app);
             }
         }))
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(PendingUpdate::default())
+        .setup(move |app| {
+            if background {
+                tauri::async_runtime::spawn(update_in_background(app.handle().clone()));
+            } else {
+                show_window(app.handle());
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             get_config,
             default_config,

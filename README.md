@@ -50,23 +50,16 @@ restored when Muelle exits.
 ## Install
 
 **[Download Muelle-Setup.exe](https://github.com/crafter-station/Muelle/releases/latest/download/Muelle-Setup.exe)**
-(Windows 10, or Windows 11; 64-bit) or pick a version from
+(Windows 10 version 1903 or later, or Windows 11; 64-bit) or pick a version from
 [Releases](https://github.com/crafter-station/Muelle/releases).
 
 1. Run `Muelle-Setup.exe`. It installs for your user only: no administrator
    rights, no wizard, about two seconds.
 2. Muelle is new, so Windows SmartScreen may not recognize it yet and say it
-   protected your PC. Choose **More info → Run anyway**.
+   protected your PC. Choose **More info → Run anyway**. See the
+   [code-signing policy](https://muellee.vercel.app/code-signing-policy).
 3. Open **Muelle** from the Start menu, then choose **Dock** to
    personalize the dock and top menu bar.
-
-## Resource usage
-
-In one idle snapshot, Windows Task Manager showed **3.1 MB** for the grouped
-`muelle (2)` processes. This point-in-time reading can vary by machine and
-session; it excludes Settings and its WebView2 runtime.
-
-<img width="1000" height="209" alt="706924247-a00b8242-be33-466a-a9f5-9390fdd8ccee" src="https://github.com/user-attachments/assets/2446de33-9ad9-4fc2-8645-4a264d90b3f4" />
 
 ## Try it on Windows
 
@@ -133,43 +126,7 @@ pnpm build
 | `crates/muelle-core` | Platform-independent layout and animation logic |
 | `crates/muelle-shell` | Windows shell integration |
 | `crates/muelle-config` | Shared settings and persistence |
-| `plan.md` | Development plan and implementation notes (Spanish) |
-
-## Build the installer
-
-```powershell
-cd apps\settings
-pnpm install
-cd ..\..
-.\scripts\build-installer.ps1
-```
-
-The script builds both apps and produces `Muelle_<version>_x64-setup.exe` in
-`target\release\bundle\nsis`. The installer runs per user, needs no
-administrator rights and shows no wizard: it installs to
-`%LOCALAPPDATA%\Programs\Muelle`, turns on start with Windows and opens the dock.
-Uninstalling (Settings → Apps) quits the dock and gives the Windows taskbar back.
-
-Pushing a tag that matches the version (for example `v0.1.1`) builds the
-installer on GitHub Actions and attaches it to a draft release, together with
-`Muelle-Setup.exe` (the website's download link), `latest.json` (read by the
-updater in Settings) and that version's notes from `CHANGELOG.md`. The repository needs the secrets
-`TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. Publish the
-draft to make it the download and the update.
-
-## Current status
-
-The dock, Settings app and installer work on Windows 11. Windows 10 support is
-new; please report anything that looks wrong there. Some features and
-interactions are still being verified.
-
-## Code signing policy
-
-Free code signing provided by [SignPath.io](https://about.signpath.io),
-certificate by [SignPath Foundation](https://signpath.org). Releases are built
-from this repository by `.github/workflows/release.yml` on GitHub-hosted runners
-and each signing request is approved by hand. Full policy and team roles:
-[muellee.vercel.app/code-signing-policy](https://muellee.vercel.app/code-signing-policy).
+| `muelle` | Astro website |
 
 ## Privacy
 
