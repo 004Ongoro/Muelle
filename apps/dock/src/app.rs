@@ -93,7 +93,7 @@ use crate::{
     gfx::{Gfx, LabelBrush},
     menu::{self, MenuItem},
     menubar::MenuBar,
-    previews::{Choice as PreviewChoice, Picker},
+    multi_window_view::MultiWindowView,
     scene::{Drag, Frame, Scene, SceneInput, SlotContent, Theme},
     shell_work::{self, Action as ShellAction},
     strings::{self, text},
@@ -194,7 +194,6 @@ fn millis(duration: std::time::Duration) -> u32 {
 const UPDATE_TIMER: usize = 12;
 const PREVIEW_TIMER: usize = 13;
 const PREVIEW_DWELL_MS: u32 = 420;
-const PREVIEW_LEAVE_MS: u32 = 75;
 const UPDATE_EVERY: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
 /// After the dock starts, the look waits this long, so it never slows signing in.
 const UPDATE_AFTER_START: std::time::Duration = std::time::Duration::from_secs(2 * 60);
@@ -543,7 +542,7 @@ struct App {
     hovering: bool,
     hovered: Option<usize>,
     preview_candidate: Option<String>,
-    preview: Option<Picker>,
+    preview: Option<MultiWindowView>,
     /// Horizontal cursor position relative to the resting dock.
     cursor: f32,
     /// 0 = resting, 1 = full magnification.
@@ -1034,7 +1033,7 @@ impl App {
         let slide = self.slide.value * stage.slide_distance;
         stage.scene.apply(&Frame {
             state: &state,
-            hovered: self.hovered,
+            hovered: self.hovered.filter(|_| self.preview.is_none()),
             lifts: &lifts,
             drag,
             slide,
@@ -1352,7 +1351,7 @@ impl App {
         if self.preview_candidate.take().is_none() && self.preview.is_none() {
             return;
         }
-        // SAFETY: Both timers belong to our UI window.
+        // SAFETY: The timer belongs to our UI window.
         unsafe {
             let _ = KillTimer(Some(self.input), PREVIEW_TIMER);
         }
@@ -1368,10 +1367,7 @@ impl App {
             self.close_preview();
             return Ok(());
         }
-        if let Some(picker) = &self.preview {
-            if !picker.contains(point) {
-                self.close_preview();
-            }
+        if self.preview.is_some() {
             return Ok(());
         }
         // SAFETY: End the one-shot dwell before creating the preview.
@@ -1410,20 +1406,17 @@ impl App {
             return Ok(());
         };
         let windows = self.windows_of(&candidate);
-        let name = self
-            .icons
-            .get(&candidate, "")
-            .map_or_else(|| fallback_name(&candidate), |visual| visual.name.clone());
-        self.preview = Some(Picker::open(
+        self.preview = Some(MultiWindowView::show(
             &self.gfx,
-            (candidate, name),
+            candidate,
             windows,
             anchor,
-            monitor,
-            (stage.key.light, stage.key.glass),
+            monitor.screen,
+            monitor.scale,
+            Theme::for_system(stage.key.light, stage.key.glass),
         )?);
-        // Run only while the picker is open, including the gap above the icon.
-        unsafe { SetTimer(Some(self.input), PREVIEW_TIMER, PREVIEW_LEAVE_MS, None) };
+        // The view owns its animation and dismissal timer while it is open.
+        self.render()?;
         Ok(())
     }
 
@@ -1494,6 +1487,7 @@ impl App {
         }
         self.switching = true;
         self.close_preview();
+        self.flights.clear();
         self.switch_started = Instant::now();
         // SAFETY: Timers on our own window.
         unsafe {
@@ -2388,6 +2382,7 @@ impl App {
 
     /// The settings app saved a change: read it and apply what differs.
     fn reload_config(&mut self) -> Result<()> {
+        self.close_preview();
         let Ok(Some(saved)) = muelle_config::load(&muelle_config::default_path()) else {
             return Ok(());
         };
@@ -2543,13 +2538,11 @@ impl App {
     /// Refreshes open windows and recomposes the dock if anything changed.
     fn sync(&mut self) -> Result<()> {
         self.windows = self.tracker.list();
-        if self.preview.as_ref().is_some_and(|picker| {
-            let current = self.windows_of(&picker.app_id);
-            current.len() != picker.windows.len()
-                || current
-                    .iter()
-                    .any(|window| !picker.windows.contains(window))
-        }) {
+        if self
+            .preview
+            .as_ref()
+            .is_some_and(|view| !view.matches(&self.windows_of(&view.app_id)))
+        {
             self.close_preview();
         }
         let windows = &self.windows;
@@ -2622,7 +2615,16 @@ impl App {
         let gfx = &self.gfx;
         let snapshots = &mut self.snapshots;
         let mut restore = None;
+        let foreground = tracker::foreground_window();
+        // The Alt+Tab switcher can briefly have no foreground HWND. Cancel
+        // before a deferred restore gets a chance to fight the keyboard.
+        let switching = unsafe {
+            GetAsyncKeyState(i32::from(VK_MENU.0)) < 0 && GetAsyncKeyState(i32::from(VK_TAB.0)) < 0
+        };
         self.flights.retain_mut(|flight| {
+            if switching || !flight.is_current(foreground) {
+                return false;
+            }
             let going = flight.step(gfx, now);
             if flight.take_restore(!going) {
                 restore = Some(flight.hwnd);
@@ -2784,6 +2786,17 @@ impl App {
         Ok(())
     }
 
+    fn on_foreground_changed(&mut self) -> Result<()> {
+        self.close_preview();
+        let foreground = tracker::foreground_window();
+        self.flights.retain(|flight| flight.is_current(foreground));
+        // The app roster can stay identical while its windows change z-order.
+        // Refresh their order so the next dock activation selects the actual
+        // most recently used window rather than a stale group leader.
+        self.windows = self.tracker.list();
+        self.update_fullscreen()
+    }
+
     fn on_appbar_notice(&mut self, notice: usize) -> Result<()> {
         match notice {
             // Windows notifications may be missing or unreliable, so use them
@@ -2857,6 +2870,7 @@ unsafe extern "system" fn on_win_event(
             with_app("Alt+Tab", App::task_switcher_opened);
         } else if !tracker::is_switch_transient(hwnd) {
             LAST_FRONT.store(hwnd.0 as isize, Ordering::Relaxed);
+            with_app("ventana activa", App::on_foreground_changed);
         }
     } else if event == EVENT_OBJECT_CLOAKED || event == EVENT_OBJECT_UNCLOAKED {
         // Shows the windows of the virtual desktop in front, as the Windows
@@ -2905,64 +2919,56 @@ pub fn menu_bar_media_changed() {
     });
 }
 
-pub fn preview_hover(point: POINT) {
-    with_app("selector de ventanas", |app| {
-        if let Some(picker) = &mut app.preview {
-            picker.hover(point)?;
+pub fn multi_window_view_tick() {
+    with_app("vistas de ventanas", |app| {
+        if let Some(view) = &mut app.preview
+            && !view.tick()?
+        {
+            app.close_preview();
         }
         Ok(())
     });
 }
 
-pub fn preview_has_hit(hwnd: HWND) -> bool {
-    let mut point = POINT::default();
-    // SAFETY: The cursor coordinates are written into our local structure.
-    if unsafe {
-        GetCursorPos(&mut point).is_err()
-            || !windows::Win32::Graphics::Gdi::ScreenToClient(hwnd, &mut point).as_bool()
-    } {
-        return false;
-    }
-    APP.with(|cell| {
-        cell.try_borrow().ok().is_some_and(|app| {
-            app.as_ref()
-                .and_then(|app| app.preview.as_ref())
-                .is_some_and(|picker| picker.choice_at(point).is_some())
-        })
-    })
+pub fn multi_window_view_press() {
+    with_app("seleccionar ventana", |app| {
+        if let Some(view) = &mut app.preview {
+            view.press()?;
+        }
+        Ok(())
+    });
 }
 
-pub fn preview_click(point: POINT) {
-    with_app_then("selector de ventanas", |app| {
-        let Some(picker) = &mut app.preview else {
-            return Ok(None);
+pub fn multi_window_view_release() {
+    with_app_then("abrir ventana", |app| {
+        let selected = match &mut app.preview {
+            Some(view) => view.release()?,
+            None => None,
         };
-        match picker.choice_at(point) {
-            Some(PreviewChoice::Page(page)) => picker.draw(&app.gfx, page)?,
-            Some(PreviewChoice::Window(hwnd)) => {
-                app.close_preview();
-                // SAFETY: Ignore a window that closed while the pointer moved.
-                if unsafe {
-                    windows::Win32::UI::WindowsAndMessaging::IsWindow(Some(HWND(hwnd as *mut _)))
-                }
-                .as_bool()
-                {
-                    return Ok(app.activating(vec![hwnd]));
-                }
+        if let Some(hwnd) = selected {
+            app.close_preview();
+            // Resolve against the current tracker snapshot: a closed window
+            // must never select a different entry by its former index.
+            if app.windows.iter().any(|window| window.hwnd == hwnd) {
+                return Ok(app.activating(vec![hwnd]));
             }
-            None => {}
         }
         Ok(None)
     });
 }
 
-pub fn preview_scroll(delta: i16) {
-    with_app("selector de ventanas", |app| {
-        if let Some(picker) = &mut app.preview
-            && let Some(page) = picker.next_page(delta)
-        {
-            picker.draw(&app.gfx, page)?;
+pub fn multi_window_view_scroll(previous: bool) {
+    with_app("más ventanas", |app| {
+        if let Some(view) = &mut app.preview {
+            view.scroll(&app.gfx, previous)?;
         }
+        Ok(())
+    });
+}
+
+pub fn multi_window_view_dismiss() {
+    with_app("cerrar vistas", |app| {
+        app.close_preview();
         Ok(())
     });
 }
@@ -3277,7 +3283,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) ->
             // Changing the foreground window does not change the app list; it
             // can only enter or exit full-screen mode.
             HSHELL_WINDOWACTIVATED | HSHELL_RUDEAPPACTIVATED => {
-                with_app("ventana activa", App::update_fullscreen);
+                with_app("ventana activa", App::on_foreground_changed);
             }
             // Terminals and browsers retitle their windows many times a minute.
             // The dock shows no titles, so only a window it does not list yet

@@ -57,7 +57,7 @@ use std::{
 
 use anyhow::Result;
 use muelle_core::genie::{Edges, Genie};
-use muelle_shell::{icons::IconImage, screen};
+use muelle_shell::{icons::IconImage, screen, tracker};
 use windows::{
     Foundation::TimeSpan,
     UI::Composition::{
@@ -107,6 +107,7 @@ const LANDING_START: f32 = 0.8;
 const SETTLE: Duration = Duration::from_millis(120);
 /// Abandon a stalled screen copy instead of keeping its overlay and frame loop alive.
 const CAPTURE_TIMEOUT: Duration = Duration::from_millis(750);
+const FLIGHT_TIMEOUT: Duration = Duration::from_secs(2);
 static CAPTURE_BUSY: AtomicBool = AtomicBool::new(false);
 
 struct CapturePermit;
@@ -178,6 +179,8 @@ enum Phase {
 pub struct Flight {
     /// The window being minimized or restored.
     pub hwnd: isize,
+    created_at: Instant,
+    foreground: isize,
     overlay: HWND,
     /// The window under the overlay that holds a minimize's stand-in.
     stand: Option<HWND>,
@@ -558,6 +561,8 @@ impl Flight {
         let window = local(visible, screen);
         Some(Self {
             hwnd,
+            created_at: Instant::now(),
+            foreground: tracker::foreground_window(),
             overlay,
             stand: Some(stand),
             _target: target,
@@ -616,6 +621,8 @@ impl Flight {
         };
         let flight = Self {
             hwnd,
+            created_at: Instant::now(),
+            foreground: tracker::foreground_window(),
             overlay,
             stand: None,
             _target: target,
@@ -641,6 +648,13 @@ impl Flight {
 
     /// Advances the animation; returns `false` once it has finished (or cannot go on).
     pub fn step(&mut self, gfx: &Gfx, now: Instant) -> bool {
+        let elapsed = now.saturating_duration_since(self.created_at);
+        if elapsed >= FLIGHT_TIMEOUT
+            || (matches!(self.phase, Phase::Standing { .. }) && elapsed >= CAPTURE_TIMEOUT)
+        {
+            self.restore_pending = false;
+            return false;
+        }
         match &mut self.phase {
             Phase::Standing {
                 thumbnail,
@@ -731,6 +745,12 @@ impl Flight {
     #[must_use]
     pub fn needs_aim(&self) -> bool {
         !self.aimed
+    }
+
+    /// A delayed restore belongs to the original activation request. Once
+    /// another app wins the foreground, the overlay and request are stale.
+    pub fn is_current(&self, foreground: isize) -> bool {
+        foreground == 0 || foreground == self.foreground || foreground == self.hwnd
     }
 
     /// Width of the flying window divided by its height.
@@ -847,5 +867,105 @@ mod tests {
         assert!(CapturePermit::acquire().is_none());
         drop(first);
         assert!(CapturePermit::acquire().is_some());
+    }
+}
+
+#[cfg(test)]
+mod native_tests {
+    use super::*;
+    use windows::Win32::{
+        System::WinRT::{
+            CreateDispatcherQueueController, DQTAT_COM_STA, DQTYPE_THREAD_CURRENT,
+            DispatcherQueueOptions,
+        },
+        UI::WindowsAndMessaging::{IsWindow, WS_OVERLAPPEDWINDOW},
+    };
+
+    #[test]
+    #[ignore = "requires an interactive Windows desktop and DWM"]
+    fn native_stalled_capture_should_release_overlays_without_late_restore() -> Result<()> {
+        struct Source(HWND);
+        impl Drop for Source {
+            fn drop(&mut self) {
+                unsafe {
+                    let _ = DestroyWindow(self.0);
+                }
+            }
+        }
+        let _queue = unsafe {
+            CreateDispatcherQueueController(DispatcherQueueOptions {
+                dwSize: size_of::<DispatcherQueueOptions>() as u32,
+                threadType: DQTYPE_THREAD_CURRENT,
+                apartmentType: DQTAT_COM_STA,
+            })?
+        };
+        let source = Source(unsafe {
+            CreateWindowExW(
+                WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+                w!("STATIC"),
+                w!("Muelle animation test"),
+                WS_OVERLAPPEDWINDOW,
+                10,
+                10,
+                240,
+                160,
+                None,
+                None,
+                None,
+                None,
+            )?
+        });
+        unsafe {
+            let _ = ShowWindow(source.0, SW_SHOWNOACTIVATE);
+        }
+        let gfx = Gfx::new()?;
+        let screen = RECT {
+            left: 0,
+            top: 0,
+            right: 640,
+            bottom: 480,
+        };
+        let from = RECT {
+            left: 10,
+            top: 10,
+            right: 250,
+            bottom: 170,
+        };
+        let mut flight = Flight::start(&gfx, source.0.0 as isize, from, from, screen)
+            .ok_or_else(|| anyhow::anyhow!("could not create the native animation"))?;
+        let overlay = flight.overlay;
+        let stand = flight.stand;
+        let unrelated = if flight.foreground != 123 { 123 } else { 124 };
+        assert!(
+            !flight.is_current(unrelated),
+            "switching apps invalidates the animation"
+        );
+        // Replace the graphics worker with one that never delivers a result.
+        let (_sender, stalled) = channel();
+        if let Phase::Standing { shot, .. } = &mut flight.phase {
+            *shot = stalled;
+        }
+        flight.aim(
+            &gfx,
+            RECT {
+                left: 300,
+                top: 400,
+                right: 340,
+                bottom: 440,
+            },
+        );
+        flight.created_at = Instant::now() - CAPTURE_TIMEOUT;
+        flight.restore_pending = true;
+        assert!(!flight.step(&gfx, Instant::now()));
+        assert!(
+            !flight.take_restore(true),
+            "timing out must not reactivate a stale target"
+        );
+        drop(flight);
+        assert!(!unsafe { IsWindow(Some(overlay)) }.as_bool());
+        if let Some(stand) = stand {
+            assert!(!unsafe { IsWindow(Some(stand)) }.as_bool());
+        }
+        Ok(())
     }
 }

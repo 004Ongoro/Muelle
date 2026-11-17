@@ -11,17 +11,18 @@ use windows::{
         System::Threading::{OpenProcess, OpenProcessToken, PROCESS_QUERY_LIMITED_INFORMATION},
         UI::{
             Input::KeyboardAndMouse::{
-                INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBD_EVENT_FLAGS, KEYBDINPUT,
-                KEYEVENTF_KEYUP, SendInput, VIRTUAL_KEY, VK_A, VK_B, VK_D, VK_ESCAPE, VK_LCONTROL,
-                VK_LWIN, VK_N, VK_RETURN, VK_S, VK_SPACE, VK_TAB, VK_V, VK_W,
+                INPUT, INPUT_0, INPUT_KEYBOARD, KEYBD_EVENT_FLAGS, KEYBDINPUT, KEYEVENTF_KEYUP,
+                SendInput, VIRTUAL_KEY, VK_A, VK_B, VK_D, VK_ESCAPE, VK_LCONTROL, VK_LWIN, VK_N,
+                VK_RETURN, VK_S, VK_SPACE, VK_TAB, VK_V, VK_W,
             },
             Shell::{SEE_MASK_NOASYNC, SHELLEXECUTEINFOW, ShellExecuteExW},
             WindowsAndMessaging::{
-                ASFW_ANY, AllowSetForegroundWindow, FindWindowW, GetForegroundWindow,
-                GetWindowRect, GetWindowThreadProcessId, HWND_TOP, IsIconic, IsWindowVisible,
-                PostMessageW, SW_MINIMIZE, SW_RESTORE, SW_SHOWNORMAL, SWP_ASYNCWINDOWPOS,
-                SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SetForegroundWindow,
-                SetWindowPos, ShowWindowAsync, WM_CLOSE,
+                ASFW_ANY, AllowSetForegroundWindow, FindWindowW, GWL_EXSTYLE, GetForegroundWindow,
+                GetWindowLongW, GetWindowRect, GetWindowThreadProcessId, IsIconic, IsWindow,
+                IsWindowVisible, PostMessageW, SMTO_ABORTIFHUNG, SW_MINIMIZE, SW_RESTORE,
+                SW_SHOWNORMAL, SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOOWNERZORDER,
+                SWP_NOSIZE, SWP_NOZORDER, SendMessageTimeoutW, SetForegroundWindow, SetWindowPos,
+                ShowWindowAsync, SwitchToThisWindow, WM_CLOSE, WM_NULL, WS_EX_TOPMOST,
             },
         },
     },
@@ -369,65 +370,82 @@ pub fn activate(windows: &[isize]) {
     // SAFETY: Requests targeting another process are queued, so its hung UI
     // cannot block the dock. Calls on a closed window fail without effect.
     unsafe {
-        // Process from back to front to preserve their relative order.
-        for hwnd in handles().rev().filter(|&hwnd| !IsIconic(hwnd).as_bool()) {
-            let _ = SetWindowPos(
-                hwnd,
-                Some(HWND_TOP),
-                0,
-                0,
-                0,
-                0,
-                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS,
-            );
-        }
         let Some(front) = handles()
-            .find(|&hwnd| !IsIconic(hwnd).as_bool())
-            .or_else(|| handles().next())
+            .find(|&hwnd| IsWindow(Some(hwnd)).as_bool() && !IsIconic(hwnd).as_bool())
+            .or_else(|| handles().find(|&hwnd| IsWindow(Some(hwnd)).as_bool()))
         else {
             return;
         };
-        // The focus first, then the restore. When the dock is not allowed to
-        // take the foreground (the genie ends a moment after the click),
-        // Windows places a window it restores behind the active one: it
-        // showed for an instant and was covered again.
-        bring_to_front(front);
-        if IsIconic(front).as_bool() && !ShowWindowAsync(front, SW_RESTORE).as_bool() {
-            // Windows refuses it for an app running as administrator (Task
-            // Manager, for one); what Alt+Tab uses restores it anyway.
-            windows::Win32::UI::WindowsAndMessaging::SwitchToThisWindow(front, true);
+        if !bring_to_front(front) {
+            return;
         }
-        // Asked for outright as well, after the restore: the focus alone
-        // does not always raise the window. Posted, so a busy app cannot
-        // block the dock.
-        let _ = SetWindowPos(
+        if IsIconic(front).as_bool() && !ShowWindowAsync(front, SW_RESTORE).as_bool() {
+            // As in native Alt+Tab, this also restores elevated applications.
+            SwitchToThisWindow(front, true);
+        }
+        // Foreground activation is asynchronous across input queues. Wait
+        // briefly for it to settle; never stack background peers on refusal.
+        if SendMessageTimeoutW(
             front,
-            Some(HWND_TOP),
-            0,
-            0,
-            0,
-            0,
-            SWP_NOMOVE | SWP_NOSIZE | SWP_ASYNCWINDOWPOS,
-        );
+            WM_NULL,
+            WPARAM(0),
+            LPARAM(0),
+            SMTO_ABORTIFHUNG,
+            100,
+            None,
+        )
+        .0 == 0
+        {
+            return;
+        }
+        stack_group_behind(front, windows, || GetForegroundWindow());
     }
 }
 
-/// Gives `hwnd` the focus. Windows only lets the process that received the
-/// last input do this; when it refuses (the click was some time ago, or
-/// another app grabbed the input since), an empty mouse input makes the dock
-/// that process again, and the second attempt succeeds.
-unsafe fn bring_to_front(hwnd: HWND) {
+/// Requests focus once. A later user action, such as Alt+Tab, must win over
+/// this request; synthetic mouse input must not force it back.
+unsafe fn bring_to_front(hwnd: HWND) -> bool {
     // SAFETY: Calls on another window; they fail without effect if it is gone.
+    unsafe { SetForegroundWindow(hwnd).as_bool() }
+}
+
+/// Stack peers beneath the confirmed foreground window, never above it.
+/// This also keeps all peers behind the next app when native Alt+Tab wins.
+fn stack_group_behind(front: HWND, windows: &[isize], foreground: impl Fn() -> HWND) {
+    // SAFETY: Read-only checks and queued positioning of live top-level windows.
     unsafe {
-        if SetForegroundWindow(hwnd).as_bool() && GetForegroundWindow() == hwnd {
+        if foreground() != front || GetWindowLongW(front, GWL_EXSTYLE) as u32 & WS_EX_TOPMOST.0 != 0
+        {
             return;
         }
-        let nudge = INPUT {
-            r#type: INPUT_MOUSE,
-            ..Default::default()
-        };
-        SendInput(&[nudge], size_of::<INPUT>() as i32);
-        let _ = SetForegroundWindow(hwnd);
+        let mut previous = front;
+        for &raw in windows {
+            let hwnd = HWND(raw as *mut _);
+            if foreground() != front {
+                break;
+            }
+            if hwnd == front
+                || !IsWindow(Some(hwnd)).as_bool()
+                || !IsWindowVisible(hwnd).as_bool()
+                || IsIconic(hwnd).as_bool()
+                || GetWindowLongW(hwnd, GWL_EXSTYLE) as u32 & WS_EX_TOPMOST.0 != 0
+            {
+                continue;
+            }
+            if SetWindowPos(
+                hwnd,
+                Some(previous),
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_ASYNCWINDOWPOS,
+            )
+            .is_ok()
+            {
+                previous = hwnd;
+            }
+        }
     }
 }
 
@@ -442,5 +460,143 @@ pub fn minimize(windows: &[isize]) {
                 let _ = ShowWindowAsync(hwnd, SW_MINIMIZE);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use windows::{
+        Win32::UI::WindowsAndMessaging::{
+            CreateWindowExW, DestroyWindow, EnumWindows, HWND_TOP, HWND_TOPMOST, SW_SHOWNOACTIVATE,
+            ShowWindow, WS_EX_TOOLWINDOW, WS_OVERLAPPEDWINDOW,
+        },
+        core::BOOL,
+    };
+
+    struct Desktop {
+        windows: Vec<HWND>,
+    }
+
+    impl Desktop {
+        fn new() -> windows::core::Result<Self> {
+            let mut desktop = Self {
+                windows: Vec::new(),
+            };
+            // Only test-owned windows are moved or activated. The third covers
+            // both side-by-side peers, like a maximized browser.
+            for (index, (x, width)) in [(40, 240), (280, 240), (40, 480)].into_iter().enumerate() {
+                let hwnd = unsafe {
+                    CreateWindowExW(
+                        WS_EX_TOOLWINDOW,
+                        w!("STATIC"),
+                        &HSTRING::from(format!("Muelle stacking test {index}")),
+                        WS_OVERLAPPEDWINDOW,
+                        x,
+                        40,
+                        width,
+                        240,
+                        None,
+                        None,
+                        None,
+                        None,
+                    )?
+                };
+                desktop.windows.push(hwnd);
+                unsafe {
+                    let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+                }
+            }
+            Ok(desktop)
+        }
+
+        fn order(&self) -> windows::core::Result<Vec<isize>> {
+            unsafe extern "system" fn collect(hwnd: HWND, data: LPARAM) -> BOOL {
+                // SAFETY: The vector outlives the synchronous enumeration.
+                unsafe {
+                    (*(data.0 as *mut Vec<isize>)).push(hwnd.0 as isize);
+                }
+                true.into()
+            }
+            let mut order: Vec<isize> = Vec::new();
+            unsafe {
+                EnumWindows(Some(collect), LPARAM(&raw mut order as isize))?;
+            }
+            order.retain(|raw| self.windows.iter().any(|hwnd| hwnd.0 as isize == *raw));
+            Ok(order)
+        }
+    }
+
+    impl Drop for Desktop {
+        fn drop(&mut self) {
+            unsafe {
+                for &hwnd in &self.windows {
+                    let _ = DestroyWindow(hwnd);
+                }
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "requires an interactive Windows desktop; positions only test-owned windows"]
+    fn native_group_should_not_restack_after_foreground_changes() -> windows::core::Result<()> {
+        let desktop = Desktop::new()?;
+        let [left, right, cover] = desktop.windows[..] else {
+            unreachable!("three test windows");
+        };
+        let group = [right.0 as isize, left.0 as isize];
+        // Inject the foreground identity to exercise the real native stacking
+        // without fighting the foreground lock or interrupting the user's app.
+        unsafe {
+            SetWindowPos(
+                right,
+                Some(HWND_TOP),
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+            )?;
+        }
+        stack_group_behind(right, &group, || right);
+        assert_eq!(
+            desktop.order()?,
+            [right.0 as isize, left.0 as isize, cover.0 as isize]
+        );
+        // The next app's position must cover both side-by-side peers.
+        unsafe {
+            SetWindowPos(
+                cover,
+                Some(HWND_TOP),
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+            )?;
+        }
+        let order = desktop.order()?;
+        assert_eq!(order[0], cover.0 as isize);
+        // A stale activation must not restack the old group over the browser.
+        stack_group_behind(right, &group, || cover);
+        assert_eq!(desktop.order()?, order);
+        // An app's explicit always-on-top choice must not spread to peers.
+        unsafe {
+            SetWindowPos(
+                left,
+                Some(HWND_TOPMOST),
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+            )?;
+        }
+        stack_group_behind(left, &[left.0 as isize, right.0 as isize], || left);
+        assert_eq!(
+            unsafe { GetWindowLongW(right, GWL_EXSTYLE) } as u32 & WS_EX_TOPMOST.0,
+            0
+        );
+        Ok(())
     }
 }
