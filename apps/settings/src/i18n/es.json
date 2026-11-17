@@ -28,7 +28,7 @@
   "checkUpdates": "Buscar actualizaciones automáticamente",
   "checkUpdatesHint": "Ajustes pregunta a GitHub si hay una versión nueva al abrirse.",
   "autoUpdate": "Instalar actualizaciones automáticamente",
-  "autoUpdateHint": "Una vez al día, mientras no usas el ordenador, Muelle instala las versiones nuevas por sí solo.",
+  "autoUpdateHint": "Una vez al día, un par de minutos después de encender el ordenador (o cada 24 horas si sigue encendido), Muelle instala las versiones nuevas por sí solo.",
   "updatesOff": "La búsqueda automática está desactivada.",
   "updates": "Actualizaciones",
   "updatesChecking": "Buscando actualizaciones…",

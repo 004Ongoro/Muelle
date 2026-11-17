@@ -183,12 +183,19 @@ const SPRING_TIMER: usize = 8;
 const SPRING_DELAY_MS: u32 = 600;
 /// While the Alt+Tab switcher is open, checks how long it stays: Windows
 /// reports when it comes to the front, but not reliably when it closes.
-/// Every so often the dock looks whether it is a good moment to update:
-/// a day since the last time, and the user away from the computer.
+/// A duration as timer milliseconds; Windows caps timers at about 24 days.
+fn millis(duration: std::time::Duration) -> u32 {
+    duration.as_millis().min(0x7FFF_FFFF) as u32
+}
+
+/// The background update runs once a day: a single timer, aimed at the
+/// moment the next look is due (see `schedule_update`).
 const UPDATE_TIMER: usize = 12;
-const UPDATE_POLL_MS: u32 = 10 * 60 * 1000;
 const UPDATE_EVERY: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
-const UPDATE_IDLE: std::time::Duration = std::time::Duration::from_secs(5 * 60);
+/// After the dock starts, the look waits this long, so it never slows signing in.
+const UPDATE_AFTER_START: std::time::Duration = std::time::Duration::from_secs(2 * 60);
+/// While a full-screen app (a game, a presentation) is in front, try later.
+const UPDATE_RETRY: std::time::Duration = std::time::Duration::from_secs(60 * 60);
 const SWITCHER_TIMER: usize = 9;
 /// Short enough to see every Tab press (a key stays down 50-100 ms).
 const SWITCHER_POLL_MS: u32 = 16;
@@ -482,11 +489,11 @@ struct App {
     drag_over: bool,
     /// The entry a drag is resting on, which springs open on `SPRING_TIMER`.
     spring: Option<String>,
-    /// When the last background update was started (see `UPDATE_TIMER`).
-    last_update: Option<Instant>,
     /// The Alt+Tab switcher is open; an auto-hidden dock shows meanwhile.
     switching: bool,
     switch_started: Instant,
+    /// When the dock started (the update waits a little after it).
+    launched: Instant,
     /// The selection in the switcher, as far as it can be followed.
     follow: Option<SwitcherFollow>,
     /// The magnifier rests on the icon selected in Alt+Tab, not the pointer.
@@ -1316,7 +1323,12 @@ impl App {
     /// selection: Windows 11's switcher reports it to no one (no accessible
     /// focus, selection or name on its items; checked with MSAA and UIA).
     fn task_switcher_opened(&mut self) -> Result<()> {
-        if self.switching {
+        // Only Alt+Tab (and Ctrl+Alt+Tab). Task View shares the switcher's
+        // window, and on Windows 11 its virtual desktops sit along the
+        // bottom edge, where the dock would cover them.
+        // SAFETY: Read-only keyboard state query.
+        let alt = unsafe { GetAsyncKeyState(i32::from(VK_MENU.0)) < 0 };
+        if self.switching || !alt {
             return Ok(());
         }
         self.switching = true;
@@ -1527,30 +1539,49 @@ impl App {
         self.render()
     }
 
-    /// Starts the background update (Settings without a window, which does
-    /// the network part) once a day, only while nobody is using the
-    /// computer and nothing runs full screen, so restarting the dock bothers
-    /// no one. The dock itself never touches the network.
-    fn maybe_update(&mut self) {
-        if !self.config.check_updates
-            || !self.config.auto_update
-            || self.fullscreen
-            || self
-                .last_update
-                .is_some_and(|last| last.elapsed() < UPDATE_EVERY)
-            || muelle_shell::system::idle_time() < UPDATE_IDLE
-        {
+    /// Aims the update timer at the next look: a day after the last one,
+    /// which survives restarts, and never sooner than two minutes after the
+    /// dock starts. So the dock wakes for it once a day, not on a schedule.
+    fn schedule_update(&self) {
+        // SAFETY: Timers on our own window; setting one again replaces it.
+        unsafe {
+            if !self.config.check_updates || !self.config.auto_update {
+                let _ = KillTimer(Some(self.input), UPDATE_TIMER);
+                return;
+            }
+            let wait = muelle_shell::updates::due_in(UPDATE_EVERY)
+                .max(UPDATE_AFTER_START.saturating_sub(self.launched.elapsed()));
+            SetTimer(Some(self.input), UPDATE_TIMER, millis(wait), None);
+        }
+    }
+
+    /// Starts the background update: Settings without a window, which does
+    /// the network part and exits when there is nothing to install. The
+    /// dock itself never touches the network.
+    fn update_now(&mut self) {
+        // SAFETY: Our own timer.
+        unsafe {
+            let _ = KillTimer(Some(self.input), UPDATE_TIMER);
+        }
+        if !self.config.check_updates || !self.config.auto_update {
             return;
         }
-        let Some(settings) = env::current_exe()
+        // Installing restarts the dock: not in the middle of a game.
+        if self.fullscreen {
+            // SAFETY: Our own timer.
+            unsafe { SetTimer(Some(self.input), UPDATE_TIMER, millis(UPDATE_RETRY), None) };
+            return;
+        }
+        // Recorded first: whatever happens, the next look is tomorrow.
+        muelle_shell::updates::mark_checked();
+        self.schedule_update();
+        let settings = env::current_exe()
             .ok()
             .map(|exe| exe.with_file_name("muelle-settings.exe"))
-            .filter(|path| path.exists())
-        else {
-            return;
-        };
-        self.last_update = Some(Instant::now());
-        if let Err(error) = std::process::Command::new(settings).arg("--update").spawn() {
+            .filter(|path| path.exists());
+        if let Some(settings) = settings
+            && let Err(error) = std::process::Command::new(settings).arg("--update").spawn()
+        {
             eprintln!("muelle: actualización: {error}");
         }
     }
@@ -2206,6 +2237,8 @@ impl App {
             self.last_frame = Instant::now();
         }
         self.config = config;
+        // Updates may have been turned on or off.
+        self.schedule_update();
         self.sync_thumbnails();
         self.apply_menu_bar_setting();
         self.update_menu_bar_app()?;
@@ -2908,7 +2941,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) ->
         }
         WM_TIMER if w.0 == UPDATE_TIMER => {
             with_app("actualización", |app| {
-                app.maybe_update();
+                app.update_now();
                 Ok(())
             });
         }
@@ -2959,6 +2992,11 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) ->
         WM_POWERBROADCAST if w.0 == PBT_APMRESUMEAUTOMATIC => {
             // SAFETY: `hwnd` is this live window on its owning UI thread.
             unsafe { SetTimer(Some(hwnd), TASKBAR_TIMER, TASKBAR_DELAY_MS, None) };
+            // Timers do not count the time asleep: aim it again by the clock.
+            with_app("actualización", |app| {
+                app.schedule_update();
+                Ok(())
+            });
         }
         _ if CONFIG_CHANGED.get() == Some(&msg) => with_app("ajustes", App::reload_config),
         _ if TASKBAR_CREATED.get() == Some(&msg) => {
@@ -3141,8 +3179,8 @@ pub fn run() -> Result<()> {
             drag_over: false,
             spring: None,
             switching: false,
-            last_update: None,
             switch_started: Instant::now(),
+            launched: Instant::now(),
             follow: None,
             pointed: false,
             pending_drop: None,
@@ -3233,12 +3271,11 @@ pub fn run() -> Result<()> {
         );
         FOREGROUND_HOOK.store(foreground_hook.0 as isize, Ordering::Relaxed);
         LAST_FRONT.store(tracker::foreground_window(), Ordering::Relaxed);
-        // The first look comes after ten minutes, never during sign-in.
-        SetTimer(Some(input), UPDATE_TIMER, UPDATE_POLL_MS, None);
         let target: IDropTarget = DropTarget.into();
         RegisterDragDrop(input, &target)?;
         DROP_WINDOW.store(input.0 as isize, Ordering::Relaxed);
 
+        app.schedule_update();
         APP.set(Some(app));
     }
 

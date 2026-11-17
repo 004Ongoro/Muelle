@@ -169,12 +169,18 @@ async fn update_in_background(app: AppHandle) {
         },
         _ => None,
     };
-    if let Some(update) = found
+    // Opening Settings meanwhile lands in this process (single instance):
+    // then it stays as the user's Settings, which shows the update itself,
+    // and installing must not close it under them.
+    let window_opened = || app.get_webview_window("main").is_some();
+    if let Some(update) = found.filter(|_| !window_opened())
         && let Err(error) = update.download_and_install(|_, _| {}, || {}).await
     {
         eprintln!("muelle-settings: actualización: {error}");
     }
-    app.exit(0);
+    if !window_opened() {
+        app.exit(0);
+    }
 }
 
 /// Opens the Settings window, or brings it forward if it is open.

@@ -16,10 +16,12 @@ copia la sección de la versión que se publica a la release de GitHub.
   dock's magnifier from following the selection, and closing a window from
   the switcher keeps it on the right app. Only the arrow keys, which move the
   selection in ways Muelle cannot see, make it step aside.
-- Automatic updates: once a day, while you are away from the computer and
-  nothing runs full screen, Muelle installs new versions by itself; the dock
-  restarts in a moment. It can be turned off in Settings → System → "Install
+- Automatic updates: once a day, a couple of minutes after you turn on the
+  computer (or every 24 hours if it stays on), Muelle installs new versions by
+  itself; the dock restarts in a moment. Never while an app is full screen. It can be turned off in Settings → System → "Install
   updates automatically". The dock itself still never uses the network.
+- Windows 10: the menu bar no longer shows a Widgets button, which Windows
+  10 does not have; it opened Windows Ink instead.
 - Glass follows energy saver: turning it on or off (by hand or at low battery)
   switches the dock, the menu bar and the dock menu between glass and solid
   at once.
@@ -32,11 +34,14 @@ copia la sección de la versión que se publica a la release de GitHub.
   del dock siga la selección, y cerrar una ventana desde el selector la
   mantiene en la app correcta. Solo las flechas, que mueven la selección de
   formas que Muelle no ve, hacen que se aparte.
-- Actualizaciones automáticas: una vez al día, mientras no usas el ordenador y
-  nada está a pantalla completa, Muelle instala las versiones nuevas por sí
-  solo; el dock se reinicia en un momento. Se puede desactivar en Ajustes →
+- Actualizaciones automáticas: una vez al día, un par de minutos después de
+  encender el ordenador (o cada 24 horas si sigue encendido), Muelle instala
+  las versiones nuevas por sí solo; el dock se reinicia en un momento. Nunca
+  con una app a pantalla completa. Se puede desactivar en Ajustes →
   Sistema → «Instalar actualizaciones automáticamente». El dock en sí sigue
   sin usar la red.
+- Windows 10: la barra superior ya no muestra un botón de Widgets, que Windows
+  10 no tiene; abría Windows Ink en su lugar.
 - El cristal sigue al ahorro de energía: al activarlo o desactivarlo (a mano o
   con batería baja), el dock, la barra superior y el menú del dock cambian
   entre cristal y sólido al momento.

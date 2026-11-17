@@ -296,8 +296,6 @@ fn dword(key: PCWSTR, value: &str) -> Option<u32> {
     Some(data)
 }
 
-/// Read when the bar redraws: three registry values, no watch needed. A value
-/// Windows has never written means the button is at its default, shown.
 /// Alt+Tab also lists Microsoft Edge tabs ("Show tabs from apps"), or the
 /// windows of every virtual desktop: then its list is not the open windows
 /// of this desktop in order.
@@ -309,12 +307,16 @@ pub fn alt_tab_lists_more_than_windows(edge_open: bool) -> bool {
     (tabs && edge_open) || all_desktops
 }
 
+/// Read when the bar redraws: three registry values, no watch needed. A value
+/// Windows has never written means the button is at its default, shown.
 #[must_use]
 pub fn taskbar_buttons() -> TaskbarButtons {
     TaskbarButtons {
         search: dword(SEARCH, "SearchboxTaskbarMode").unwrap_or(1) != 0,
         task_view: dword(ADVANCED, "ShowTaskViewButton").unwrap_or(1) != 0,
-        widgets: dword(ADVANCED, "TaskbarDa").unwrap_or(1) != 0,
+        // Windows 10 has no Widgets (its value is never written there, so it
+        // would read as shown), and Win+W opens Windows Ink instead.
+        widgets: crate::system::is_windows_11() && dword(ADVANCED, "TaskbarDa").unwrap_or(1) != 0,
     }
 }
 

@@ -28,7 +28,7 @@
   "checkUpdates": "Check for updates automatically",
   "checkUpdatesHint": "Settings asks GitHub whether there is a newer version when it opens.",
   "autoUpdate": "Install updates automatically",
-  "autoUpdateHint": "Once a day, while you are away from the computer, Muelle installs new versions by itself.",
+  "autoUpdateHint": "Once a day, a couple of minutes after you turn on the computer (or every 24 hours if it stays on), Muelle installs new versions by itself.",
   "updatesOff": "Automatic checks are off.",
   "updates": "Updates",
   "updatesChecking": "Checking for updates…",

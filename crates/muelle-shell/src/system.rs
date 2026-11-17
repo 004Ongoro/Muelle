@@ -76,26 +76,6 @@ pub fn input_language() -> Option<String> {
     }
 }
 
-/// How long since the user last touched the keyboard or mouse.
-#[must_use]
-pub fn idle_time() -> std::time::Duration {
-    use windows::Win32::{
-        System::SystemInformation::GetTickCount,
-        UI::Input::KeyboardAndMouse::{GetLastInputInfo, LASTINPUTINFO},
-    };
-    let mut input = LASTINPUTINFO {
-        cbSize: size_of::<LASTINPUTINFO>() as u32,
-        dwTime: 0,
-    };
-    // SAFETY: `input` is a valid structure with its size set.
-    if !unsafe { GetLastInputInfo(&mut input) }.as_bool() {
-        return std::time::Duration::ZERO;
-    }
-    // Both wrap every 49.7 days; the difference stays right.
-    let ticks = unsafe { GetTickCount() }.wrapping_sub(input.dwTime);
-    std::time::Duration::from_millis(u64::from(ticks))
-}
-
 /// `true` on Windows 11 (build 22000 or later), `false` on Windows 10.
 /// Read once: the version does not change while the dock runs.
 #[must_use]
