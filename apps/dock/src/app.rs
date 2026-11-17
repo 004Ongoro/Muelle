@@ -240,6 +240,8 @@ const CMD_TOGGLE_HIDING: u32 = 7;
 const CMD_IMPORT_PINS: u32 = 10;
 const CMD_RUN_AS_ADMIN: u32 = 11;
 const CMD_SHOW_DESKTOP: u32 = 12;
+const CMD_TASK_MANAGER: u32 = 13;
+const CMD_TASKBAR_SETTINGS: u32 = 14;
 const CMD_WINDOW: u32 = 100;
 const MENU_WINDOWS: usize = 12;
 const MENU_TITLE_CHARS: usize = 60;
@@ -2239,6 +2241,10 @@ impl App {
                 let items = vec![
                     MenuItem::action(CMD_TOGGLE_HIDING, hiding),
                     MenuItem::action(CMD_SHOW_DESKTOP, text().show_desktop),
+                    MenuItem::Separator,
+                    MenuItem::action(CMD_TASK_MANAGER, text().task_manager),
+                    MenuItem::action(CMD_TASKBAR_SETTINGS, text().taskbar_settings),
+                    MenuItem::Separator,
                     MenuItem::action(CMD_IMPORT_PINS, text().import_pins),
                     MenuItem::action(CMD_SETTINGS, text().settings),
                     MenuItem::Separator,
@@ -2333,6 +2339,8 @@ impl App {
                 CMD_TOGGLE_HIDING => self.toggle_hiding().map(|()| None),
                 CMD_IMPORT_PINS => self.import_taskbar_pins().map(|()| None),
                 CMD_SHOW_DESKTOP => Ok(Some(Outside::ShowDesktop)),
+                CMD_TASK_MANAGER => Ok(Some(Outside::Open("taskmgr.exe".into()))),
+                CMD_TASKBAR_SETTINGS => Ok(Some(Outside::Open("ms-settings:taskbar".into()))),
                 CMD_SETTINGS => Ok(Some(Outside::OpenSettings)),
                 _ => Ok(None),
             };
