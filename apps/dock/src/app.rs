@@ -93,6 +93,7 @@ use crate::{
     gfx::{Gfx, LabelBrush},
     menu::{self, MenuItem},
     menubar::MenuBar,
+    previews::{Choice as PreviewChoice, Picker},
     scene::{Drag, Frame, Scene, SceneInput, SlotContent, Theme},
     shell_work::{self, Action as ShellAction},
     strings::{self, text},
@@ -191,6 +192,9 @@ fn millis(duration: std::time::Duration) -> u32 {
 /// The background update runs once a day: a single timer, aimed at the
 /// moment the next look is due (see `schedule_update`).
 const UPDATE_TIMER: usize = 12;
+const PREVIEW_TIMER: usize = 13;
+const PREVIEW_DWELL_MS: u32 = 420;
+const PREVIEW_LEAVE_MS: u32 = 75;
 const UPDATE_EVERY: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
 /// After the dock starts, the look waits this long, so it never slows signing in.
 const UPDATE_AFTER_START: std::time::Duration = std::time::Duration::from_secs(2 * 60);
@@ -538,6 +542,8 @@ struct App {
     stage: Option<Stage>,
     hovering: bool,
     hovered: Option<usize>,
+    preview_candidate: Option<String>,
+    preview: Option<Picker>,
     /// Horizontal cursor position relative to the resting dock.
     cursor: f32,
     /// 0 = resting, 1 = full magnification.
@@ -818,6 +824,7 @@ impl App {
         if self.stage.as_ref().is_some_and(|stage| stage.key == key) {
             return Ok(());
         }
+        self.close_preview();
 
         let scale = monitor.scale;
         let max_scale = key.max_scale;
@@ -1293,7 +1300,131 @@ impl App {
         // the mouse cancels the request, and without it the dock would
         // never hear the pointer leave and stay magnified.
         self.track_leave()?;
-        self.render()
+        self.render()?;
+        self.aim_preview();
+        Ok(())
+    }
+
+    fn preview_target(&self) -> Option<(&str, usize)> {
+        if !self.hovering
+            || self.press.is_some()
+            || self.drag.is_some()
+            || self.drag_over
+            || self.fullscreen
+            || self.switching
+        {
+            return None;
+        }
+        let index = self.hovered?;
+        let entry = self.entries.get(index)?;
+        let id = entry.id.as_deref()?;
+        (entry.role == Role::App
+            && entry.running
+            && self
+                .windows
+                .iter()
+                .filter(|window| window.app_id == id)
+                .nth(1)
+                .is_some())
+        .then_some((id, index))
+    }
+
+    fn aim_preview(&mut self) {
+        let target = self.preview_target().map(|(id, _)| id);
+        if self
+            .preview
+            .as_ref()
+            .is_some_and(|picker| target.is_none_or(|id| id == picker.app_id))
+            || target == self.preview_candidate.as_deref() && self.preview.is_none()
+        {
+            return;
+        }
+        let candidate = target.map(str::to_owned);
+        self.close_preview();
+        if candidate.is_some() {
+            // SAFETY: The timer belongs to our UI window.
+            unsafe { SetTimer(Some(self.input), PREVIEW_TIMER, PREVIEW_DWELL_MS, None) };
+            self.preview_candidate = candidate;
+        }
+    }
+
+    fn close_preview(&mut self) {
+        if self.preview_candidate.take().is_none() && self.preview.is_none() {
+            return;
+        }
+        // SAFETY: Both timers belong to our UI window.
+        unsafe {
+            let _ = KillTimer(Some(self.input), PREVIEW_TIMER);
+        }
+        if self.preview.take().is_some() && self.config.auto_hide && !self.hovering {
+            unsafe { SetTimer(Some(self.input), HIDE_TIMER, HIDE_DELAY_MS, None) };
+        }
+    }
+
+    fn preview_tick(&mut self) -> Result<()> {
+        let mut point = POINT::default();
+        // SAFETY: Read-only pointer and window queries on the UI thread.
+        if unsafe { GetCursorPos(&mut point) }.is_err() {
+            self.close_preview();
+            return Ok(());
+        }
+        if let Some(picker) = &self.preview {
+            if !picker.contains(point) {
+                self.close_preview();
+            }
+            return Ok(());
+        }
+        // SAFETY: End the one-shot dwell before creating the preview.
+        unsafe {
+            let _ = KillTimer(Some(self.input), PREVIEW_TIMER);
+        }
+        let Some(candidate) = self.preview_candidate.take() else {
+            return Ok(());
+        };
+        let Some((id, index)) = self.preview_target() else {
+            return Ok(());
+        };
+        if id != candidate
+            || unsafe { windows::Win32::UI::WindowsAndMessaging::WindowFromPoint(point) }
+                != self.input
+        {
+            return Ok(());
+        }
+        let Some(stage) = &self.stage else {
+            return Ok(());
+        };
+        let state = magnify(
+            &stage.layout,
+            self.cursor,
+            self.amount.value,
+            &stage.magnifier,
+        );
+        let rect = &state.rects[index];
+        let anchor = RECT {
+            left: stage.dock_origin.x + rect.x.round() as i32,
+            top: stage.dock_origin.y + rect.y.round() as i32,
+            right: stage.dock_origin.x + (rect.x + rect.width).round() as i32,
+            bottom: stage.dock_origin.y + (rect.y + rect.height).round() as i32,
+        };
+        let Some(monitor) = primary_monitor() else {
+            return Ok(());
+        };
+        let windows = self.windows_of(&candidate);
+        let name = self
+            .icons
+            .get(&candidate, "")
+            .map_or_else(|| fallback_name(&candidate), |visual| visual.name.clone());
+        self.preview = Some(Picker::open(
+            &self.gfx,
+            (candidate, name),
+            windows,
+            anchor,
+            monitor,
+            (stage.key.light, stage.key.glass),
+        )?);
+        // Run only while the picker is open, including the gap above the icon.
+        unsafe { SetTimer(Some(self.input), PREVIEW_TIMER, PREVIEW_LEAVE_MS, None) };
+        Ok(())
     }
 
     fn track_leave(&self) -> Result<()> {
@@ -1329,6 +1460,9 @@ impl App {
             return Ok(());
         }
         self.hovering = false;
+        if self.preview.is_none() {
+            self.close_preview();
+        }
         self.amount.target = 0.0;
         self.last_frame = Instant::now();
         if self.config.auto_hide {
@@ -1359,6 +1493,7 @@ impl App {
             return Ok(());
         }
         self.switching = true;
+        self.close_preview();
         self.switch_started = Instant::now();
         // SAFETY: Timers on our own window.
         unsafe {
@@ -1622,7 +1757,12 @@ impl App {
     }
 
     fn hide_if_unused(&mut self) -> Result<()> {
-        if !self.config.auto_hide || self.hovering || self.drag.is_some() || self.switching {
+        if !self.config.auto_hide
+            || self.hovering
+            || self.drag.is_some()
+            || self.switching
+            || self.preview.is_some()
+        {
             return Ok(());
         }
         self.slide.target = 1.0;
@@ -1640,6 +1780,7 @@ impl App {
     }
 
     fn on_press(&mut self) -> Result<()> {
+        self.close_preview();
         let Some(entry) = self.hovered.and_then(|index| self.entries.get(index)) else {
             return Ok(());
         };
@@ -1818,6 +1959,7 @@ impl App {
     }
 
     fn on_drag_enter(&mut self, incoming: Vec<String>, x: i32) -> Result<DROPEFFECT> {
+        self.close_preview();
         self.incoming = incoming;
         self.drag_over = true;
         self.on_drag_over(x)
@@ -2044,6 +2186,7 @@ impl App {
     /// Middle click on an app opens another window of it, as on the Windows
     /// taskbar.
     fn on_middle_click(&mut self) -> Result<Option<Outside>> {
+        self.close_preview();
         let Some(entry) = self.hovered.and_then(|index| self.entries.get(index)) else {
             return Ok(None);
         };
@@ -2057,6 +2200,7 @@ impl App {
     /// Right-click prepares the menu for the item under the cursor, or the dock
     /// menu when over empty space or a divider.
     fn on_right_click(&mut self) -> Result<Option<Outside>> {
+        self.close_preview();
         let Some(stage) = &self.stage else {
             return Ok(None);
         };
@@ -2399,6 +2543,15 @@ impl App {
     /// Refreshes open windows and recomposes the dock if anything changed.
     fn sync(&mut self) -> Result<()> {
         self.windows = self.tracker.list();
+        if self.preview.as_ref().is_some_and(|picker| {
+            let current = self.windows_of(&picker.app_id);
+            current.len() != picker.windows.len()
+                || current
+                    .iter()
+                    .any(|window| !picker.windows.contains(window))
+        }) {
+            self.close_preview();
+        }
         let windows = &self.windows;
         self.last_rects
             .retain(|hwnd, _| windows.iter().any(|window| window.hwnd == *hwnd));
@@ -2591,6 +2744,7 @@ impl App {
         // SAFETY: `self.input` is a live window on this UI thread.
         unsafe {
             if fullscreen {
+                self.close_preview();
                 SetTimer(
                     Some(self.input),
                     FULLSCREEN_TIMER,
@@ -2734,6 +2888,85 @@ pub fn menu_bar_clicked(x: f32, y: f32) {
     });
 }
 
+pub fn menu_bar_has_action(point: POINT) -> bool {
+    APP.with(|cell| {
+        cell.try_borrow().ok().is_some_and(|app| {
+            app.as_ref()
+                .and_then(|app| app.menubar.as_ref())
+                .is_some_and(|bar| bar.has_island_action(point))
+        })
+    })
+}
+
+pub fn menu_bar_media_changed() {
+    with_app("reproducción", |app| match &mut app.menubar {
+        Some(bar) => bar.media_changed(&app.gfx),
+        None => Ok(()),
+    });
+}
+
+pub fn preview_hover(point: POINT) {
+    with_app("selector de ventanas", |app| {
+        if let Some(picker) = &mut app.preview {
+            picker.hover(point)?;
+        }
+        Ok(())
+    });
+}
+
+pub fn preview_has_hit(hwnd: HWND) -> bool {
+    let mut point = POINT::default();
+    // SAFETY: The cursor coordinates are written into our local structure.
+    if unsafe {
+        GetCursorPos(&mut point).is_err()
+            || !windows::Win32::Graphics::Gdi::ScreenToClient(hwnd, &mut point).as_bool()
+    } {
+        return false;
+    }
+    APP.with(|cell| {
+        cell.try_borrow().ok().is_some_and(|app| {
+            app.as_ref()
+                .and_then(|app| app.preview.as_ref())
+                .is_some_and(|picker| picker.choice_at(point).is_some())
+        })
+    })
+}
+
+pub fn preview_click(point: POINT) {
+    with_app_then("selector de ventanas", |app| {
+        let Some(picker) = &mut app.preview else {
+            return Ok(None);
+        };
+        match picker.choice_at(point) {
+            Some(PreviewChoice::Page(page)) => picker.draw(&app.gfx, page)?,
+            Some(PreviewChoice::Window(hwnd)) => {
+                app.close_preview();
+                // SAFETY: Ignore a window that closed while the pointer moved.
+                if unsafe {
+                    windows::Win32::UI::WindowsAndMessaging::IsWindow(Some(HWND(hwnd as *mut _)))
+                }
+                .as_bool()
+                {
+                    return Ok(app.activating(vec![hwnd]));
+                }
+            }
+            None => {}
+        }
+        Ok(None)
+    });
+}
+
+pub fn preview_scroll(delta: i16) {
+    with_app("selector de ventanas", |app| {
+        if let Some(picker) = &mut app.preview
+            && let Some(page) = picker.next_page(delta)
+        {
+            picker.draw(&app.gfx, page)?;
+        }
+        Ok(())
+    });
+}
+
 /// The pointer rested on the top edge with the menu bar hidden.
 pub fn menu_bar_edge_rested() {
     with_app("barra superior", |app| match &mut app.menubar {
@@ -2749,16 +2982,16 @@ pub fn menu_bar_hover(inside: bool) {
     });
 }
 
-pub fn menu_bar_pointer_moved(x: f32) {
+pub fn menu_bar_pointer_moved(x: f32, y: f32) {
     with_app("barra superior", |app| match &mut app.menubar {
-        Some(bar) => bar.pointer_moved(&app.gfx, x),
+        Some(bar) => bar.pointer_moved(&app.gfx, x, y),
         None => Ok(()),
     });
 }
 
-pub fn menu_bar_dismiss_usage() {
+pub fn menu_bar_dismiss_island() {
     with_app("barra superior", |app| match &mut app.menubar {
-        Some(bar) => bar.dismiss_usage(&app.gfx),
+        Some(bar) => bar.dismiss_island(&app.gfx),
         None => Ok(()),
     });
 }
@@ -2989,6 +3222,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) ->
         WM_TIMER if w.0 == SPRING_TIMER => {
             with_app_then("arrastre sobre una app", App::spring_open);
         }
+        WM_TIMER if w.0 == PREVIEW_TIMER => with_app("selector de ventanas", App::preview_tick),
         WM_TIMER if w.0 == HIDE_TIMER => {
             // SAFETY: Same as above.
             unsafe {
@@ -3233,6 +3467,8 @@ pub fn run() -> Result<()> {
             stage: None,
             hovering: false,
             hovered: None,
+            preview_candidate: None,
+            preview: None,
             cursor: 0.0,
             amount: Spring::at(0.0, HOVER_OMEGA),
             last_frame: Instant::now(),

@@ -34,6 +34,7 @@ pub struct Strings {
     pub usage_resets: &'static str,
     pub usage_updated: &'static str,
     pub usage_used: &'static str,
+    pub media_title: &'static str,
     pub shell_operation_failed: &'static str,
 }
 
@@ -65,6 +66,7 @@ const ES: Strings = Strings {
     usage_resets: "Reinicia",
     usage_updated: "Actualizado hace",
     usage_used: "usado",
+    media_title: "Reproducción",
 };
 
 const EN: Strings = Strings {
@@ -95,6 +97,7 @@ const EN: Strings = Strings {
     usage_resets: "Resets",
     usage_updated: "Updated",
     usage_used: "used",
+    media_title: "Now playing",
 };
 
 /// 0 = not chosen yet (follow Windows), 1 = Spanish, 2 = English.

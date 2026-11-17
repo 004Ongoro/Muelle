@@ -14,25 +14,19 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-use chrono::{DateTime, Local, NaiveDate, Utc};
+use chrono::{DateTime, Local, Utc};
 use muelle_shell::icons::IconImage;
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use windows::Win32::{
     Foundation::{CloseHandle, HWND, LPARAM, WPARAM},
-    Security::Credentials::{CRED_TYPE_GENERIC, CREDENTIALW, CredFree, CredReadW},
     System::Diagnostics::ToolHelp::{
         CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW,
         TH32CS_SNAPPROCESS,
     },
-    System::Threading::{
-        OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
-        QueryFullProcessImageNameW,
-    },
     UI::WindowsAndMessaging::PostMessageW,
 };
-use windows::core::{PWSTR, w};
 
 const REFRESH_INTERVAL: Duration = Duration::from_secs(5 * 60);
 
@@ -117,26 +111,18 @@ impl Snapshot {
 pub enum Provider {
     Claude,
     Codex,
-    Copilot,
     OpenCode,
     Gemini,
 }
 
 impl Provider {
-    pub const COUNT: usize = 5;
-    pub const ALL: [Self; Self::COUNT] = [
-        Self::Claude,
-        Self::Codex,
-        Self::Copilot,
-        Self::OpenCode,
-        Self::Gemini,
-    ];
+    pub const COUNT: usize = 4;
+    pub const ALL: [Self; Self::COUNT] = [Self::Claude, Self::Codex, Self::OpenCode, Self::Gemini];
 
     pub fn name(self) -> &'static str {
         match self {
             Self::Claude => "Claude",
             Self::Codex => "Codex",
-            Self::Copilot => "Copilot",
             Self::OpenCode => "OpenCode",
             Self::Gemini => "Gemini",
         }
@@ -184,10 +170,6 @@ pub fn active_providers() -> ActiveProviders {
             if let Some(provider) = match name.to_ascii_lowercase().as_str() {
                 "claude.exe" => Some(Provider::Claude),
                 "codex.exe" => Some(Provider::Codex),
-                "copilot.exe" if github_copilot_process(entry.th32ProcessID) => {
-                    Some(Provider::Copilot)
-                }
-                "copilot-runtime.exe" => Some(Provider::Copilot),
                 "opencode.exe" => Some(Provider::OpenCode),
                 "gemini.exe" | "antigravity.exe" | "agy.exe" => Some(Provider::Gemini),
                 _ => None,
@@ -210,39 +192,9 @@ pub fn active_providers() -> ActiveProviders {
     active
 }
 
-fn github_copilot_process(pid: u32) -> bool {
-    // Microsoft Copilot also runs as copilot.exe; it has no GitHub quota.
-    // SAFETY: The process handle is closed on every successful open.
-    let Ok(process) = (unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) })
-    else {
-        return false;
-    };
-    let mut buffer = [0u16; 1024];
-    let mut length = buffer.len() as u32;
-    // SAFETY: `buffer` remains live and `length` states its capacity.
-    let found = unsafe {
-        QueryFullProcessImageNameW(
-            process,
-            PROCESS_NAME_WIN32,
-            PWSTR(buffer.as_mut_ptr()),
-            &mut length,
-        )
-    }
-    .is_ok();
-    // SAFETY: OpenProcess returned this handle.
-    unsafe {
-        let _ = CloseHandle(process);
-    }
-    found
-        && String::from_utf16_lossy(&buffer[..length as usize])
-            .to_ascii_lowercase()
-            .contains("github")
-}
-
 pub fn logo(provider: Provider) -> Option<&'static IconImage> {
     static CLAUDE: std::sync::OnceLock<Option<IconImage>> = std::sync::OnceLock::new();
     static CODEX: std::sync::OnceLock<Option<IconImage>> = std::sync::OnceLock::new();
-    static COPILOT: std::sync::OnceLock<Option<IconImage>> = std::sync::OnceLock::new();
     static OPENCODE: std::sync::OnceLock<Option<IconImage>> = std::sync::OnceLock::new();
     static GEMINI: std::sync::OnceLock<Option<IconImage>> = std::sync::OnceLock::new();
     match provider {
@@ -251,9 +203,6 @@ pub fn logo(provider: Provider) -> Option<&'static IconImage> {
             .as_ref(),
         Provider::Codex => CODEX
             .get_or_init(|| decode_logo(include_bytes!("../../../assets/usage/codex.png")))
-            .as_ref(),
-        Provider::Copilot => COPILOT
-            .get_or_init(|| decode_logo(include_bytes!("../../../assets/usage/copilot.png")))
             .as_ref(),
         Provider::OpenCode => OPENCODE
             .get_or_init(|| decode_logo(include_bytes!("../../../assets/usage/opencode.png")))
@@ -420,7 +369,6 @@ fn fetch_all() -> Snapshot {
             match provider {
                 Provider::Claude => fetch_claude(&client),
                 Provider::Codex => fetch_codex(&client),
-                Provider::Copilot => fetch_copilot(&client),
                 Provider::OpenCode => fetch_opencode(&client),
                 Provider::Gemini => fetch_gemini(&client),
             }
@@ -458,29 +406,6 @@ fn ready(windows: Vec<Window>) -> ProviderUsage {
 
 fn home() -> Option<PathBuf> {
     env::var_os("USERPROFILE").map(PathBuf::from)
-}
-
-fn credential_text(target: windows::core::PCWSTR) -> Option<String> {
-    let mut credential: *mut CREDENTIALW = std::ptr::null_mut();
-    // SAFETY: Windows allocates `credential` on success; it is freed below.
-    unsafe { CredReadW(target, CRED_TYPE_GENERIC, None, &mut credential).ok()? };
-    if credential.is_null() {
-        return None;
-    }
-    // SAFETY: CredReadW returned a valid blob of CredentialBlobSize bytes.
-    let token = unsafe {
-        let item = &*credential;
-        if item.CredentialBlob.is_null() || item.CredentialBlobSize == 0 {
-            None
-        } else {
-            let bytes =
-                std::slice::from_raw_parts(item.CredentialBlob, item.CredentialBlobSize as usize);
-            String::from_utf8(bytes.to_vec()).ok()
-        }
-    };
-    // SAFETY: `credential` belongs to this successful CredReadW call.
-    unsafe { CredFree(credential.cast()) };
-    token.map(|value| value.trim_matches('\0').trim().to_owned())
 }
 
 fn fetch_claude(client: &Client) -> ProviderUsage {
@@ -571,97 +496,6 @@ fn fetch_codex(client: &Client) -> ProviderUsage {
     } else {
         ready(windows)
     }
-}
-
-fn fetch_copilot(client: &Client) -> ProviderUsage {
-    let tokens = [
-        env::var("COPILOT_GITHUB_TOKEN").ok(),
-        env::var("GH_TOKEN").ok(),
-        env::var("GITHUB_TOKEN").ok(),
-        credential_text(w!("copilot-cli")),
-        credential_text(w!("copilot-language-server/oauth-token-key")),
-    ]
-    .into_iter()
-    .flatten()
-    .collect::<Vec<_>>();
-    for token in tokens.into_iter().filter(|value| !value.is_empty()) {
-        let response = client
-            .get("https://api.github.com/copilot_internal/user")
-            .header("Authorization", format!("token {token}"))
-            .header("Accept", "application/json")
-            .header("Editor-Version", "vscode/1.96.2")
-            .header("Editor-Plugin-Version", "copilot-chat/0.26.7")
-            .header("User-Agent", "GitHubCopilotChat/0.26.7")
-            .header("X-Github-Api-Version", "2025-04-01")
-            .send();
-        let Ok(response) = response else {
-            return unavailable();
-        };
-        if matches!(response.status().as_u16(), 401 | 403) {
-            continue;
-        }
-        let Ok(body) = response
-            .error_for_status()
-            .and_then(|response| response.text())
-        else {
-            return unavailable();
-        };
-        let Ok(value) = serde_json::from_str::<Value>(&body) else {
-            return unavailable();
-        };
-        let windows = parse_copilot(&value);
-        return if windows.is_empty() {
-            unavailable()
-        } else {
-            ready(windows)
-        };
-    }
-    sign_in()
-}
-
-fn parse_copilot(value: &Value) -> Vec<Window> {
-    let quotas = value
-        .get("quota_snapshots")
-        .or_else(|| value.get("quotaSnapshots"));
-    let reset = value
-        .get("quota_reset_date_utc")
-        .or_else(|| value.get("quota_reset_date"))
-        .and_then(Value::as_str)
-        .and_then(|text| {
-            DateTime::parse_from_rfc3339(text)
-                .ok()
-                .map(|date| date.with_timezone(&Utc))
-                .or_else(|| {
-                    NaiveDate::parse_from_str(text, "%Y-%m-%d")
-                        .ok()?
-                        .and_hms_opt(0, 0, 0)
-                        .map(|date| date.and_utc())
-                })
-        });
-    [
-        ("premium_interactions", "premiumInteractions"),
-        ("chat", "chat"),
-    ]
-    .into_iter()
-    .filter_map(|(snake, camel)| {
-        let quotas = quotas?;
-        let quota = quotas.get(snake).or_else(|| quotas.get(camel))?;
-        if quota.get("unlimited").and_then(Value::as_bool) == Some(true) {
-            return None;
-        }
-        let remaining = percent(
-            quota
-                .get("percent_remaining")
-                .or_else(|| quota.get("percentRemaining"))?,
-        )?;
-        Some(Window {
-            label: Some(if snake == "chat" { "Chat" } else { "Premium" }.to_owned()),
-            minutes: 30 * 24 * 60,
-            used_percent: 100 - remaining,
-            resets_at: reset,
-        })
-    })
-    .collect()
 }
 
 fn fetch_opencode(client: &Client) -> ProviderUsage {
@@ -1214,25 +1048,6 @@ mod tests {
             &json!({"primary": {"used_percent": 33, "window_minutes": 10080, "resets_at": 1794834000}}),
         );
         assert_eq!(windows[0].title(), "7 d");
-    }
-
-    #[test]
-    fn copilot_uses_remaining_quota_and_monthly_reset() {
-        let windows = parse_copilot(&json!({
-            "quota_reset_date": "2026-12-01",
-            "quota_snapshots": {
-                "premium_interactions": {"percent_remaining": 73},
-                "chat": {"unlimited": true}
-            }
-        }));
-        assert_eq!(windows.len(), 1);
-        assert_eq!(windows[0].used_percent, 27);
-        assert_eq!(windows[0].title(), "Premium");
-        assert!(windows[0].resets_at.is_some());
-        let camel = parse_copilot(&json!({"quotaSnapshots": {
-            "premiumInteractions": {"percentRemaining": 62}
-        }}));
-        assert_eq!(camel[0].used_percent, 38);
     }
 
     #[test]

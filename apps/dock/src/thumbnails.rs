@@ -82,19 +82,7 @@ impl Thumbnails {
             return;
         };
         let (x, y, width, height) = slot;
-        let source = thumbnail.source;
-        let ratio = if source.cx > 0 && source.cy > 0 {
-            source.cx as f32 / source.cy as f32
-        } else {
-            1.0
-        };
-        let fit = |box_width: f32, box_height: f32| {
-            if ratio >= box_width / box_height {
-                (box_width, box_width / ratio)
-            } else {
-                (box_height * ratio, box_height)
-            }
-        };
+        let fit = |width, height| thumbnail.fit(width, height);
         let (inner_width, inner_height) =
             (width * (1.0 - 2.0 * INSET), height * (1.0 - 2.0 * INSET));
         // Either the band above the badge or the band to its left, whichever
@@ -122,8 +110,51 @@ impl Thumbnails {
             right: (left + fit_width).round() as i32,
             bottom: (top + fit_height).round() as i32,
         };
-        if thumbnail.placed == Some((destination, opacity)) {
-            return;
+        thumbnail.update(destination, opacity);
+    }
+
+    /// Fits the preview with its bottom edge on the caption's common baseline.
+    /// Returns the actual DWM bounds so the hover outline can follow the image.
+    pub fn place_preview(&mut self, hwnd: isize, slot: RECT) -> Option<RECT> {
+        let thumbnail = self.live.get_mut(&hwnd)?;
+        let width = (slot.right - slot.left) as f32;
+        let (w, h) = thumbnail.fit(width, (slot.bottom - slot.top) as f32);
+        let w = w.round().max(1.0) as i32;
+        let h = h.round().max(1.0) as i32;
+        let left = slot.left + ((slot.right - slot.left) - w) / 2;
+        let destination = RECT {
+            left,
+            top: slot.bottom - h,
+            right: left + w,
+            bottom: slot.bottom,
+        };
+        thumbnail.update(destination, 255).then_some(destination)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn placed_bounds(&self, hwnd: isize) -> Option<RECT> {
+        self.live.get(&hwnd)?.placed.map(|(bounds, _)| bounds)
+    }
+}
+
+impl Thumbnail {
+    fn fit(&self, width: f32, height: f32) -> (f32, f32) {
+        let source = self.source;
+        let ratio = if source.cx > 0 && source.cy > 0 {
+            source.cx as f32 / source.cy as f32
+        } else {
+            1.0
+        };
+        if ratio >= width / height {
+            (width, width / ratio)
+        } else {
+            (height * ratio, height)
+        }
+    }
+
+    fn update(&mut self, destination: RECT, opacity: u8) -> bool {
+        if self.placed == Some((destination, opacity)) {
+            return true;
         }
 
         let properties = DWM_THUMBNAIL_PROPERTIES {
@@ -138,10 +169,10 @@ impl Thumbnails {
             ..Default::default()
         };
         // SAFETY: Valid handle and properties structure.
-        unsafe {
-            if DwmUpdateThumbnailProperties(thumbnail.handle, &properties).is_ok() {
-                thumbnail.placed = Some((destination, opacity));
-            }
+        if unsafe { DwmUpdateThumbnailProperties(self.handle, &properties) }.is_err() {
+            return false;
         }
+        self.placed = Some((destination, opacity));
+        true
     }
 }

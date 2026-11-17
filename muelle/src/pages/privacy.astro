@@ -28,7 +28,7 @@ import { site } from "@/data/site";
 
   <h2>2. AI provider usage</h2>
   <p>
-    The menu bar can show available plan limits for Claude Code, Codex, GitHub Copilot,
+    The menu bar can show available plan limits for Claude Code, Codex,
     OpenCode Go, Gemini CLI, or Antigravity. It checks usage only while a supported client is
     running. Gemini Pro and Flash quotas are shown as separate model families when the provider
     supplies them.
@@ -36,13 +36,12 @@ import { site } from "@/data/site";
   <ul>
     <li>
       It reads the sign-in that each command-line client already stores on your computer: Claude Code,
-      Codex, OpenCode, Gemini CLI or Antigravity, and for GitHub Copilot the sign-in of the Copilot CLI or
-      the <code>GH_TOKEN</code> / <code>GITHUB_TOKEN</code> variables. Muelle never decrypts other
+      Codex, OpenCode, Gemini CLI or Antigravity. Muelle never decrypts other
       apps' stored secrets or reads their databases, and does not save or change these credentials.
     </li>
     <li>
       With that sign-in it asks the corresponding provider for available limits every five minutes while the indicator is visible, or when you press Refresh:
-      Anthropic, OpenAI, GitHub, OpenCode, or Google. The sign-in only goes to its own provider.
+      Anthropic, OpenAI, OpenCode, or Google. The sign-in only goes to its own provider.
       Antigravity usage is read from its authenticated local service on <code>127.0.0.1</code>.
       Percentages and reset times stay in memory and are shown in the menu bar.
     </li>

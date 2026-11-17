@@ -30,7 +30,7 @@ en desarrollo activo.
   además de los botones de búsqueda, Vista de tareas y Widgets si los tienes en la barra
   de Windows.
 - Una isla curva en la barra superior con los límites de Claude Code, Codex,
-  GitHub Copilot, OpenCode Go, Gemini CLI y Antigravity. Las cuotas de
+  OpenCode Go, Gemini CLI y Antigravity. Las cuotas de
   Gemini Pro y Flash aparecen por separado cuando están disponibles.
 - App de Ajustes aparte, con cambios en vivo, en español e inglés, y efecto genio configurable.
 - Un proceso guardián devuelve la barra de tareas de Windows si el dock se cierra de forma inesperada.

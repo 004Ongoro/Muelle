@@ -21,7 +21,7 @@ use muelle_shell::{
     appbar::{AppBar, Edge},
     launcher,
     status::{self, AudioWatch, Network, NetworkWatch, Privacy, TaskbarButtons, Volume},
-    system::{self, Battery, Monitor},
+    system::{self, Battery},
     watch::RegistryWatch,
 };
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicIsize, Ordering};
@@ -59,6 +59,7 @@ use windows_numerics::{Vector2, Vector3};
 use crate::{
     app,
     gfx::{Gfx, Ink, LabelBrush},
+    media::{self, Control as MediaControl, Track},
     strings,
     usage::{
         self, ActiveProviders, Monitor as UsageMonitor, Provider, ProviderUsage, Snapshot, State,
@@ -80,6 +81,7 @@ const REVEAL_TIMER: usize = 2;
 /// Posted by the edge hook when the pointer reaches or leaves the top edge.
 const EDGE_ENTER: u32 = WM_APP + 26;
 const EDGE_LEAVE: u32 = WM_APP + 27;
+const MEDIA_CHANGED: u32 = WM_APP + 28;
 
 const CLOCK_TIMER: usize = 1;
 const ISLAND_SINGLE_WIDTH: f32 = 145.0;
@@ -95,7 +97,7 @@ const STATUS_CHANGED: u32 = WM_APP + 21;
 /// Posted by the bar to itself to update from the message loop.
 const TICK: u32 = WM_APP + 22;
 const USAGE_CHANGED: u32 = WM_APP + 23;
-const DISMISS_USAGE: u32 = WM_APP + 24;
+const DISMISS_ISLAND: u32 = WM_APP + 24;
 /// Posted when an app starts or stops using the microphone or camera.
 const PRIVACY_CHANGED: u32 = WM_APP + 25;
 /// `wParam` of WM_SETTINGCHANGE when the work area changes, which every
@@ -103,14 +105,15 @@ const PRIVACY_CHANGED: u32 = WM_APP + 25;
 const SPI_SETWORKAREA: usize = 0x002F;
 /// A `TICK` is already posted.
 static TICK_PENDING: AtomicBool = AtomicBool::new(false);
-static ISLAND_LEFT: AtomicI32 = AtomicI32::new(0);
-static ISLAND_RIGHT: AtomicI32 = AtomicI32::new(0);
+static TRIGGERS_LEFT: AtomicI32 = AtomicI32::new(0);
+static TRIGGERS_RIGHT: AtomicI32 = AtomicI32::new(0);
+static PANEL_LEFT: AtomicI32 = AtomicI32::new(0);
+static PANEL_RIGHT: AtomicI32 = AtomicI32::new(0);
 static BAR_TOP: AtomicI32 = AtomicI32::new(0);
 static BAR_BOTTOM: AtomicI32 = AtomicI32::new(0);
-static HEADER_BOTTOM: AtomicI32 = AtomicI32::new(0);
 static PANEL_BOTTOM: AtomicI32 = AtomicI32::new(0);
-/// The hook exists only while the usage panel is open.
-static USAGE_HOOK_WINDOW: AtomicIsize = AtomicIsize::new(0);
+/// The hook exists only while the island is expanded.
+static ISLAND_HOOK_WINDOW: AtomicIsize = AtomicIsize::new(0);
 /// The hidden bar's window, for the edge hook; 0 while no hook is installed.
 static EDGE_HOOK_WINDOW: AtomicIsize = AtomicIsize::new(0);
 /// The row of the top edge and its span, in screen pixels.
@@ -177,8 +180,56 @@ struct Look {
     usage: Snapshot,
     usage_enabled: bool,
     active_providers: ActiveProviders,
-    expanded: bool,
+    panel: Option<Island>,
     usage_refreshing: bool,
+    track: Option<Track>,
+}
+
+impl Look {
+    fn panel_height(&self) -> f32 {
+        match self.panel {
+            Some(Island::Music) => 148.0,
+            Some(Island::Usage) => 74.0 + self.active_providers.count() as f32 * ISLAND_ROW_HEIGHT,
+            None => 0.0,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Island {
+    Music,
+    Usage,
+}
+
+#[derive(Clone, Copy, Default)]
+struct Span {
+    left: f32,
+    right: f32,
+}
+
+impl Span {
+    fn width(self) -> f32 {
+        self.right - self.left
+    }
+}
+
+#[derive(Clone, Copy)]
+enum IslandAction {
+    Toggle(Island),
+    Media(MediaControl),
+    Refresh,
+}
+
+struct IslandHit {
+    bounds: (f32, f32, f32, f32),
+    action: IslandAction,
+}
+
+impl IslandHit {
+    fn at(&self, x: f32, y: f32) -> bool {
+        let (left, top, right, bottom) = self.bounds;
+        x >= left && x < right && y >= top && y < bottom
+    }
 }
 
 pub struct MenuBar {
@@ -198,11 +249,12 @@ pub struct MenuBar {
     bounds: RECT,
     status: Status,
     usage: Option<UsageMonitor>,
-    expanded: bool,
+    media: Option<media::Watch>,
+    panel: Option<Island>,
     visual_height: i32,
-    island_left: f32,
-    island_right: f32,
-    refresh_button: Option<(f32, f32, f32, f32)>,
+    triggers_span: Span,
+    panel_span: Span,
+    island_hits: Vec<IslandHit>,
     outside_click_hook: Option<HHOOK>,
     /// Watches the top edge while the bar auto-hides.
     edge_watch: Option<EdgeWatch>,
@@ -225,20 +277,17 @@ unsafe extern "system" fn bar_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -
         }
         WM_MOUSEMOVE => {
             let x = (l.0 & 0xFFFF) as i16;
-            app::menu_bar_pointer_moved(f32::from(x));
+            let y = (l.0 >> 16) as i16;
+            app::menu_bar_pointer_moved(f32::from(x), f32::from(y));
         }
         WM_MOUSELEAVE => app::menu_bar_hover(false),
-        DISMISS_USAGE => app::menu_bar_dismiss_usage(),
+        DISMISS_ISLAND => app::menu_bar_dismiss_island(),
         PRIVACY_CHANGED => app::menu_bar_privacy_changed(),
+        MEDIA_CHANGED => app::menu_bar_media_changed(),
         WM_SETCURSOR => {
             let mut point = POINT::default();
             // SAFETY: The point is a valid output for the current pointer location.
-            if unsafe { GetCursorPos(&mut point) }.is_ok()
-                && point.x >= ISLAND_LEFT.load(Ordering::Relaxed)
-                && point.x < ISLAND_RIGHT.load(Ordering::Relaxed)
-                && point.y >= BAR_TOP.load(Ordering::Relaxed)
-                && point.y < HEADER_BOTTOM.load(Ordering::Relaxed)
-            {
+            if unsafe { GetCursorPos(&mut point) }.is_ok() && app::menu_bar_has_action(point) {
                 // SAFETY: The stock hand cursor is owned by Windows.
                 if let Ok(hand) = unsafe { LoadCursorW(None, IDC_HAND) } {
                     unsafe { SetCursor(Some(hand)) };
@@ -252,8 +301,8 @@ unsafe extern "system" fn bar_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -
             let y = (l.0 >> 16) as i16 as i32;
             if y >= BAR_BOTTOM.load(Ordering::Relaxed)
                 && y < PANEL_BOTTOM.load(Ordering::Relaxed)
-                && (x < ISLAND_LEFT.load(Ordering::Relaxed)
-                    || x >= ISLAND_RIGHT.load(Ordering::Relaxed))
+                && (x < PANEL_LEFT.load(Ordering::Relaxed)
+                    || x >= PANEL_RIGHT.load(Ordering::Relaxed))
             {
                 return LRESULT(-1);
             }
@@ -413,18 +462,22 @@ unsafe extern "system" fn outside_click_proc(code: i32, w: WPARAM, l: LPARAM) ->
     {
         // SAFETY: Windows provides an MSLLHOOKSTRUCT for mouse hook actions.
         let point = unsafe { (*(l.0 as *const MSLLHOOKSTRUCT)).pt };
-        if point.x < ISLAND_LEFT.load(Ordering::Relaxed)
-            || point.x >= ISLAND_RIGHT.load(Ordering::Relaxed)
-            || point.y < BAR_TOP.load(Ordering::Relaxed)
-            || point.y >= PANEL_BOTTOM.load(Ordering::Relaxed)
-        {
-            let window = USAGE_HOOK_WINDOW.load(Ordering::Relaxed);
+        let in_triggers = point.y >= BAR_TOP.load(Ordering::Relaxed)
+            && point.y < BAR_BOTTOM.load(Ordering::Relaxed)
+            && point.x >= TRIGGERS_LEFT.load(Ordering::Relaxed)
+            && point.x < TRIGGERS_RIGHT.load(Ordering::Relaxed);
+        let in_panel = point.y >= BAR_BOTTOM.load(Ordering::Relaxed)
+            && point.y < PANEL_BOTTOM.load(Ordering::Relaxed)
+            && point.x >= PANEL_LEFT.load(Ordering::Relaxed)
+            && point.x < PANEL_RIGHT.load(Ordering::Relaxed);
+        if !in_triggers && !in_panel {
+            let window = ISLAND_HOOK_WINDOW.load(Ordering::Relaxed);
             if window != 0 {
                 // SAFETY: The window remains live until the hook is removed in Drop.
                 unsafe {
                     let _ = PostMessageW(
                         Some(HWND(window as *mut _)),
-                        DISMISS_USAGE,
+                        DISMISS_ISLAND,
                         WPARAM(0),
                         LPARAM(0),
                     );
@@ -436,7 +489,7 @@ unsafe extern "system" fn outside_click_proc(code: i32, w: WPARAM, l: LPARAM) ->
     unsafe { CallNextHookEx(None, code, w, l) }
 }
 
-fn rgba(r: u8, g: u8, b: u8, a: u8) -> Color {
+pub(crate) fn rgba(r: u8, g: u8, b: u8, a: u8) -> Color {
     Color {
         A: a,
         R: r,
@@ -445,7 +498,7 @@ fn rgba(r: u8, g: u8, b: u8, a: u8) -> Color {
     }
 }
 
-fn add_visual(
+pub(crate) fn add_visual(
     compositor: &Compositor,
     layers: &VisualCollection,
     brush: &CompositionBrush,
@@ -473,7 +526,7 @@ fn add_visual(
     clippy::too_many_arguments,
     reason = "A rounded shape needs its rectangle, radius and two colors"
 )]
-fn add_rounded_box(
+pub(crate) fn add_rounded_box(
     compositor: &Compositor,
     layers: &VisualCollection,
     x: f32,
@@ -918,11 +971,12 @@ impl MenuBar {
                 privacy: Privacy::default(),
             },
             usage: usage_enabled.then(|| UsageMonitor::new(hwnd.0 as isize, USAGE_CHANGED)),
-            expanded: false,
+            media: media::Watch::start(hwnd, MEDIA_CHANGED),
+            panel: None,
             visual_height: 0,
-            island_left: 0.0,
-            island_right: 0.0,
-            refresh_button: None,
+            triggers_span: Span::default(),
+            panel_span: Span::default(),
+            island_hits: Vec::new(),
             outside_click_hook: None,
             edge_watch: None,
             _network: NetworkWatch::new(hwnd.0 as isize, STATUS_CHANGED),
@@ -967,14 +1021,12 @@ impl MenuBar {
             return Ok(());
         }
         self.usage = enabled.then(|| UsageMonitor::new(self.hwnd.0 as isize, USAGE_CHANGED));
-        self.expanded = false;
         self.refresh(gfx)
     }
 
     /// The pointer reached the top edge or left the bar.
     pub fn hover(&mut self, gfx: &Gfx, inside: bool) -> Result<()> {
-        if !inside && self.expanded {
-            self.expanded = false;
+        if !inside && self.panel.take().is_some() {
             self.refresh(gfx)?;
         }
         if !self.auto_hide || self.revealed == inside {
@@ -996,16 +1048,20 @@ impl MenuBar {
     }
 
     /// Leaving the island sideways still stays inside the full-width bar window.
-    pub fn pointer_moved(&mut self, gfx: &Gfx, x: f32) -> Result<()> {
-        if self.expanded && (x < self.island_left || x >= self.island_right) {
-            self.dismiss_usage(gfx)?;
+    pub fn pointer_moved(&mut self, gfx: &Gfx, x: f32, y: f32) -> Result<()> {
+        let span = if y < (self.bounds.bottom - self.bounds.top) as f32 {
+            self.triggers_span
+        } else {
+            self.panel_span
+        };
+        if self.panel.is_some() && (x < span.left || x >= span.right) {
+            self.dismiss_island(gfx)?;
         }
         self.hover(gfx, true)
     }
 
-    pub fn dismiss_usage(&mut self, gfx: &Gfx) -> Result<()> {
-        if self.expanded {
-            self.expanded = false;
+    pub fn dismiss_island(&mut self, gfx: &Gfx) -> Result<()> {
+        if self.panel.take().is_some() {
             self.refresh(gfx)?;
         }
         Ok(())
@@ -1124,7 +1180,8 @@ impl MenuBar {
     }
 
     fn sync_outside_click_hook(&mut self) -> Result<()> {
-        let needed = self.expanded && self.visible && (!self.auto_hide || self.revealed);
+        let needed =
+            self.panel_span.width() > 0.0 && self.visible && (!self.auto_hide || self.revealed);
         if needed && self.outside_click_hook.is_none() {
             // SAFETY: This process owns the hook procedure and installs the hook
             // only while the panel is visible.
@@ -1137,13 +1194,13 @@ impl MenuBar {
                     0,
                 )?
             };
-            USAGE_HOOK_WINDOW.store(self.hwnd.0 as isize, Ordering::Relaxed);
+            ISLAND_HOOK_WINDOW.store(self.hwnd.0 as isize, Ordering::Relaxed);
             self.outside_click_hook = Some(hook);
         } else if !needed && let Some(hook) = self.outside_click_hook {
             // SAFETY: This hook was installed by this MenuBar.
             unsafe { UnhookWindowsHookEx(hook)? };
             self.outside_click_hook = None;
-            USAGE_HOOK_WINDOW.store(0, Ordering::Relaxed);
+            ISLAND_HOOK_WINDOW.store(0, Ordering::Relaxed);
         }
         Ok(())
     }
@@ -1189,48 +1246,41 @@ impl MenuBar {
     }
 
     pub fn click(&mut self, gfx: &Gfx, x: f32, y: f32) -> Result<()> {
-        if x >= self.island_left && x < self.island_right {
-            let bar_height = self.bounds.bottom as f32 - self.bounds.top as f32;
-            if self.expanded
-                && self
-                    .refresh_button
-                    .is_some_and(|(left, top, right, bottom)| {
-                        x >= left && x < right && y >= top && y < bottom
-                    })
-            {
-                if let Some(usage) = &mut self.usage {
-                    usage.refresh(true);
-                }
-                return self.refresh(gfx);
-            }
-            let header_bottom = if self.expanded {
-                49.0 * self.look.as_ref().map_or(1.0, |look| look.scale)
-            } else {
-                bar_height
-            };
-            if y < header_bottom {
-                self.expanded = !self.expanded;
-                if self.expanded {
-                    if let Some(usage) = &mut self.usage {
-                        usage.refresh(false);
+        if let Some(hit) = self.island_hits.iter().find(|hit| hit.at(x, y)) {
+            match hit.action {
+                IslandAction::Toggle(island) => {
+                    self.panel = toggle_panel(self.panel, island);
+                    if self.panel.is_some() {
+                        let mut track = TRACKMOUSEEVENT {
+                            cbSize: size_of::<TRACKMOUSEEVENT>() as u32,
+                            dwFlags: TME_LEAVE,
+                            hwndTrack: self.hwnd,
+                            dwHoverTime: 0,
+                        };
+                        // SAFETY: `track` describes our live window.
+                        unsafe { TrackMouseEvent(&mut track)? };
                     }
-                    let mut track = TRACKMOUSEEVENT {
-                        cbSize: size_of::<TRACKMOUSEEVENT>() as u32,
-                        dwFlags: TME_LEAVE,
-                        hwndTrack: self.hwnd,
-                        dwHoverTime: 0,
-                    };
-                    // SAFETY: `track` describes our live window.
-                    unsafe { TrackMouseEvent(&mut track)? };
                 }
-                return self.refresh(gfx);
+                IslandAction::Refresh => {
+                    if let Some(usage) = &mut self.usage {
+                        usage.refresh(true);
+                    }
+                }
+                IslandAction::Media(control) => {
+                    if let Some(media) = &self.media
+                        && let Some(track) = self.look.as_ref().and_then(|look| look.track.as_ref())
+                    {
+                        media.send(track, control);
+                    }
+                    return Ok(());
+                }
             }
+            return self.refresh(gfx);
+        }
+        if y >= (self.bounds.bottom - self.bounds.top) as f32 {
             return Ok(());
         }
-        if self.expanded {
-            self.expanded = false;
-            self.refresh(gfx)?;
-        }
+        self.dismiss_island(gfx)?;
         let hit = self
             .zones
             .iter()
@@ -1263,6 +1313,12 @@ impl MenuBar {
         Ok(())
     }
 
+    pub fn has_island_action(&self, point: POINT) -> bool {
+        let x = (point.x - self.bounds.left) as f32;
+        let y = (point.y - self.bounds.top) as f32;
+        self.island_hits.iter().any(|hit| hit.at(x, y))
+    }
+
     /// Redraws the bar if anything it shows has changed.
     pub fn refresh(&mut self, gfx: &Gfx) -> Result<()> {
         let Some(monitor) = system::primary_monitor() else {
@@ -1273,8 +1329,9 @@ impl MenuBar {
         } else {
             ActiveProviders::default()
         };
+        let track = self.media.as_ref().and_then(media::Watch::snapshot);
+        self.panel = available_panel(self.panel, track.is_some(), active_providers.any());
         if !active_providers.any() {
-            self.expanded = false;
             if let Some(usage) = &mut self.usage {
                 usage.mark_inactive();
             }
@@ -1300,28 +1357,40 @@ impl MenuBar {
                 .map_or_else(Snapshot::default, UsageMonitor::snapshot),
             usage_enabled: self.usage.is_some() && active_providers.any(),
             active_providers,
-            expanded: self.expanded,
+            panel: self.panel,
             usage_refreshing: self.usage.as_ref().is_some_and(UsageMonitor::is_refreshing),
+            track,
         };
+        self.apply_look(gfx, look)
+    }
+
+    /// Track changes only need to update the contents of the island.
+    pub fn media_changed(&mut self, gfx: &Gfx) -> Result<()> {
+        let Some(mut look) = self.look.clone() else {
+            return self.refresh(gfx);
+        };
+        look.track = self.media.as_ref().and_then(media::Watch::snapshot);
+        self.panel = available_panel(self.panel, look.track.is_some(), look.usage_enabled);
+        look.panel = self.panel;
+        self.apply_look(gfx, look)
+    }
+
+    fn apply_look(&mut self, gfx: &Gfx, look: Look) -> Result<()> {
         if self.look.as_ref() == Some(&look) {
             return Ok(());
         }
-        self.build(gfx, &monitor, &look)?;
+        self.build(gfx, &look)?;
         self.look = Some(look);
         Ok(())
     }
 
-    fn build(&mut self, gfx: &Gfx, monitor: &Monitor, look: &Look) -> Result<()> {
+    fn build(&mut self, gfx: &Gfx, look: &Look) -> Result<()> {
         let c = &gfx.compositor;
         let scale = look.scale;
         let px = |logical: f32| (logical * scale).round();
-        let screen = monitor.screen;
+        let screen = look.screen;
         let (width, height) = ((screen.right - screen.left) as f32, px(HEIGHT));
-        let visual_height = if look.expanded {
-            px(74.0 + look.active_providers.count() as f32 * ISLAND_ROW_HEIGHT)
-        } else {
-            height
-        };
+        let visual_height = height + px(look.panel_height());
         let ink = if look.light { Ink::Dark } else { Ink::Light };
 
         let root = c.CreateContainerVisual()?;
@@ -1377,7 +1446,14 @@ impl MenuBar {
         self.zones.clear();
         let mut left_end = px(SIDE_MARGIN);
         if !look.app_name.is_empty() {
-            let name = gfx.text_brush(&look.app_name, scale, true, ink)?;
+            let name = gfx.text_brush_fitted(
+                &look.app_name,
+                scale,
+                13.0,
+                true,
+                ink,
+                px(220.0).min(width * 0.22),
+            )?;
             place(&layers, &name, px(SIDE_MARGIN))?;
             left_end += name.width;
         }
@@ -1454,41 +1530,44 @@ impl MenuBar {
             right = left - px(ITEM_GAP);
         }
 
-        if look.usage_enabled {
-            self.draw_island(gfx, look, &layers, width, height, left_end, right)?;
-        } else {
-            self.island_left = 0.0;
-            self.island_right = 0.0;
-            self.refresh_button = None;
-        }
+        self.island_hits.clear();
+        self.triggers_span = Span::default();
+        self.panel_span = Span::default();
+        self.draw_island(gfx, look, &layers, width, height, left_end, right)?;
 
         self.target.SetRoot(&root)?;
         self.root = Some(root);
-        self.visual_height = visual_height as i32;
+        self.visual_height = if self.panel_span.width() > 0.0 {
+            visual_height
+        } else {
+            height
+        } as i32;
         self.bounds = RECT {
             bottom: screen.top + height as i32,
             ..screen
         };
-        ISLAND_LEFT.store(screen.left + self.island_left as i32, Ordering::Relaxed);
-        ISLAND_RIGHT.store(screen.left + self.island_right as i32, Ordering::Relaxed);
-        BAR_TOP.store(screen.top, Ordering::Relaxed);
-        BAR_BOTTOM.store(screen.top + height as i32, Ordering::Relaxed);
-        HEADER_BOTTOM.store(
-            screen.top
-                + if look.expanded {
-                    px(49.0) as i32
-                } else {
-                    height as i32
-                },
+        TRIGGERS_LEFT.store(
+            screen.left + self.triggers_span.left as i32,
             Ordering::Relaxed,
         );
+        TRIGGERS_RIGHT.store(
+            screen.left + self.triggers_span.right as i32,
+            Ordering::Relaxed,
+        );
+        PANEL_LEFT.store(screen.left + self.panel_span.left as i32, Ordering::Relaxed);
+        PANEL_RIGHT.store(
+            screen.left + self.panel_span.right as i32,
+            Ordering::Relaxed,
+        );
+        BAR_TOP.store(screen.top, Ordering::Relaxed);
+        BAR_BOTTOM.store(screen.top + height as i32, Ordering::Relaxed);
         PANEL_BOTTOM.store(screen.top + self.visual_height, Ordering::Relaxed);
         self.place()
     }
 
     #[expect(
         clippy::too_many_arguments,
-        reason = "The island receives the measured bar bounds from the current layout"
+        reason = "The island is laid out between the measured bar items"
     )]
     fn draw_island(
         &mut self,
@@ -1500,296 +1579,794 @@ impl MenuBar {
         left_end: f32,
         right_start: f32,
     ) -> Result<()> {
+        let px = |logical: f32| (logical * look.scale).round();
+        let triggers = trigger_layout(
+            Span {
+                left: left_end + px(8.0),
+                right: right_start - px(8.0),
+            },
+            width / 2.0,
+            look.scale,
+            look.track.is_some(),
+            look.active_providers.count(),
+        );
+        let [(_, music), (_, usage)] = triggers;
+        let (Some(first), Some(last)) = (music.or(usage), usage.or(music)) else {
+            return Ok(());
+        };
+        self.triggers_span = Span {
+            left: first.left,
+            right: last.right,
+        };
+        let geometry = IslandGeometry::new(self.triggers_span, 0.0, look);
+        let compact = island_surface(gfx, look, layers, geometry, bar_height)?;
+        let divider = music
+            .zip(usage)
+            .map(|(music, usage)| ((music.right + usage.left) / 2.0).round());
         let c = &gfx.compositor;
-        let scale = look.scale;
-        let px = |logical: f32| (logical * scale).round();
-        let requested = px(if look.expanded {
-            ISLAND_EXPANDED_WIDTH
-        } else if look.active_providers.count() == 1 {
-            ISLAND_SINGLE_WIDTH
-        } else {
-            134.0 * look.active_providers.count() as f32
-        });
-        let left_limit = left_end + px(8.0);
-        let usable = (right_start - left_limit - px(8.0)).max(px(145.0));
-        let island_width = requested.min(usable);
-        let island_left = ((width - island_width) / 2.0)
-            .max(left_limit)
-            .min((right_start - island_width - px(8.0)).max(left_limit));
-        let island_height = if look.expanded {
-            px(74.0 + look.active_providers.count() as f32 * ISLAND_ROW_HEIGHT)
-        } else {
-            bar_height
-        };
-        self.island_left = island_left;
-        self.island_right = island_left + island_width;
-
-        let island = c.CreateContainerVisual()?;
-        island.SetSize(Vector2 {
-            X: island_width,
-            Y: island_height,
-        })?;
-        island.SetOffset(Vector3 {
-            X: island_left.round(),
-            Y: 0.0,
-            Z: 0.0,
-        })?;
-        let content = island.Children()?;
-        let silhouette = gfx.island_mask(island_width, island_height, scale)?;
-        let shadow = c.CreateDropShadow()?;
-        shadow.SetMask(&silhouette)?;
-        shadow.SetBlurRadius(px(12.0))?;
-        shadow.SetOffset(Vector3 {
-            X: 0.0,
-            Y: px(5.0),
-            Z: 0.0,
-        })?;
-        shadow.SetColor(rgba(0, 0, 0, 92))?;
-        let shadow_host = c.CreateSpriteVisual()?;
-        shadow_host.SetSize(Vector2 {
-            X: island_width,
-            Y: island_height,
-        })?;
-        shadow_host.SetShadow(&shadow)?;
-        content.InsertAtTop(&shadow_host)?;
-
-        let tint = match (look.light, look.glass) {
-            (true, true) => rgba(247, 249, 252, 243),
-            (false, true) => rgba(7, 9, 13, 242),
-            (true, false) => rgba(247, 249, 252, 255),
-            (false, false) => rgba(10, 12, 17, 255),
-        };
-        if look.glass {
-            // The backdrop cannot be used as a mask-brush source. Inset its
-            // rounded clip so it stays entirely inside the curved silhouette.
-            let inset = px(12.0);
-            let glass_width = island_width - inset * 2.0;
-            let glass = c.CreateContainerVisual()?;
-            glass.SetSize(Vector2 {
-                X: glass_width,
-                Y: island_height,
-            })?;
-            glass.SetOffset(Vector3 {
-                X: inset,
-                Y: 0.0,
-                Z: 0.0,
-            })?;
-            let outline = c.CreateRoundedRectangleGeometry()?;
-            outline.SetSize(Vector2 {
-                X: glass_width,
-                Y: island_height + px(22.0),
-            })?;
-            outline.SetOffset(Vector2 {
-                X: 0.0,
-                Y: -px(22.0),
-            })?;
-            outline.SetCornerRadius(Vector2 {
-                X: px(22.0),
-                Y: px(22.0),
-            })?;
-            glass.SetClip(&c.CreateGeometricClipWithGeometry(&outline)?)?;
+        if let Some(x) = divider {
             add_visual(
                 c,
-                &glass.Children()?,
-                &c.CreateHostBackdropBrush()?.cast()?,
-                0.0,
-                0.0,
-                glass_width,
-                island_height,
+                &compact,
+                &c.CreateColorBrushWithColor(geometry.border())?.cast()?,
+                x - self.triggers_span.left,
+                px(7.0),
+                px(1.0).max(1.0),
+                bar_height - 2.0 * px(7.0),
             )?;
-            content.InsertAtTop(&glass)?;
         }
-        let masked = c.CreateMaskBrush()?;
-        masked.SetSource(&c.CreateColorBrushWithColor(tint)?)?;
-        masked.SetMask(&silhouette)?;
+        let providers = island_providers(look);
+        for (kind, span) in triggers {
+            let Some(span) = span else {
+                continue;
+            };
+            let geometry = IslandGeometry::new(span, 0.0, look);
+            let segment = c.CreateContainerVisual()?;
+            segment.SetSize(Vector2::new(geometry.width, bar_height))?;
+            segment.SetOffset(Vector3::new(span.left - self.triggers_span.left, 0.0, 0.0))?;
+            let content = segment.Children()?;
+            compact.InsertAtTop(&segment)?;
+            match kind {
+                Island::Music => {
+                    if let Some(track) = &look.track {
+                        draw_compact_player(
+                            gfx,
+                            &content,
+                            geometry,
+                            geometry.width,
+                            bar_height,
+                            track,
+                        )?;
+                    }
+                }
+                Island::Usage => {
+                    draw_compact_usage(gfx, &content, geometry, bar_height, &providers)?
+                }
+            }
+            let (left, right) = match kind {
+                Island::Music => (span.left, divider.unwrap_or(span.right)),
+                Island::Usage => (divider.unwrap_or(span.left), span.right),
+            };
+            self.island_hits.push(IslandHit {
+                bounds: (left, 0.0, right, bar_height),
+                action: IslandAction::Toggle(kind),
+            });
+            if look.panel != Some(kind) {
+                continue;
+            }
+            self.panel_span = panel_span(
+                span,
+                width,
+                px(match kind {
+                    Island::Music => 360.0,
+                    Island::Usage => ISLAND_EXPANDED_WIDTH,
+                }),
+            );
+            let geometry = IslandGeometry::new(self.panel_span, bar_height, look);
+            let height = px(look.panel_height());
+            let content = island_surface(gfx, look, layers, geometry, height)?;
+            match kind {
+                Island::Music => {
+                    if let Some(track) = &look.track {
+                        self.draw_player(gfx, &content, geometry, track)?;
+                    }
+                }
+                Island::Usage => {
+                    self.draw_usage_panel(gfx, &content, geometry, height, look, &providers)?
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn draw_usage_panel(
+        &mut self,
+        gfx: &Gfx,
+        content: &VisualCollection,
+        geometry: IslandGeometry,
+        island_height: f32,
+        look: &Look,
+        providers: &[IslandProvider<'_>],
+    ) -> Result<()> {
+        let c = &gfx.compositor;
+        let scale = geometry.scale;
+        let px = |v| geometry.px(v);
+        let island_width = geometry.width;
+        let ink = geometry.ink();
+        let title = strings::text();
+        add_panel_text(
+            gfx,
+            content,
+            title.usage_title,
+            px(28.0),
+            px(15.0),
+            scale,
+            13.0,
+            true,
+            ink,
+            0.94,
+        )?;
+        let button_text = if look.usage_refreshing {
+            title.usage_refreshing
+        } else {
+            title.usage_refresh
+        };
+        let button_label = gfx.text_brush_sized(button_text, scale, 11.5, true, ink)?;
+        let button_width = button_label.width + px(20.0);
+        let button_height = px(27.0);
+        let button_left = island_width - px(23.0) - button_width;
+        let button_top = px(8.0);
+        add_rounded_box(
+            c,
+            content,
+            button_left,
+            button_top,
+            button_width,
+            button_height,
+            px(13.5),
+            if look.light {
+                rgba(28, 51, 79, 18)
+            } else {
+                rgba(235, 242, 252, 26)
+            },
+            Some(if look.light {
+                rgba(41, 62, 86, 36)
+            } else {
+                rgba(226, 237, 251, 43)
+            }),
+        )?;
         add_visual(
             c,
-            &content,
-            &masked.cast()?,
-            0.0,
-            0.0,
-            island_width,
-            island_height,
+            content,
+            &button_label.brush.cast()?,
+            button_left + px(10.0),
+            button_top + (button_height - button_label.height) / 2.0,
+            button_label.width,
+            button_label.height,
         )?;
-
-        let ink = if look.light { Ink::Dark } else { Ink::Light };
-        let providers = Provider::ALL
-            .into_iter()
-            .filter(|provider| look.active_providers.has(*provider))
-            .map(|provider| {
-                let accent = match provider {
-                    Provider::Claude => rgba(217, 119, 87, 255),
-                    Provider::Codex => rgba(135, 190, 245, 255),
-                    Provider::Copilot => rgba(147, 164, 186, 255),
-                    Provider::OpenCode => rgba(132, 196, 166, 255),
-                    Provider::Gemini => rgba(111, 146, 255, 255),
-                };
-                (provider, provider.name(), look.usage.get(provider), accent)
-            })
-            .collect::<Vec<_>>();
-        if look.expanded {
-            let title = strings::text();
-            add_panel_text(
+        self.island_hits.push(geometry.hit(
+            button_left,
+            button_top,
+            button_width,
+            button_height,
+            IslandAction::Refresh,
+        ));
+        for (index, (provider, usage, accent)) in providers.iter().enumerate() {
+            draw_usage_card(
                 gfx,
-                &content,
-                title.usage_title,
-                px(28.0),
-                px(15.0),
+                content,
+                *provider,
+                usage,
+                *accent,
                 scale,
-                13.0,
-                true,
-                ink,
-                0.94,
+                look.light,
+                island_width,
+                px(53.0 + index as f32 * ISLAND_ROW_HEIGHT),
             )?;
-            let button_text = if look.usage_refreshing {
-                title.usage_refreshing
-            } else {
-                title.usage_refresh
-            };
-            let button_label = gfx.text_brush_sized(button_text, scale, 11.5, true, ink)?;
-            let button_width = button_label.width + px(20.0);
-            let button_height = px(27.0);
-            let button_left = island_width - px(23.0) - button_width;
-            let button_top = px(8.0);
-            add_rounded_box(
-                c,
-                &content,
-                button_left,
-                button_top,
-                button_width,
-                button_height,
-                px(13.5),
-                if look.light {
-                    rgba(28, 51, 79, 18)
-                } else {
-                    rgba(235, 242, 252, 26)
-                },
-                Some(if look.light {
-                    rgba(41, 62, 86, 36)
-                } else {
-                    rgba(226, 237, 251, 43)
-                }),
-            )?;
+        }
+        let newest_age = providers
+            .iter()
+            .filter_map(|provider| provider.1.age_minutes())
+            .min();
+        if let Some(minutes) = newest_age {
+            let status = format!("{} {minutes} min", title.usage_updated);
+            let label = gfx.text_brush_sized(&status, scale, 11.0, false, ink)?;
             add_visual(
                 c,
-                &content,
-                &button_label.brush.cast()?,
-                button_left + px(10.0),
-                button_top + (button_height - button_label.height) / 2.0,
-                button_label.width,
-                button_label.height,
-            )?;
-            self.refresh_button = Some((
-                island_left + button_left,
-                button_top,
-                island_left + button_left + button_width,
-                button_top + button_height,
-            ));
-            for (index, (provider, _name, usage, accent)) in providers.iter().enumerate() {
-                draw_usage_card(
-                    gfx,
-                    &content,
-                    *provider,
-                    usage,
-                    *accent,
-                    scale,
-                    look.light,
-                    island_width,
-                    px(53.0 + index as f32 * ISLAND_ROW_HEIGHT),
+                content,
+                &label.brush.cast()?,
+                (island_width - label.width) / 2.0,
+                island_height - px(21.0),
+                label.width,
+                label.height,
+            )?
+            .SetOpacity(0.53)?;
+        }
+        Ok(())
+    }
+
+    fn draw_player(
+        &mut self,
+        gfx: &Gfx,
+        layers: &VisualCollection,
+        geometry: IslandGeometry,
+        track: &Track,
+    ) -> Result<()> {
+        let px = |v| geometry.px(v);
+        let c = &gfx.compositor;
+        let ink = geometry.ink();
+        add_panel_text(
+            gfx,
+            layers,
+            strings::text().media_title,
+            px(26.0),
+            px(15.0),
+            geometry.scale,
+            12.5,
+            true,
+            ink,
+            0.88,
+        )?;
+        let chevron = gfx.glyph_brush(&[('', 0.72)], geometry.scale, ink)?;
+        let x = geometry.width - px(22.0) - chevron.width;
+        add_visual(
+            c,
+            layers,
+            &chevron.brush.cast()?,
+            x,
+            (px(46.0) - chevron.height) / 2.0,
+            chevron.width,
+            chevron.height,
+        )?;
+        self.island_hits.push(geometry.hit(
+            x - px(6.0),
+            px(7.0),
+            chevron.width + px(12.0),
+            px(32.0),
+            IslandAction::Toggle(Island::Music),
+        ));
+        add_rounded_box(
+            c,
+            layers,
+            px(14.0),
+            px(45.0),
+            geometry.width - px(28.0),
+            px(91.0),
+            px(16.0),
+            geometry.fill(),
+            Some(geometry.border()),
+        )?;
+        let tile = px(34.0);
+        add_rounded_box(
+            c,
+            layers,
+            px(25.0),
+            px(54.0),
+            tile,
+            tile,
+            px(10.0),
+            geometry.selection(),
+            None,
+        )?;
+        let note = gfx.glyph_brush(&[('\u{E8D6}', 1.0)], geometry.scale, ink)?;
+        add_visual(
+            c,
+            layers,
+            &note.brush.cast()?,
+            px(25.0) + (tile - note.width) / 2.0,
+            px(54.0) + (tile - note.height) / 2.0,
+            note.width,
+            note.height,
+        )?;
+        let available = geometry.width - px(91.0);
+        let title = gfx.text_brush_fitted(
+            track_title(track),
+            geometry.scale,
+            13.0,
+            true,
+            ink,
+            available,
+        )?;
+        let title_y = if track.artist.trim().is_empty() {
+            px(71.0) - title.height / 2.0
+        } else {
+            px(55.0)
+        };
+        add_visual(
+            c,
+            layers,
+            &title.brush.cast()?,
+            px(69.0),
+            title_y,
+            title.width,
+            title.height,
+        )?;
+        if !track.artist.trim().is_empty() {
+            let artist =
+                gfx.text_brush_fitted(&track.artist, geometry.scale, 11.0, false, ink, available)?;
+            add_visual(
+                c,
+                layers,
+                &artist.brush.cast()?,
+                px(69.0),
+                px(73.0),
+                artist.width,
+                artist.height,
+            )?
+            .SetOpacity(0.69)?;
+        }
+        let center = geometry.width / 2.0;
+        for (control, glyph, enabled, offset) in [
+            (MediaControl::Previous, '\u{E892}', track.previous, -44.0),
+            (
+                MediaControl::PlayPause,
+                if track.playing {
+                    '\u{E769}'
+                } else {
+                    '\u{E768}'
+                },
+                track.toggle,
+                0.0,
+            ),
+            (MediaControl::Next, '\u{E893}', track.next, 44.0),
+        ] {
+            let size = px(34.0);
+            let x = center + px(offset) - size / 2.0;
+            let y = px(96.0);
+            let main = matches!(control, MediaControl::PlayPause);
+            if main {
+                add_rounded_box(
+                    c,
+                    layers,
+                    x,
+                    y,
+                    size,
+                    size,
+                    size / 2.0,
+                    geometry.selection(),
+                    Some(geometry.border()),
                 )?;
             }
-            let newest_age = providers
-                .iter()
-                .filter_map(|provider| provider.2.age_minutes())
-                .min();
-            if let Some(minutes) = newest_age {
-                let status = format!("{} {minutes} min", title.usage_updated);
-                let label = gfx.text_brush_sized(&status, scale, 11.0, false, ink)?;
-                add_visual(
-                    c,
-                    &content,
-                    &label.brush.cast()?,
-                    (island_width - label.width) / 2.0,
-                    island_height - px(21.0),
-                    label.width,
-                    label.height,
-                )?
-                .SetOpacity(0.53)?;
-            }
-        } else {
-            self.refresh_button = None;
-            let half = island_width / providers.len() as f32;
-            for (index, (provider, _name, usage, accent)) in providers.iter().enumerate() {
-                let icon_size = px(18.0) as u32;
-                let start = index as f32 * half
-                    + if half < px(84.0) {
-                        (half - icon_size as f32) / 2.0
-                    } else {
-                        px(21.0)
-                    };
-                if let Some(image) = usage::logo(*provider) {
-                    let image_brush = gfx.icon_brush(image, icon_size)?;
-                    let brush: CompositionBrush =
-                        if !matches!(provider, Provider::Claude | Provider::Gemini) && look.light {
-                            let tinted = c.CreateMaskBrush()?;
-                            tinted.SetMask(&image_brush)?;
-                            tinted
-                                .SetSource(&c.CreateColorBrushWithColor(rgba(27, 34, 45, 255))?)?;
-                            tinted.cast()?
-                        } else {
-                            image_brush.cast()?
-                        };
-                    add_visual(
-                        c,
-                        &content,
-                        &brush,
-                        start,
-                        (bar_height - icon_size as f32) / 2.0,
-                        icon_size as f32,
-                        icon_size as f32,
-                    )?;
-                }
-                let percent = usage.main_window().map_or("—".to_owned(), |window| {
-                    format!("{}%", window.used_percent)
-                });
-                if half > px(106.0) {
-                    add_text(
-                        gfx,
-                        &content,
-                        &percent,
-                        start + px(25.0),
-                        px(6.0),
-                        scale,
-                        true,
-                        ink,
-                    )?;
-                }
-                if half >= px(84.0) {
-                    let ring = gfx.usage_ring(
-                        usage.main_window().map(|window| window.used_percent),
-                        scale,
-                        *accent,
-                    )?;
-                    add_visual(
-                        c,
-                        &content,
-                        &ring.brush.cast()?,
-                        (index + 1) as f32 * half - px(16.0) - ring.width,
-                        (bar_height - ring.height) / 2.0,
-                        ring.width,
-                        ring.height,
-                    )?;
-                }
+            let symbol = gfx.glyph_brush(&[(glyph, 1.0)], geometry.scale, ink)?;
+            add_visual(
+                c,
+                layers,
+                &symbol.brush.cast()?,
+                x + (size - symbol.width) / 2.0,
+                y + (size - symbol.height) / 2.0,
+                symbol.width,
+                symbol.height,
+            )?
+            .SetOpacity(if enabled { 1.0 } else { 0.30 })?;
+            if enabled {
+                self.island_hits
+                    .push(geometry.hit(x, y, size, size, IslandAction::Media(control)));
             }
         }
-        layers.InsertAtTop(&island)?;
         Ok(())
     }
 }
 
+#[derive(Clone, Copy)]
+struct IslandGeometry {
+    left: f32,
+    top: f32,
+    width: f32,
+    scale: f32,
+    light: bool,
+}
+
+impl IslandGeometry {
+    fn new(span: Span, top: f32, look: &Look) -> Self {
+        Self {
+            left: span.left,
+            top,
+            width: span.width(),
+            scale: look.scale,
+            light: look.light,
+        }
+    }
+
+    fn hit(self, x: f32, y: f32, width: f32, height: f32, action: IslandAction) -> IslandHit {
+        let left = self.left + x;
+        let top = self.top + y;
+        IslandHit {
+            bounds: (left, top, left + width, top + height),
+            action,
+        }
+    }
+
+    fn px(self, logical: f32) -> f32 {
+        (logical * self.scale).round()
+    }
+    fn ink(self) -> Ink {
+        if self.light { Ink::Dark } else { Ink::Light }
+    }
+    fn fill(self) -> Color {
+        if self.light {
+            rgba(35, 63, 96, 15)
+        } else {
+            rgba(223, 237, 255, 17)
+        }
+    }
+    fn border(self) -> Color {
+        if self.light {
+            rgba(35, 57, 83, 31)
+        } else {
+            rgba(223, 237, 255, 37)
+        }
+    }
+    fn selection(self) -> Color {
+        if self.light {
+            rgba(198, 221, 250, 255)
+        } else {
+            rgba(70, 98, 136, 180)
+        }
+    }
+}
+
+fn toggle_panel(open: Option<Island>, clicked: Island) -> Option<Island> {
+    (open != Some(clicked)).then_some(clicked)
+}
+
+fn available_panel(open: Option<Island>, music: bool, usage: bool) -> Option<Island> {
+    open.filter(|island| match island {
+        Island::Music => music,
+        Island::Usage => usage,
+    })
+}
+
+fn trigger_layout(
+    bounds: Span,
+    center: f32,
+    scale: f32,
+    music: bool,
+    providers: usize,
+) -> [(Island, Option<Span>); 2] {
+    let px = |v: f32| (v * scale).round();
+    let mut result = [(Island::Music, None), (Island::Usage, None)];
+    let gap = if music && providers > 0 { px(8.0) } else { 0.0 };
+    let music_width = if music { px(214.0) } else { 0.0 };
+    let usage_width = match providers {
+        0 => 0.0,
+        1 => px(ISLAND_SINGLE_WIDTH),
+        count => px(134.0 * count as f32),
+    };
+    let total = music_width + usage_width;
+    let available = (bounds.width() - gap).min(total);
+    if total == 0.0 || available < px(if gap > 0.0 { 85.0 } else { 42.0 }) {
+        return result;
+    }
+    let music_width = if gap > 0.0 {
+        (available * music_width / total)
+            .round()
+            .clamp(px(42.0), available - px(42.0))
+    } else if music {
+        available
+    } else {
+        0.0
+    };
+    let left = (center - (available + gap) / 2.0)
+        .clamp(
+            bounds.left,
+            (bounds.right - available - gap).max(bounds.left),
+        )
+        .round();
+    if music {
+        result[0].1 = Some(Span {
+            left,
+            right: left + music_width,
+        });
+    }
+    if providers > 0 {
+        result[1].1 = Some(Span {
+            left: left + music_width + gap,
+            right: left + available + gap,
+        });
+    }
+    result
+}
+
+fn panel_span(trigger: Span, screen_width: f32, desired: f32) -> Span {
+    let width = desired.max(trigger.width()).min(screen_width);
+    let left = ((trigger.left + trigger.right - width) / 2.0)
+        .clamp(0.0, screen_width - width)
+        .round();
+    Span {
+        left,
+        right: left + width,
+    }
+}
+
+type IslandProvider<'a> = (Provider, &'a ProviderUsage, Color);
+
+fn island_providers(look: &Look) -> Vec<IslandProvider<'_>> {
+    Provider::ALL
+        .into_iter()
+        .filter(|provider| look.active_providers.has(*provider))
+        .map(|provider| {
+            let accent = match provider {
+                Provider::Claude => rgba(217, 119, 87, 255),
+                Provider::Codex => rgba(135, 190, 245, 255),
+                Provider::OpenCode => rgba(132, 196, 166, 255),
+                Provider::Gemini => rgba(111, 146, 255, 255),
+            };
+            (provider, look.usage.get(provider), accent)
+        })
+        .collect()
+}
+
+fn island_surface(
+    gfx: &Gfx,
+    look: &Look,
+    layers: &VisualCollection,
+    geometry: IslandGeometry,
+    island_height: f32,
+) -> Result<VisualCollection> {
+    let c = &gfx.compositor;
+    let px = |v| geometry.px(v);
+    let island_left = geometry.left;
+    let island_width = geometry.width;
+    let scale = geometry.scale;
+    let island = c.CreateContainerVisual()?;
+    island.SetSize(Vector2 {
+        X: island_width,
+        Y: island_height,
+    })?;
+    island.SetOffset(Vector3 {
+        X: island_left.round(),
+        Y: geometry.top,
+        Z: 0.0,
+    })?;
+    let content = island.Children()?;
+    let attached = geometry.top == 0.0;
+    let silhouette = gfx.island_mask(island_width, island_height, scale, attached)?;
+    let shadow = c.CreateDropShadow()?;
+    shadow.SetMask(&silhouette)?;
+    shadow.SetBlurRadius(px(12.0))?;
+    shadow.SetOffset(Vector3 {
+        X: 0.0,
+        Y: px(5.0),
+        Z: 0.0,
+    })?;
+    shadow.SetColor(rgba(0, 0, 0, 92))?;
+    let shadow_host = c.CreateSpriteVisual()?;
+    shadow_host.SetSize(Vector2 {
+        X: island_width,
+        Y: island_height,
+    })?;
+    shadow_host.SetShadow(&shadow)?;
+    content.InsertAtTop(&shadow_host)?;
+
+    let tint = match (look.light, look.glass) {
+        (true, true) => rgba(247, 249, 252, 243),
+        (false, true) => rgba(7, 9, 13, 242),
+        (true, false) => rgba(247, 249, 252, 255),
+        (false, false) => rgba(10, 12, 17, 255),
+    };
+    if look.glass {
+        // The backdrop cannot be used as a mask-brush source. Inset its
+        // rounded clip so it stays entirely inside the curved silhouette.
+        let inset = if attached {
+            (12.0 * scale)
+                .min(island_width / 5.0)
+                .min(island_height / 2.0)
+        } else {
+            0.0
+        };
+        let glass_width = island_width - inset * 2.0;
+        let glass = c.CreateContainerVisual()?;
+        glass.SetSize(Vector2 {
+            X: glass_width,
+            Y: island_height,
+        })?;
+        glass.SetOffset(Vector3 {
+            X: inset,
+            Y: 0.0,
+            Z: 0.0,
+        })?;
+        let outline = c.CreateRoundedRectangleGeometry()?;
+        let lift = if attached { px(22.0) } else { 0.0 };
+        let radius = if attached { px(22.0) } else { px(18.0) };
+        outline.SetSize(Vector2 {
+            X: glass_width,
+            Y: island_height + lift,
+        })?;
+        outline.SetOffset(Vector2 { X: 0.0, Y: -lift })?;
+        outline.SetCornerRadius(Vector2 {
+            X: radius,
+            Y: radius,
+        })?;
+        glass.SetClip(&c.CreateGeometricClipWithGeometry(&outline)?)?;
+        add_visual(
+            c,
+            &glass.Children()?,
+            &c.CreateHostBackdropBrush()?.cast()?,
+            0.0,
+            0.0,
+            glass_width,
+            island_height,
+        )?;
+        content.InsertAtTop(&glass)?;
+    }
+    let masked = c.CreateMaskBrush()?;
+    masked.SetSource(&c.CreateColorBrushWithColor(tint)?)?;
+    masked.SetMask(&silhouette)?;
+    add_visual(
+        c,
+        &content,
+        &masked.cast()?,
+        0.0,
+        0.0,
+        island_width,
+        island_height,
+    )?;
+
+    layers.InsertAtTop(&island)?;
+    Ok(content)
+}
+
+fn draw_compact_usage(
+    gfx: &Gfx,
+    content: &VisualCollection,
+    geometry: IslandGeometry,
+    bar_height: f32,
+    providers: &[IslandProvider<'_>],
+) -> Result<()> {
+    let c = &gfx.compositor;
+    let px = |v| geometry.px(v);
+    let ink = geometry.ink();
+    let scale = geometry.scale;
+    let inset = px(13.0);
+    let half = (geometry.width - 2.0 * inset) / providers.len().max(1) as f32;
+    if half < px(20.0) {
+        let icon = gfx.glyph_brush(&[('\u{E9D9}', 1.0)], scale, ink)?;
+        add_visual(
+            c,
+            content,
+            &icon.brush.cast()?,
+            (geometry.width - icon.width) / 2.0,
+            (bar_height - icon.height) / 2.0,
+            icon.width,
+            icon.height,
+        )?;
+        return Ok(());
+    }
+    for (index, (provider, usage, accent)) in providers.iter().enumerate() {
+        // When space is tight the full list is still available in the panel.
+        if half < px(20.0) {
+            break;
+        }
+        let icon_size = px(18.0) as u32;
+        let start = inset
+            + index as f32 * half
+            + if half < px(84.0) {
+                (half - icon_size as f32) / 2.0
+            } else {
+                px(21.0)
+            };
+        if let Some(image) = usage::logo(*provider) {
+            let image_brush = gfx.icon_brush(image, icon_size)?;
+            let brush: CompositionBrush =
+                if !matches!(provider, Provider::Claude | Provider::Gemini) && geometry.light {
+                    let tinted = c.CreateMaskBrush()?;
+                    tinted.SetMask(&image_brush)?;
+                    tinted.SetSource(&c.CreateColorBrushWithColor(rgba(27, 34, 45, 255))?)?;
+                    tinted.cast()?
+                } else {
+                    image_brush.cast()?
+                };
+            add_visual(
+                c,
+                content,
+                &brush,
+                start,
+                (bar_height - icon_size as f32) / 2.0,
+                icon_size as f32,
+                icon_size as f32,
+            )?;
+        }
+        let percent = usage.main_window().map_or("—".to_owned(), |window| {
+            format!("{}%", window.used_percent)
+        });
+        if half > px(106.0) {
+            add_text(
+                gfx,
+                content,
+                &percent,
+                start + px(25.0),
+                px(6.0),
+                scale,
+                true,
+                ink,
+            )?;
+        }
+        if half >= px(84.0) {
+            let ring = gfx.usage_ring(
+                usage.main_window().map(|window| window.used_percent),
+                scale,
+                *accent,
+            )?;
+            add_visual(
+                c,
+                content,
+                &ring.brush.cast()?,
+                inset + (index + 1) as f32 * half - px(16.0) - ring.width,
+                (bar_height - ring.height) / 2.0,
+                ring.width,
+                ring.height,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn track_title(track: &Track) -> &str {
+    if track.title.trim().is_empty() {
+        strings::text().media_title
+    } else {
+        &track.title
+    }
+}
+
+fn draw_compact_player(
+    gfx: &Gfx,
+    layers: &VisualCollection,
+    geometry: IslandGeometry,
+    width: f32,
+    height: f32,
+    track: &Track,
+) -> Result<()> {
+    let c = &gfx.compositor;
+    let px = |v| geometry.px(v);
+    let ink = geometry.ink();
+    let note = gfx.glyph_brush(
+        &[('\u{E8D6}', if track.playing { 1.0 } else { 0.66 })],
+        geometry.scale,
+        ink,
+    )?;
+    let x = px(23.0) + note.width;
+    let show_title = width > x + px(18.0);
+    let note_x = if show_title {
+        px(18.0)
+    } else {
+        (width - note.width) / 2.0
+    };
+    add_visual(
+        c,
+        layers,
+        &note.brush.cast()?,
+        note_x,
+        (height - note.height) / 2.0,
+        note.width,
+        note.height,
+    )?;
+    if show_title {
+        let label = gfx.text_brush_fitted(
+            track_title(track),
+            geometry.scale,
+            11.5,
+            true,
+            ink,
+            width - x - px(13.0),
+        )?;
+        add_visual(
+            c,
+            layers,
+            &label.brush.cast()?,
+            x,
+            (height - label.height) / 2.0,
+            label.width,
+            label.height,
+        )?;
+    }
+    Ok(())
+}
+
 impl Drop for MenuBar {
     fn drop(&mut self) {
-        USAGE_HOOK_WINDOW.store(0, Ordering::Relaxed);
+        self.media = None;
+        ISLAND_HOOK_WINDOW.store(0, Ordering::Relaxed);
         EDGE_HOOK_WINDOW.store(0, Ordering::Relaxed);
         self.edge_watch = None;
         if let Some(hook) = self.outside_click_hook.take() {
@@ -1804,5 +2381,58 @@ impl Drop for MenuBar {
         unsafe {
             let _ = DestroyWindow(self.hwnd);
         }
+    }
+}
+
+#[cfg(test)]
+mod island_tests {
+    use super::*;
+
+    #[test]
+    fn clicking_usage_replaces_music_and_clicking_again_closes_it() {
+        let open = toggle_panel(Some(Island::Music), Island::Usage);
+        assert_eq!(open, Some(Island::Usage));
+        assert_eq!(toggle_panel(open, Island::Usage), None);
+    }
+
+    #[test]
+    fn usage_panel_covers_the_last_provider_even_when_the_trigger_is_wide() {
+        let screen = 1920.0;
+        let triggers = trigger_layout(
+            Span {
+                left: 210.0,
+                right: 1540.0,
+            },
+            screen / 2.0,
+            1.25,
+            true,
+            5,
+        );
+        let Some(usage) = triggers[1].1 else {
+            panic!("Usage trigger should fit");
+        };
+        let panel = panel_span(usage, screen, 550.0);
+        assert!(panel.left <= usage.left && panel.right >= usage.right);
+    }
+
+    #[test]
+    fn narrow_bar_still_gives_each_trigger_its_own_clickable_span() {
+        let bounds = Span {
+            left: 200.0,
+            right: 390.0,
+        };
+        let [(_, Some(music)), (_, Some(usage))] = trigger_layout(bounds, 300.0, 1.5, true, 3)
+        else {
+            panic!("Both triggers should fit");
+        };
+        assert!(
+            music.left >= bounds.left && music.right < usage.left && usage.right <= bounds.right
+        );
+    }
+
+    #[test]
+    fn losing_a_session_closes_its_panel_without_opening_the_other() {
+        assert_eq!(available_panel(Some(Island::Music), false, true), None);
+        assert_eq!(available_panel(Some(Island::Usage), true, false), None);
     }
 }

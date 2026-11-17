@@ -19,7 +19,9 @@ use anyhow::Result;
 use windows::{
     UI::{
         Color,
-        Composition::{ContainerVisual, Desktop::DesktopWindowTarget, ShapeVisual, Visual},
+        Composition::{
+            ContainerVisual, Desktop::DesktopWindowTarget, ShapeVisual, Visual, VisualCollection,
+        },
     },
     Win32::{
         Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM},
@@ -222,32 +224,7 @@ impl Popup {
         let root = c.CreateContainerVisual()?;
         root.SetSize(Vector2::new(width, height))?;
         let layers = root.Children()?;
-        // As the dock and the menu bar: frosted where Windows allows it,
-        // solid otherwise.
-        let tint = match (dark, glass) {
-            (true, true) => rgba(38, 38, 40, 175),
-            (false, true) => rgba(246, 246, 248, 215),
-            (true, false) => rgba(44, 44, 46, 255),
-            (false, false) => rgba(240, 240, 242, 255),
-        };
-        if glass {
-            add_sprite(
-                &layers,
-                c.CreateHostBackdropBrush()?.cast()?,
-                0.0,
-                0.0,
-                width,
-                height,
-            )?;
-        }
-        add_sprite(
-            &layers,
-            c.CreateColorBrushWithColor(tint)?.cast()?,
-            0.0,
-            0.0,
-            width,
-            height,
-        )?;
+        draw_popup_background(&layers, dark, glass, width, height)?;
 
         let selection = c.CreateShapeVisual()?;
         let selection_shape = c.CreateRoundedRectangleGeometry()?;
@@ -659,35 +636,79 @@ fn create_window(dark: bool) -> Result<HWND> {
             Some(instance.into()),
             None,
         )?;
-        // Without this, the system backdrop brush appears black.
-        let enable = BOOL::from(true);
+        apply_popup_frame(hwnd, dark);
+        Ok(hwnd)
+    }
+}
+
+/// Applies the native frame used by dock popups. Returns whether DWM
+/// accepted the corner preference so callers can provide a fallback.
+pub(crate) fn apply_popup_frame(hwnd: HWND, dark: bool) -> bool {
+    let enable = BOOL::from(true);
+    let round = DWMWCP_ROUND;
+    let border = if dark {
+        COLORREF(0x0058_5654)
+    } else {
+        COLORREF(0x00C8_C6C4)
+    };
+    // SAFETY: Attribute values have the expected type and size; hwnd is a
+    // live window owned by the caller. Older systems can reject attributes.
+    unsafe {
         let _ = DwmSetWindowAttribute(
             hwnd,
             DWMWA_USE_HOSTBACKDROPBRUSH,
             (&raw const enable).cast(),
-            size_of::<BOOL>() as u32,
+            size_of_val(&enable) as u32,
         );
-        // Rounded with a hairline border on Windows 11; ignored on Windows 10.
-        let round = DWMWCP_ROUND;
-        let _ = DwmSetWindowAttribute(
+        let rounded = DwmSetWindowAttribute(
             hwnd,
             DWMWA_WINDOW_CORNER_PREFERENCE,
             (&raw const round).cast(),
             size_of_val(&round) as u32,
-        );
-        let border = if dark {
-            COLORREF(0x0058_5654)
-        } else {
-            COLORREF(0x00C8_C6C4)
-        };
+        )
+        .is_ok();
         let _ = DwmSetWindowAttribute(
             hwnd,
             DWMWA_BORDER_COLOR,
             (&raw const border).cast(),
-            size_of::<COLORREF>() as u32,
+            size_of_val(&border) as u32,
         );
-        Ok(hwnd)
+        rounded
     }
+}
+
+pub(crate) fn draw_popup_background(
+    layers: &VisualCollection,
+    dark: bool,
+    glass: bool,
+    width: f32,
+    height: f32,
+) -> Result<()> {
+    let tint = match (dark, glass) {
+        (true, true) => rgba(38, 38, 40, 175),
+        (false, true) => rgba(246, 246, 248, 215),
+        (true, false) => rgba(44, 44, 46, 255),
+        (false, false) => rgba(240, 240, 242, 255),
+    };
+    let compositor = layers.Compositor()?;
+    if glass {
+        add_sprite(
+            layers,
+            compositor.CreateHostBackdropBrush()?.cast()?,
+            0.0,
+            0.0,
+            width,
+            height,
+        )?;
+    }
+    add_sprite(
+        layers,
+        compositor.CreateColorBrushWithColor(tint)?.cast()?,
+        0.0,
+        0.0,
+        width,
+        height,
+    )
 }
 
 unsafe extern "system" fn menu_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LRESULT {

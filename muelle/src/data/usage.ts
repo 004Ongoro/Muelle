@@ -1,6 +1,5 @@
 import claude from "@/assets/usage/claude.svg";
 import codex from "@/assets/usage/codex.svg";
-import copilot from "@/assets/usage/copilot.svg";
 import gemini from "@/assets/usage/gemini.svg";
 import opencode from "@/assets/usage/opencode.svg";
 
@@ -35,13 +34,6 @@ export const usageProviders: UsageProvider[] = [
     secondary: { label: "7 d", used: 41, resets: "Resets Nov 21" },
   },
   {
-    name: "GitHub Copilot",
-    logo: copilot,
-    color: "#93a4ba",
-    primary: { label: "Premium", used: 32, resets: "Resets Nov 30" },
-    secondary: { label: "Chat", used: 74, resets: "Resets Nov 30" },
-  },
-  {
     name: "OpenCode Go",
     logo: opencode,
     color: "#84c4a6",
@@ -60,13 +52,13 @@ export const usageProviders: UsageProvider[] = [
 export const usageIntro = {
   eyebrow: "AI usage",
   title: "AI plan usage, at a glance.",
-  lead: "Muelle shows available limits for Claude Code, Codex, GitHub Copilot, OpenCode Go, and Gemini CLI or Antigravity. Gemini Pro and Flash quotas appear separately when available.",
+  lead: "Muelle shows available limits for Claude Code, Codex, OpenCode Go, and Gemini CLI or Antigravity. Gemini Pro and Flash quotas appear separately when available.",
 } as const;
 
 export const usageFacts = [
   {
     title: "Only while you use them",
-    body: "The island recognizes five clients: Claude Code, Codex, GitHub Copilot, OpenCode Go, and Gemini CLI or Antigravity.",
+    body: "The island recognizes four clients: Claude Code, Codex, OpenCode Go, and Gemini CLI or Antigravity.",
   },
   {
     title: "Your existing session",

@@ -387,11 +387,28 @@ pub fn activate(windows: &[isize]) {
         else {
             return;
         };
-        if IsIconic(front).as_bool() {
-            let _ = ShowWindowAsync(front, SW_RESTORE);
-            return;
-        }
+        // The focus first, then the restore. When the dock is not allowed to
+        // take the foreground (the genie ends a moment after the click),
+        // Windows places a window it restores behind the active one: it
+        // showed for an instant and was covered again.
         bring_to_front(front);
+        if IsIconic(front).as_bool() && !ShowWindowAsync(front, SW_RESTORE).as_bool() {
+            // Windows refuses it for an app running as administrator (Task
+            // Manager, for one); what Alt+Tab uses restores it anyway.
+            windows::Win32::UI::WindowsAndMessaging::SwitchToThisWindow(front, true);
+        }
+        // Asked for outright as well, after the restore: the focus alone
+        // does not always raise the window. Posted, so a busy app cannot
+        // block the dock.
+        let _ = SetWindowPos(
+            front,
+            Some(HWND_TOP),
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_ASYNCWINDOWPOS,
+        );
     }
 }
 

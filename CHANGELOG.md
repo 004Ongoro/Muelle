@@ -8,8 +8,18 @@ copia la sección de la versión que se publica a la release de GitHub.
 
 ## [Unreleased]
 
+## [0.1.9]
+
 ### English
 
+- Fixed: bringing back a minimized app from the dock could leave its window
+  behind the one in front, as if it had closed again (Warp, for one). Since
+  0.1.8 the dock restored the window without taking the focus first, and
+  Windows then places it behind the active window.
+- GitHub Copilot usage was removed from the menu bar island. Its sign-in is
+  only stored encrypted, and decrypting another app's secrets is what made
+  antivirus programs flag Muelle; Muelle no longer reads the Windows
+  Credential Manager either.
 - Fixed: some antivirus programs flagged Muelle 0.1.6–0.1.8 as a trojan and
   deleted it, often right after updating. Two things looked like malware: to
   show GitHub Copilot and Cursor usage, Muelle decrypted VS Code's stored
@@ -40,6 +50,14 @@ copia la sección de la versión que se publica a la release de GitHub.
 
 ### Español
 
+- Corregido: al recuperar una app minimizada desde el dock, su ventana podía
+  quedar detrás de la que estaba delante, como si se hubiera cerrado otra vez
+  (Warp, por ejemplo). Desde la 0.1.8 el dock restauraba la ventana sin tomar
+  antes el foco, y Windows la coloca entonces detrás de la ventana activa.
+- Se quitó el uso de GitHub Copilot de la isla de la barra superior. Su sesión
+  solo se guarda cifrada, y descifrar los secretos de otra app es lo que hacía
+  que los antivirus marcaran Muelle; Muelle tampoco lee ya el Administrador de
+  credenciales de Windows.
 - Corregido: algunos antivirus marcaban Muelle 0.1.6–0.1.8 como troyano y lo
   borraban, a menudo justo al actualizar. Dos cosas parecían malware: para
   mostrar el uso de GitHub Copilot y Cursor, Muelle descifraba los secretos

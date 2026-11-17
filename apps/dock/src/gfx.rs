@@ -40,8 +40,9 @@ use windows::{
                 DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL,
                 DWRITE_FONT_WEIGHT_MEDIUM, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_WEIGHT_SEMI_BOLD,
                 DWRITE_MEASURING_MODE_NATURAL, DWRITE_PARAGRAPH_ALIGNMENT_CENTER,
-                DWRITE_TEXT_ALIGNMENT_CENTER, DWRITE_TEXT_METRICS, DWriteCreateFactory,
-                IDWriteFactory,
+                DWRITE_TEXT_ALIGNMENT_CENTER, DWRITE_TEXT_METRICS, DWRITE_TRIMMING,
+                DWRITE_TRIMMING_GRANULARITY_CHARACTER, DWRITE_WORD_WRAPPING_NO_WRAP,
+                DWriteCreateFactory, IDWriteFactory,
             },
             Dxgi::{Common::DXGI_FORMAT_B8G8R8A8_UNORM, IDXGIDevice},
         },
@@ -202,18 +203,40 @@ impl Gfx {
         })
     }
 
-    /// Opaque island silhouette with curved shoulders at the screen edge.
+    /// Opaque island silhouette. The compact controls meet the screen edge
+    /// with curved shoulders, while the popovers have rounded corners.
     pub fn island_mask(
         &self,
         width: f32,
         height: f32,
         scale: f32,
+        attached: bool,
     ) -> Result<CompositionSurfaceBrush> {
         self.draw(width.ceil() as u32, height.ceil() as u32, |dc| {
-            let shoulder = 12.0 * scale;
-            let corner = 22.0 * scale;
-            // SAFETY: The geometry, sink and brush stay alive through the drawing calls.
+            let shoulder = (12.0 * scale).min(width / 5.0).min(height / 2.0);
+            let corner = (22.0 * scale)
+                .min(width / 2.0 - shoulder)
+                .min(height - shoulder);
+            // SAFETY: The geometries, sink and brush stay alive through the drawing calls.
             unsafe {
+                let white = dc.CreateSolidColorBrush(&WHITE, None)?;
+                if !attached {
+                    let radius = (18.0 * scale).min(width / 2.0).min(height / 2.0);
+                    dc.FillRoundedRectangle(
+                        &D2D1_ROUNDED_RECT {
+                            rect: D2D_RECT_F {
+                                left: 0.0,
+                                top: 0.0,
+                                right: width,
+                                bottom: height,
+                            },
+                            radiusX: radius,
+                            radiusY: radius,
+                        },
+                        &white,
+                    );
+                    return Ok(());
+                }
                 let shape = dc.GetFactory()?.CreatePathGeometry()?;
                 let sink = shape.Open()?;
                 sink.BeginFigure(Vector2 { X: 0.0, Y: 0.0 }, D2D1_FIGURE_BEGIN_FILLED);
@@ -285,7 +308,6 @@ impl Gfx {
                 });
                 sink.EndFigure(D2D1_FIGURE_END_CLOSED);
                 sink.Close()?;
-                let white = dc.CreateSolidColorBrush(&WHITE, None)?;
                 dc.FillGeometry(&shape, &white, None);
             }
             Ok(())
@@ -584,7 +606,40 @@ impl Gfx {
         bold: bool,
         ink: Ink,
     ) -> Result<LabelBrush> {
-        let utf16: Vec<u16> = text.encode_utf16().collect();
+        self.draw_text_brush(text, scale, font_size, bold, ink, None)
+    }
+
+    /// Single line, elided to the available physical width.
+    pub fn text_brush_fitted(
+        &self,
+        text: &str,
+        scale: f32,
+        font_size: f32,
+        bold: bool,
+        ink: Ink,
+        max_width: f32,
+    ) -> Result<LabelBrush> {
+        self.draw_text_brush(text, scale, font_size, bold, ink, Some(max_width))
+    }
+
+    fn draw_text_brush(
+        &self,
+        text: &str,
+        scale: f32,
+        font_size: f32,
+        bold: bool,
+        ink: Ink,
+        fitted: Option<f32>,
+    ) -> Result<LabelBrush> {
+        let mut utf16: Vec<u16> = text.encode_utf16().collect();
+        if fitted.is_some() {
+            for unit in &mut utf16 {
+                if matches!(*unit, 9..=13 | 0x85 | 0x2028 | 0x2029) {
+                    *unit = u16::from(b' ');
+                }
+            }
+        }
+        let max_width = fitted.map_or(4096.0, |width| width.floor().max(1.0));
         let weight = if bold {
             DWRITE_FONT_WEIGHT_SEMI_BOLD
         } else {
@@ -603,13 +658,27 @@ impl Gfx {
             )?;
             let layout = self
                 .dwrite
-                .CreateTextLayout(&utf16, &format, 4096.0, 256.0)?;
+                .CreateTextLayout(&utf16, &format, max_width, 256.0)?;
+            if fitted.is_some() {
+                layout.SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP)?;
+                let ellipsis = self.dwrite.CreateEllipsisTrimmingSign(&format)?;
+                layout.SetTrimming(
+                    &DWRITE_TRIMMING {
+                        granularity: DWRITE_TRIMMING_GRANULARITY_CHARACTER,
+                        ..Default::default()
+                    },
+                    &ellipsis,
+                )?;
+            }
             let mut metrics = DWRITE_TEXT_METRICS::default();
             layout.GetMetrics(&mut metrics)?;
             (layout, metrics)
         };
         let (width, height) = (
-            metrics.width.ceil().max(1.0),
+            fitted.map_or_else(
+                || metrics.width.ceil().max(1.0),
+                |_| metrics.width.ceil().clamp(1.0, max_width),
+            ),
             metrics.height.ceil().max(1.0),
         );
         let brush = self.draw(width as u32, height as u32, |dc| {
