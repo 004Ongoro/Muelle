@@ -8,8 +8,14 @@ copia la sección de la versión que se publica a la release de GitHub.
 
 ## [Unreleased]
 
+## [0.1.10]
+
 ### English
 
+- Right-clicking an empty area of the dock now opens Task Manager or Taskbar
+  settings.
+- Apps with multiple windows have a dedicated preview picker with more
+  reliable hover and foreground handling.
 - The Genie effect follows Windows' "Animation effects" setting, which
   "Adjust for best performance" also turns off, and did so silently: the
   switch in Settings stayed on and nothing happened. Settings now says when
@@ -32,6 +38,10 @@ copia la sección de la versión que se publica a la release de GitHub.
 
 ### Español
 
+- Al hacer clic derecho en un espacio vacío del dock, ahora puedes abrir el
+  Administrador de tareas o la configuración de la barra de tareas.
+- Las apps con varias ventanas tienen un selector de vistas previas propio,
+  con un manejo más fiable del puntero y de la ventana en primer plano.
 - El efecto genio sigue el ajuste «Efectos de animación» de Windows, que también
   apaga «Ajustar para obtener el mejor rendimiento», y lo hacía en silencio: el
   interruptor de Ajustes seguía activo y no pasaba nada. Ahora Ajustes avisa

@@ -18,6 +18,6 @@ export const site = {
   releases: "https://github.com/crafter-station/Muelle/releases",
   download: "https://github.com/crafter-station/Muelle/releases/latest/download/Muelle-Setup.exe",
   issues: "https://github.com/crafter-station/Muelle/issues",
-  version: "0.1.8",
+  version: "0.1.10",
   license: "MIT",
 } as const;
