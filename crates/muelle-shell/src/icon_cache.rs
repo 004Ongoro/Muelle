@@ -62,15 +62,21 @@ impl IconCache {
     /// Like [`get`](Self::get), but stores each `variant` separately for items
     /// whose icon depends on their state, such as an empty or full recycle bin.
     pub fn get_variant(&self, id: &str, variant: &str, size: u32) -> Result<AppVisual, IconError> {
-        let path = self.entry_path(&format!("{id}|{variant}"), size);
-        let stamp = stamp_of(id);
+        // A program pinned from a shortcut Muelle keeps shows that shortcut's
+        // name and icon ("Launch Hidden", not "Windows Based Script Host"),
+        // as the taskbar does. Part of the key, so replacing or removing the
+        // shortcut never shows a stale label.
+        let kept = crate::pins::kept_shortcut_for(id);
+        let source = kept.as_deref().unwrap_or(id);
+        let path = self.entry_path(&format!("{source}|{variant}"), size);
+        let stamp = stamp_of(source);
         if let Some(cached) = fs::read(&path).ok().and_then(|bytes| decode(&bytes, stamp)) {
             return Ok(cached);
         }
 
         let visual = AppVisual {
-            name: display_name(id),
-            icon: load_icon(id, size)?,
+            name: display_name(source),
+            icon: load_icon(source, size)?,
         };
         // An unwritable cache only makes the next startup slower.
         let _ = fs::create_dir_all(&self.folder);

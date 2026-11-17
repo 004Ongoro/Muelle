@@ -71,13 +71,9 @@ pub fn taskbar_pins_if_readable() -> Option<Vec<String>> {
     // (position in Favorites, id); shortcuts it does not mention go last.
     let mut found: Vec<(usize, String)> = Vec::new();
     for link in &links {
-        let Some(target) = link_target(link) else {
+        let Some(id) = shortcut_id(link) else {
             continue;
         };
-        let id = normalize_id(&target);
-        if !id.ends_with(".exe") || !Path::new(&id).exists() {
-            continue;
-        }
         let position = link
             .file_name()
             .and_then(|name| name.to_str())
@@ -232,7 +228,7 @@ pub fn unpin_from_taskbar(id: &str) -> bool {
 /// What Explorer pinned for `id`: the Store app itself, or the shortcut in
 /// `User Pinned\TaskBar` that opens the program.
 fn pinned_item(id: &str) -> Option<String> {
-    if id.starts_with("shell:AppsFolder\\") {
+    if id.starts_with("shell:AppsFolder\\") || crate::tracker::is_shortcut(id) {
         return Some(id.to_owned());
     }
     let folder = PathBuf::from(env::var("APPDATA").ok()?)
@@ -325,7 +321,183 @@ pub fn app_exists(id: &str) -> bool {
     !fixed || path.exists()
 }
 
-pub fn link_target(link: &std::path::Path) -> Option<String> {
+pub fn link_target(link: &Path) -> Option<String> {
+    read_link(link)?.0
+}
+
+/// What the dock pins for the shortcut `link`, as the Windows taskbar does:
+/// the program it opens, whatever its arguments, so the program's windows
+/// gather under one icon (the arguments still apply when it is opened, see
+/// [`launch_target`]); or the shortcut itself when it opens something that
+/// is not a program (a script, a document). `None` for shortcuts to no file
+/// (File Explorer, Control Panel items) or to a file that no longer exists.
+///
+/// Requires COM to be initialized on the calling thread.
+#[must_use]
+pub fn shortcut_id(link: &Path) -> Option<String> {
+    let (target, _) = read_link(link)?;
+    let target = target.filter(|target| Path::new(target).exists())?;
+    Some(if is_program(&target) {
+        normalize_id(&target)
+    } else {
+        normalize_id(&link.to_string_lossy())
+    })
+}
+
+/// The shortcut to open `id` with, when one carries more than the program:
+/// `wscript.exe "script.vbs"`, a browser profile, a web app. Searched among
+/// the shortcuts Muelle keeps and those pinned to the Windows taskbar, only
+/// when the app is opened, never on the dock's thread.
+///
+/// Requires COM to be initialized on the calling thread.
+#[must_use]
+pub fn launch_target(id: &str) -> Option<String> {
+    if crate::tracker::is_shortcut(id) || id.starts_with("shell:") {
+        return None;
+    }
+    [kept_folder(), taskbar_folder()]
+        .into_iter()
+        .flatten()
+        .filter_map(|folder| fs::read_dir(folder).ok())
+        .flatten()
+        .filter_map(|entry| Some(entry.ok()?.path()))
+        .filter(|link| crate::tracker::is_shortcut(&link.to_string_lossy()))
+        .find(|link| {
+            read_link(link).is_some_and(|(target, arguments)| {
+                !arguments.is_empty() && target.is_some_and(|target| normalize_id(&target) == id)
+            })
+        })
+        .map(|link| link.to_string_lossy().into_owned())
+}
+
+/// The shortcut Muelle keeps for the program `id` (see [`keep_shortcut`]),
+/// which gives its pin its name and icon. Only Muelle's own folder, which
+/// is usually empty: cheap enough for every icon lookup.
+///
+/// Requires COM to be initialized on the calling thread.
+#[must_use]
+pub fn kept_shortcut_for(id: &str) -> Option<String> {
+    if crate::tracker::is_shortcut(id) || id.starts_with("shell:") {
+        return None;
+    }
+    fs::read_dir(kept_folder()?)
+        .ok()?
+        .filter_map(|entry| Some(entry.ok()?.path()))
+        .find(|link| {
+            read_link(link)
+                .and_then(|(target, _)| target)
+                .is_some_and(|target| normalize_id(&target) == id)
+        })
+        .map(|link| link.to_string_lossy().into_owned())
+}
+
+fn is_program(path: &str) -> bool {
+    path.len() > 4 && path[path.len() - 4..].eq_ignore_ascii_case(".exe")
+}
+
+/// The folder where Muelle keeps its own copy of shortcuts pinned from
+/// elsewhere (the desktop, Downloads), as the taskbar keeps `User Pinned`:
+/// the pin keeps working if the original is moved or deleted.
+fn kept_folder() -> Option<PathBuf> {
+    Some(PathBuf::from(env::var_os("APPDATA")?).join("Muelle\\Pins"))
+}
+
+fn taskbar_folder() -> Option<PathBuf> {
+    Some(
+        PathBuf::from(env::var_os("APPDATA")?)
+            .join("Microsoft\\Internet Explorer\\Quick Launch\\User Pinned\\TaskBar"),
+    )
+}
+
+/// Pins the shortcut `link`, dropped on the dock, and returns the pin id
+/// ([`shortcut_id`]). When the shortcut is needed to open it (it is the pin
+/// itself, or it carries arguments), Muelle keeps a copy: the pin keeps
+/// working if the original is moved or deleted. One kept shortcut per
+/// program, as on the taskbar: the newest replaces the older one.
+#[must_use]
+pub fn keep_shortcut(link: &Path) -> Option<String> {
+    let id = shortcut_id(link)?;
+    let (_, arguments) = read_link(link)?;
+    let is_link = crate::tracker::is_shortcut(&id);
+    if !is_link && arguments.is_empty() {
+        return Some(id);
+    }
+    let folder = kept_folder()?;
+    let parent = link.parent()?;
+    if [Some(&folder), taskbar_folder().as_ref()]
+        .into_iter()
+        .flatten()
+        .any(|managed| same_path(parent, managed))
+    {
+        return Some(id);
+    }
+    let contents = fs::read(link).ok()?;
+    fs::create_dir_all(&folder).ok()?;
+    if !is_link {
+        forget_shortcut(&id);
+    }
+    let stem = link.file_stem()?.to_string_lossy().into_owned();
+    for attempt in 1..100 {
+        let name = if attempt == 1 {
+            format!("{stem}.lnk")
+        } else {
+            format!("{stem} ({attempt}).lnk")
+        };
+        let kept = folder.join(name);
+        match fs::read(&kept) {
+            Ok(existing) if existing == contents => {}
+            Ok(_) => continue,
+            Err(_) => fs::write(&kept, &contents).ok()?,
+        }
+        return Some(if is_link {
+            normalize_id(&kept.to_string_lossy())
+        } else {
+            id
+        });
+    }
+    None
+}
+
+/// Deletes what Muelle kept to open `id` once it is no longer pinned: the
+/// kept shortcut itself, or the kept shortcuts that open that program. The
+/// taskbar's and the user's own shortcuts are never touched.
+///
+/// Requires COM to be initialized on the calling thread.
+pub fn forget_shortcut(id: &str) {
+    let Some(folder) = kept_folder() else {
+        return;
+    };
+    if crate::tracker::is_shortcut(id) {
+        let path = Path::new(id);
+        if path
+            .parent()
+            .is_some_and(|parent| same_path(parent, &folder))
+        {
+            let _ = fs::remove_file(path);
+        }
+        return;
+    }
+    for link in fs::read_dir(&folder)
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| Some(entry.ok()?.path()))
+    {
+        let opens_id = read_link(&link)
+            .and_then(|(target, _)| target)
+            .is_some_and(|target| normalize_id(&target) == id);
+        if opens_id {
+            let _ = fs::remove_file(link);
+        }
+    }
+}
+
+fn same_path(a: &Path, b: &Path) -> bool {
+    a.as_os_str().eq_ignore_ascii_case(b.as_os_str())
+}
+
+/// The program a shortcut opens (`None` when it points at no file, such as
+/// a Control Panel item) and its arguments.
+fn read_link(link: &Path) -> Option<(Option<String>, String)> {
     // SAFETY: COM calls use buffers and strings that remain alive for the duration of each call.
     unsafe {
         let shell_link: IShellLinkW =
@@ -335,12 +507,22 @@ pub fn link_target(link: &std::path::Path) -> Option<String> {
             .ok()?
             .Load(&HSTRING::from(link.as_os_str()), STGM_READ)
             .ok()?;
-        let mut buffer = [0u16; 1024];
-        shell_link
-            .GetPath(&mut buffer, std::ptr::null_mut(), 0)
-            .ok()?;
-        let len = buffer.iter().position(|&unit| unit == 0)?;
-        (len > 0).then(|| String::from_utf16_lossy(&buffer[..len]))
+        let text = |buffer: &[u16]| {
+            let len = buffer.iter().position(|&unit| unit == 0).unwrap_or(0);
+            String::from_utf16_lossy(&buffer[..len])
+        };
+        let mut path = [0u16; 1024];
+        let target = shell_link
+            .GetPath(&mut path, std::ptr::null_mut(), 0)
+            .ok()
+            .map(|()| text(&path))
+            .filter(|target| !target.is_empty());
+        // Up to 32 767 characters, the longest command line Windows takes.
+        let mut arguments = vec![0u16; 32_768];
+        let arguments = shell_link
+            .GetArguments(&mut arguments)
+            .map_or_else(|_| String::new(), |()| text(&arguments));
+        Some((target, arguments.trim().to_owned()))
     }
 }
 

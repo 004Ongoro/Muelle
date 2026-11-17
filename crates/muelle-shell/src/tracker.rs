@@ -43,7 +43,9 @@ pub struct TrackedWindow {
 
 #[must_use]
 pub fn normalize_id(id: &str) -> String {
-    if id.starts_with(APPS_FOLDER) {
+    // Shortcuts kept as pins (see `pins::shortcut_id`) keep their case: the
+    // shell shows their file name as the label.
+    if id.starts_with(APPS_FOLDER) || is_shortcut(id) {
         id.to_owned()
     } else {
         id.to_lowercase()
@@ -445,6 +447,12 @@ fn app_id(hwnd: HWND) -> Option<String> {
         let _ = CloseHandle(process);
         id
     }
+}
+
+/// `true` for the path of a Windows shortcut (`.lnk`).
+#[must_use]
+pub fn is_shortcut(id: &str) -> bool {
+    id.len() > 4 && id[id.len() - 4..].eq_ignore_ascii_case(".lnk")
 }
 
 fn class_name(hwnd: HWND) -> String {

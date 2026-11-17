@@ -80,8 +80,13 @@ impl Action {
         // the dock their owner would disable its input during long operations.
         let owner = HWND::default();
         match self {
-            Self::Open { id } => launcher::open(&id)?,
-            Self::OpenAsAdmin { id } => launcher::open_as_admin(&id)?,
+            // Through its shortcut when it has one with arguments (issue #8).
+            Self::Open { id } => {
+                launcher::open(&muelle_shell::pins::launch_target(&id).unwrap_or(id))?
+            }
+            Self::OpenAsAdmin { id } => {
+                launcher::open_as_admin(&muelle_shell::pins::launch_target(&id).unwrap_or(id))?;
+            }
             Self::Reveal { path } => launcher::reveal(&path)?,
             Self::OpenWith { app, files } => launcher::open_with(&app, &files)?,
             Self::Recycle { files: paths } => {

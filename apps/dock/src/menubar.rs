@@ -60,6 +60,7 @@ use crate::{
     app,
     gfx::{Gfx, Ink, LabelBrush},
     media::{self, Control as MediaControl, Track},
+    scene::Theme,
     strings,
     usage::{
         self, ActiveProviders, Monitor as UsageMonitor, Provider, ProviderUsage, Snapshot, State,
@@ -87,7 +88,9 @@ const CLOCK_TIMER: usize = 1;
 const ISLAND_SINGLE_WIDTH: f32 = 145.0;
 const ISLAND_EXPANDED_WIDTH: f32 = 440.0;
 const ISLAND_ROW_HEIGHT: f32 = 118.0;
-const ISLAND_CARD_HEIGHT: f32 = 108.0;
+const PANEL_GAP: f32 = 5.0;
+const PANEL_RADIUS: f32 = 18.0;
+const PANEL_SHADOW_MARGIN: f32 = 20.0;
 const WM_POWERBROADCAST: u32 = 0x0218;
 const WM_MOUSELEAVE: u32 = 0x02A3;
 /// AppBar notifications need a message id; the bar ignores them.
@@ -188,7 +191,7 @@ struct Look {
 impl Look {
     fn panel_height(&self) -> f32 {
         match self.panel {
-            Some(Island::Music) => 148.0,
+            Some(Island::Music) => 136.0,
             Some(Island::Usage) => 74.0 + self.active_providers.count() as f32 * ISLAND_ROW_HEIGHT,
             None => 0.0,
         }
@@ -300,8 +303,8 @@ unsafe extern "system" fn bar_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -
             let x = (l.0 & 0xFFFF) as i16 as i32;
             let y = (l.0 >> 16) as i16 as i32;
             if y >= BAR_BOTTOM.load(Ordering::Relaxed)
-                && y < PANEL_BOTTOM.load(Ordering::Relaxed)
-                && (x < PANEL_LEFT.load(Ordering::Relaxed)
+                && (y >= PANEL_BOTTOM.load(Ordering::Relaxed)
+                    || x < PANEL_LEFT.load(Ordering::Relaxed)
                     || x >= PANEL_RIGHT.load(Ordering::Relaxed))
             {
                 return LRESULT(-1);
@@ -631,9 +634,9 @@ fn add_panel_text_right(
 
 #[expect(
     clippy::too_many_arguments,
-    reason = "Each provider card draws its own colors, data and measured rectangle"
+    reason = "Each provider row draws its own colors, data and measured rectangle"
 )]
-fn draw_usage_card(
+fn draw_usage_row(
     gfx: &Gfx,
     layers: &VisualCollection,
     provider: Provider,
@@ -651,27 +654,6 @@ fn draw_usage_card(
     let left = px(23.0);
     let width = island_width - px(46.0);
     let right = left + width;
-    let card_fill = if light {
-        rgba(32, 52, 77, 13)
-    } else {
-        rgba(237, 244, 255, 16)
-    };
-    let card_border = if light {
-        rgba(41, 59, 82, 26)
-    } else {
-        rgba(222, 234, 251, 31)
-    };
-    add_rounded_box(
-        c,
-        layers,
-        left,
-        y,
-        width,
-        px(ISLAND_CARD_HEIGHT),
-        px(13.0),
-        card_fill,
-        Some(card_border),
-    )?;
     add_rounded_box(
         c,
         layers,
@@ -1390,7 +1372,12 @@ impl MenuBar {
         let px = |logical: f32| (logical * scale).round();
         let screen = look.screen;
         let (width, height) = ((screen.right - screen.left) as f32, px(HEIGHT));
-        let visual_height = height + px(look.panel_height());
+        let panel_bottom = height + px(PANEL_GAP) + px(look.panel_height());
+        let visual_height = if look.panel.is_some() {
+            panel_bottom + px(PANEL_SHADOW_MARGIN)
+        } else {
+            height
+        };
         let ink = if look.light { Ink::Dark } else { Ink::Light };
 
         let root = c.CreateContainerVisual()?;
@@ -1561,7 +1548,12 @@ impl MenuBar {
         );
         BAR_TOP.store(screen.top, Ordering::Relaxed);
         BAR_BOTTOM.store(screen.top + height as i32, Ordering::Relaxed);
-        PANEL_BOTTOM.store(screen.top + self.visual_height, Ordering::Relaxed);
+        let clickable_height = if self.panel_span.width() > 0.0 {
+            panel_bottom
+        } else {
+            height
+        };
+        PANEL_BOTTOM.store(screen.top + clickable_height as i32, Ordering::Relaxed);
         self.place()
     }
 
@@ -1662,9 +1654,10 @@ impl MenuBar {
                     Island::Usage => ISLAND_EXPANDED_WIDTH,
                 }),
             );
-            let geometry = IslandGeometry::new(self.panel_span, bar_height, look);
+            let geometry = IslandGeometry::new(self.panel_span, bar_height + px(PANEL_GAP), look);
             let height = px(look.panel_height());
-            let content = island_surface(gfx, look, layers, geometry, height)?;
+            let theme = Theme::for_popup(look.light, look.glass);
+            let content = popup_surface(gfx, theme, layers, geometry, height)?;
             match kind {
                 Island::Music => {
                     if let Some(track) = &look.track {
@@ -1724,16 +1717,8 @@ impl MenuBar {
             button_width,
             button_height,
             px(13.5),
-            if look.light {
-                rgba(28, 51, 79, 18)
-            } else {
-                rgba(235, 242, 252, 26)
-            },
-            Some(if look.light {
-                rgba(41, 62, 86, 36)
-            } else {
-                rgba(226, 237, 251, 43)
-            }),
+            geometry.control_fill(),
+            Some(geometry.border()),
         )?;
         add_visual(
             c,
@@ -1752,7 +1737,18 @@ impl MenuBar {
             IslandAction::Refresh,
         ));
         for (index, (provider, usage, accent)) in providers.iter().enumerate() {
-            draw_usage_card(
+            let y = px(48.0 + index as f32 * ISLAND_ROW_HEIGHT);
+            let inset = px(23.0);
+            add_visual(
+                c,
+                content,
+                &c.CreateColorBrushWithColor(geometry.border())?.cast()?,
+                inset,
+                y - px(6.0),
+                island_width - 2.0 * inset,
+                1.0,
+            )?;
+            draw_usage_row(
                 gfx,
                 content,
                 *provider,
@@ -1761,7 +1757,7 @@ impl MenuBar {
                 scale,
                 look.light,
                 island_width,
-                px(53.0 + index as f32 * ISLAND_ROW_HEIGHT),
+                y,
             )?;
         }
         let newest_age = providers
@@ -1825,27 +1821,16 @@ impl MenuBar {
             px(32.0),
             IslandAction::Toggle(Island::Music),
         ));
-        add_rounded_box(
-            c,
-            layers,
-            px(14.0),
-            px(45.0),
-            geometry.width - px(28.0),
-            px(91.0),
-            px(16.0),
-            geometry.fill(),
-            Some(geometry.border()),
-        )?;
         let tile = px(34.0);
         add_rounded_box(
             c,
             layers,
             px(25.0),
-            px(54.0),
+            px(46.0),
             tile,
             tile,
             px(10.0),
-            geometry.selection(),
+            geometry.control_fill(),
             None,
         )?;
         let note = gfx.glyph_brush(&[('\u{E8D6}', 1.0)], geometry.scale, ink)?;
@@ -1854,7 +1839,7 @@ impl MenuBar {
             layers,
             &note.brush.cast()?,
             px(25.0) + (tile - note.width) / 2.0,
-            px(54.0) + (tile - note.height) / 2.0,
+            px(46.0) + (tile - note.height) / 2.0,
             note.width,
             note.height,
         )?;
@@ -1868,9 +1853,9 @@ impl MenuBar {
             available,
         )?;
         let title_y = if track.artist.trim().is_empty() {
-            px(71.0) - title.height / 2.0
+            px(63.0) - title.height / 2.0
         } else {
-            px(55.0)
+            px(47.0)
         };
         add_visual(
             c,
@@ -1889,7 +1874,7 @@ impl MenuBar {
                 layers,
                 &artist.brush.cast()?,
                 px(69.0),
-                px(73.0),
+                px(65.0),
                 artist.width,
                 artist.height,
             )?
@@ -1912,7 +1897,7 @@ impl MenuBar {
         ] {
             let size = px(34.0);
             let x = center + px(offset) - size / 2.0;
-            let y = px(96.0);
+            let y = px(89.0);
             let main = matches!(control, MediaControl::PlayPause);
             if main {
                 add_rounded_box(
@@ -1923,7 +1908,7 @@ impl MenuBar {
                     size,
                     size,
                     size / 2.0,
-                    geometry.selection(),
+                    geometry.control_fill(),
                     Some(geometry.border()),
                 )?;
             }
@@ -1982,11 +1967,11 @@ impl IslandGeometry {
     fn ink(self) -> Ink {
         if self.light { Ink::Dark } else { Ink::Light }
     }
-    fn fill(self) -> Color {
+    fn control_fill(self) -> Color {
         if self.light {
-            rgba(35, 63, 96, 15)
+            rgba(0, 0, 0, 18)
         } else {
-            rgba(223, 237, 255, 17)
+            rgba(255, 255, 255, 27)
         }
     }
     fn border(self) -> Color {
@@ -1994,13 +1979,6 @@ impl IslandGeometry {
             rgba(35, 57, 83, 31)
         } else {
             rgba(223, 237, 255, 37)
-        }
-    }
-    fn selection(self) -> Color {
-        if self.light {
-            rgba(198, 221, 250, 255)
-        } else {
-            rgba(70, 98, 136, 180)
         }
     }
 }
@@ -2096,6 +2074,47 @@ fn island_providers(look: &Look) -> Vec<IslandProvider<'_>> {
         .collect()
 }
 
+fn popup_surface(
+    gfx: &Gfx,
+    theme: Theme,
+    layers: &VisualCollection,
+    geometry: IslandGeometry,
+    height: f32,
+) -> Result<VisualCollection> {
+    let c = &gfx.compositor;
+    let size = Vector2::new(geometry.width, height);
+    let radius = geometry.px(PANEL_RADIUS);
+    let panel = theme.panel(gfx, size, radius, geometry.scale)?;
+    let popup = c.CreateContainerVisual()?;
+    popup.SetSize(size)?;
+    popup.SetOffset(Vector3::new(geometry.left.round(), geometry.top, 0.0))?;
+    let children = popup.Children()?;
+    let mask = c.CreateNineGridBrush()?;
+    mask.SetSource(&gfx.rounded_mask(radius)?)?;
+    mask.SetInsets(radius.ceil() + 1.0)?;
+    children.InsertAtTop(&island_shadow(c, &mask.cast()?, size, geometry)?)?;
+    children.InsertAtTop(&panel)?;
+    layers.InsertAtTop(&popup)?;
+    Ok(children)
+}
+
+fn island_shadow(
+    c: &Compositor,
+    mask: &CompositionBrush,
+    size: Vector2,
+    geometry: IslandGeometry,
+) -> Result<SpriteVisual> {
+    let shadow = c.CreateDropShadow()?;
+    shadow.SetMask(mask)?;
+    shadow.SetBlurRadius(geometry.px(12.0))?;
+    shadow.SetOffset(Vector3::new(0.0, geometry.px(5.0), 0.0))?;
+    shadow.SetColor(rgba(0, 0, 0, 92))?;
+    let host = c.CreateSpriteVisual()?;
+    host.SetSize(size)?;
+    host.SetShadow(&shadow)?;
+    Ok(host)
+}
+
 fn island_surface(
     gfx: &Gfx,
     look: &Look,
@@ -2108,35 +2127,13 @@ fn island_surface(
     let island_left = geometry.left;
     let island_width = geometry.width;
     let scale = geometry.scale;
+    let size = Vector2::new(island_width, island_height);
     let island = c.CreateContainerVisual()?;
-    island.SetSize(Vector2 {
-        X: island_width,
-        Y: island_height,
-    })?;
-    island.SetOffset(Vector3 {
-        X: island_left.round(),
-        Y: geometry.top,
-        Z: 0.0,
-    })?;
+    island.SetSize(size)?;
+    island.SetOffset(Vector3::new(island_left.round(), 0.0, 0.0))?;
     let content = island.Children()?;
-    let attached = geometry.top == 0.0;
-    let silhouette = gfx.island_mask(island_width, island_height, scale, attached)?;
-    let shadow = c.CreateDropShadow()?;
-    shadow.SetMask(&silhouette)?;
-    shadow.SetBlurRadius(px(12.0))?;
-    shadow.SetOffset(Vector3 {
-        X: 0.0,
-        Y: px(5.0),
-        Z: 0.0,
-    })?;
-    shadow.SetColor(rgba(0, 0, 0, 92))?;
-    let shadow_host = c.CreateSpriteVisual()?;
-    shadow_host.SetSize(Vector2 {
-        X: island_width,
-        Y: island_height,
-    })?;
-    shadow_host.SetShadow(&shadow)?;
-    content.InsertAtTop(&shadow_host)?;
+    let silhouette = gfx.island_mask(island_width, island_height, scale)?;
+    content.InsertAtTop(&island_shadow(c, &silhouette.cast()?, size, geometry)?)?;
 
     let tint = match (look.light, look.glass) {
         (true, true) => rgba(247, 249, 252, 243),
@@ -2147,13 +2144,9 @@ fn island_surface(
     if look.glass {
         // The backdrop cannot be used as a mask-brush source. Inset its
         // rounded clip so it stays entirely inside the curved silhouette.
-        let inset = if attached {
-            (12.0 * scale)
-                .min(island_width / 5.0)
-                .min(island_height / 2.0)
-        } else {
-            0.0
-        };
+        let inset = (12.0 * scale)
+            .min(island_width / 5.0)
+            .min(island_height / 2.0);
         let glass_width = island_width - inset * 2.0;
         let glass = c.CreateContainerVisual()?;
         glass.SetSize(Vector2 {
@@ -2166,17 +2159,13 @@ fn island_surface(
             Z: 0.0,
         })?;
         let outline = c.CreateRoundedRectangleGeometry()?;
-        let lift = if attached { px(22.0) } else { 0.0 };
-        let radius = if attached { px(22.0) } else { px(18.0) };
+        let lift = px(22.0);
         outline.SetSize(Vector2 {
             X: glass_width,
             Y: island_height + lift,
         })?;
         outline.SetOffset(Vector2 { X: 0.0, Y: -lift })?;
-        outline.SetCornerRadius(Vector2 {
-            X: radius,
-            Y: radius,
-        })?;
+        outline.SetCornerRadius(Vector2 { X: lift, Y: lift })?;
         glass.SetClip(&c.CreateGeometricClipWithGeometry(&outline)?)?;
         add_visual(
             c,
@@ -2434,5 +2423,37 @@ mod island_tests {
     fn losing_a_session_closes_its_panel_without_opening_the_other() {
         assert_eq!(available_panel(Some(Island::Music), false, true), None);
         assert_eq!(available_panel(Some(Island::Usage), true, false), None);
+    }
+
+    #[test]
+    #[ignore = "Requires Windows desktop composition"]
+    fn popup_surface_builds_in_both_themes_with_and_without_transparency() -> Result<()> {
+        use windows::Win32::System::WinRT::{
+            CreateDispatcherQueueController, DQTAT_COM_STA, DQTYPE_THREAD_CURRENT,
+            DispatcherQueueOptions,
+        };
+
+        // SAFETY: The controller initializes the test thread's own queue.
+        let _queue = unsafe {
+            CreateDispatcherQueueController(DispatcherQueueOptions {
+                dwSize: size_of::<DispatcherQueueOptions>() as u32,
+                threadType: DQTYPE_THREAD_CURRENT,
+                apartmentType: DQTAT_COM_STA,
+            })?
+        };
+        let gfx = Gfx::new()?;
+        for (light, glass) in [(true, true), (false, true), (true, false), (false, false)] {
+            let root = gfx.compositor.CreateContainerVisual()?;
+            let theme = Theme::for_popup(light, glass);
+            let geometry = IslandGeometry {
+                left: 90.0,
+                top: HEIGHT + PANEL_GAP,
+                width: 360.0,
+                scale: 1.0,
+                light,
+            };
+            popup_surface(&gfx, theme, &root.Children()?, geometry, 136.0)?;
+        }
+        Ok(())
     }
 }

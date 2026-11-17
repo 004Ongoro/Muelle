@@ -203,14 +203,12 @@ impl Gfx {
         })
     }
 
-    /// Opaque island silhouette. The compact controls meet the screen edge
-    /// with curved shoulders, while the popovers have rounded corners.
+    /// Opaque island silhouette with curved shoulders at the screen edge.
     pub fn island_mask(
         &self,
         width: f32,
         height: f32,
         scale: f32,
-        attached: bool,
     ) -> Result<CompositionSurfaceBrush> {
         self.draw(width.ceil() as u32, height.ceil() as u32, |dc| {
             let shoulder = (12.0 * scale).min(width / 5.0).min(height / 2.0);
@@ -220,23 +218,6 @@ impl Gfx {
             // SAFETY: The geometries, sink and brush stay alive through the drawing calls.
             unsafe {
                 let white = dc.CreateSolidColorBrush(&WHITE, None)?;
-                if !attached {
-                    let radius = (18.0 * scale).min(width / 2.0).min(height / 2.0);
-                    dc.FillRoundedRectangle(
-                        &D2D1_ROUNDED_RECT {
-                            rect: D2D_RECT_F {
-                                left: 0.0,
-                                top: 0.0,
-                                right: width,
-                                bottom: height,
-                            },
-                            radiusX: radius,
-                            radiusY: radius,
-                        },
-                        &white,
-                    );
-                    return Ok(());
-                }
                 let shape = dc.GetFactory()?.CreatePathGeometry()?;
                 let sink = shape.Open()?;
                 sink.BeginFigure(Vector2 { X: 0.0, Y: 0.0 }, D2D1_FIGURE_BEGIN_FILLED);

@@ -8,6 +8,29 @@ copia la sección de la versión que se publica a la release de GitHub.
 
 ## [Unreleased]
 
+### English
+
+- Fixed (issue #8): apps pinned from a Windows shortcut with arguments, such
+  as `wscript.exe "script.vbs"`, a browser profile or a web app, opened the
+  program alone. They now open through their shortcut, exactly as from
+  Explorer or the taskbar, and show the shortcut's name and icon. A shortcut
+  dropped on the dock is kept in `%APPDATA%\Muelle\Pins`, so the pin survives
+  deleting the original; shortcuts to scripts or documents can be pinned too.
+- Dragging a file over the dock reads a dropped shortcut once, not on every
+  mouse move.
+
+### Español
+
+- Corregido (issue #8): las apps fijadas desde un acceso directo de Windows con
+  argumentos, como `wscript.exe "script.vbs"`, un perfil de navegador o una
+  app web, abrían solo el programa. Ahora se abren a través de su acceso
+  directo, igual que desde el Explorador o la barra de tareas, y muestran su
+  nombre e icono. Un acceso directo soltado en el dock se guarda en
+  `%APPDATA%\Muelle\Pins`, así que la app fijada sigue funcionando aunque se
+  borre el original; también se pueden fijar accesos a scripts o documentos.
+- Al arrastrar un archivo sobre el dock, un acceso directo se lee una sola vez,
+  no en cada movimiento del ratón.
+
 ## [0.1.9]
 
 ### English

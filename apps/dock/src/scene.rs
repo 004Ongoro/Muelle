@@ -65,6 +65,14 @@ impl Theme {
         }
     }
 
+    /// Uses the context menu tint with the same rim and sheen as the window picker.
+    pub(crate) fn for_popup(light: bool, glass: bool) -> Self {
+        Self {
+            tint: crate::menu::popup_tint(!light, glass),
+            ..Self::for_system(light, glass)
+        }
+    }
+
     /// A fixed-size panel using the dock's backdrop, tint, sheen and rim.
     pub fn panel(
         &self,

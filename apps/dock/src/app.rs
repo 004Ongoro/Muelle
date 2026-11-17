@@ -33,7 +33,7 @@ use muelle_core::{
 use muelle_shell::{
     appbar::{ABN_FULLSCREENAPP, AppBar, Edge},
     files, launcher,
-    pins::{app_exists, link_target, taskbar_pins, taskbar_pins_if_readable},
+    pins::{self, app_exists, taskbar_pins, taskbar_pins_if_readable},
     power,
     recycle_bin::{self, BinWatch},
     status,
@@ -508,6 +508,8 @@ struct App {
     drag: Option<Dragging>,
     /// Files being dragged over the dock from another app.
     incoming: Vec<String>,
+    /// What dropping `incoming` between icons would pin.
+    incoming_pin: Option<String>,
     /// Something (files, text, an image) is being dragged over the dock.
     drag_over: bool,
     /// The entry a drag is resting on, which springs open on `SPRING_TIMER`.
@@ -1923,19 +1925,7 @@ impl App {
 
     /// A single app or shortcut dropped between icons is pinned there.
     fn pin_action(&self, state: &muelle_core::magnify::Magnified) -> DropAction {
-        let [file] = self.incoming.as_slice() else {
-            return DropAction::Nothing;
-        };
-        let lower = file.to_lowercase();
-        let target = if lower.ends_with(".lnk") {
-            link_target(std::path::Path::new(file))
-        } else {
-            Some(file.clone())
-        };
-        let Some(id) = target
-            .map(|target| normalize_id(&target))
-            .filter(|id| id.ends_with(".exe"))
-        else {
+        let Some(id) = self.incoming_pin.clone() else {
             return DropAction::Nothing;
         };
         let explorer = explorer_id();
@@ -1956,6 +1946,14 @@ impl App {
 
     fn on_drag_enter(&mut self, incoming: Vec<String>, x: i32) -> Result<DROPEFFECT> {
         self.close_preview();
+        // What a single dropped app or shortcut would pin, worked out once:
+        // drag-over runs on every mouse move, and reading a shortcut is a
+        // COM call and a disk read.
+        self.incoming_pin = match incoming.as_slice() {
+            [file] if tracker::is_shortcut(file) => pins::shortcut_id(std::path::Path::new(file)),
+            [file] => Some(normalize_id(file)).filter(|id| id.ends_with(".exe")),
+            _ => None,
+        };
         self.incoming = incoming;
         self.drag_over = true;
         self.on_drag_over(x)
@@ -2056,9 +2054,20 @@ impl App {
                 copy,
             }),
             DropAction::Pin { id, before } => {
-                self.roster.pin_before(&id, before.as_deref());
-                save_settings(&self.roster, &self.config);
-                self.refresh()?;
+                // A dropped shortcut that is needed to open the app (it has
+                // arguments, or opens a script) is kept as Muelle's own copy,
+                // so the pin keeps working if the original is deleted.
+                let id = match files.first() {
+                    Some(file) if tracker::is_shortcut(file) => {
+                        pins::keep_shortcut(std::path::Path::new(file))
+                    }
+                    _ => Some(id),
+                };
+                if let Some(id) = id {
+                    self.roster.pin_before(&id, before.as_deref());
+                    save_settings(&self.roster, &self.config);
+                    self.refresh()?;
+                }
                 None
             }
         };
@@ -2365,6 +2374,7 @@ impl App {
                 let unpinning = self.roster.is_pinned(&id);
                 if unpinning {
                     self.roster.unpin(&id);
+                    pins::forget_shortcut(&id);
                 } else {
                     self.roster.pin(&id);
                 }
@@ -3459,6 +3469,7 @@ pub fn run() -> Result<()> {
             press: None,
             drag: None,
             incoming: Vec::new(),
+            incoming_pin: None,
             drag_over: false,
             spring: None,
             switching: false,

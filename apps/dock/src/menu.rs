@@ -684,12 +684,7 @@ pub(crate) fn draw_popup_background(
     width: f32,
     height: f32,
 ) -> Result<()> {
-    let tint = match (dark, glass) {
-        (true, true) => rgba(38, 38, 40, 175),
-        (false, true) => rgba(246, 246, 248, 215),
-        (true, false) => rgba(44, 44, 46, 255),
-        (false, false) => rgba(240, 240, 242, 255),
-    };
+    let tint = popup_tint(dark, glass);
     let compositor = layers.Compositor()?;
     if glass {
         add_sprite(
@@ -709,6 +704,15 @@ pub(crate) fn draw_popup_background(
         width,
         height,
     )
+}
+
+pub(crate) fn popup_tint(dark: bool, glass: bool) -> Color {
+    match (dark, glass) {
+        (true, true) => rgba(38, 38, 40, 175),
+        (false, true) => rgba(246, 246, 248, 215),
+        (true, false) => rgba(44, 44, 46, 255),
+        (false, false) => rgba(240, 240, 242, 255),
+    }
 }
 
 unsafe extern "system" fn menu_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LRESULT {
