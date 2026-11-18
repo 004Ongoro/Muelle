@@ -10,11 +10,24 @@ copia la sección de la versión que se publica a la release de GitHub.
 
 ### English
 
+- Automatic startup retries up to three times after a failed launch. Existing
+  enabled tasks receive the recovery policy without enabling disabled tasks or
+  changing the installation they launch. Settings checks the real registration.
+- If Explorer has not created its taskbar yet, Muelle retries taking it over
+  without blocking the interface or saving a false original taskbar setting.
+- Startup failures before graphics initialization are now recorded in the log.
 - Dock window previews keep their positions when switching or minimizing
   windows. Newly discovered windows append; closed windows are removed. Normal
   icon activation continues to use the most recently used window.
 
 ### Español
+
+- El inicio automático reintenta hasta tres veces si falla el arranque. Las
+  tareas activadas reciben esta recuperación sin reactivar tareas deshabilitadas
+  ni cambiar la instalación que ejecutan. Ajustes consulta el registro real.
+- Si Explorer todavía no ha creado su barra, Muelle vuelve a intentar ocultarla
+  sin bloquear la interfaz ni guardar un estado original incorrecto.
+- El registro también recoge fallos anteriores a la inicialización gráfica.
 
 - Las previsualizaciones del dock conservan su posición al cambiar de ventana
   o minimizarla. Las ventanas nuevas se añaden al final y las cerradas se retiran.

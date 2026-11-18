@@ -66,8 +66,22 @@ fn open_animation_settings() -> Result<(), String> {
 }
 
 #[tauri::command]
-fn get_autostart() -> bool {
-    autostart::is_enabled()
+async fn get_autostart() -> Result<bool, String> {
+    let dock = dock_exe().map_err(|error| error.to_string())?;
+    tauri::async_runtime::spawn_blocking(move || {
+        Ok(
+            autostart::enabled_for(&dock.to_string_lossy()).unwrap_or_else(|error| {
+                muelle_shell::log::line(&format!(
+                    "no se pudo consultar el inicio automático: {error}"
+                ));
+                // The cached choice still lets Settings open if the scheduler
+                // service is unavailable. An explicit change reports its error.
+                autostart::is_enabled()
+            }),
+        )
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]

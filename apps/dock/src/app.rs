@@ -171,6 +171,7 @@ const MAX_SNAPSHOTS: usize = 4;
 /// to apply its initial state before it can be taken over again.
 const TASKBAR_TIMER: usize = 3;
 const TASKBAR_DELAY_MS: u32 = 600;
+const TASKBAR_MAX_ATTEMPTS: u8 = 50;
 const TRIM_TIMER: usize = 4;
 const TRIM_DELAY_MS: u32 = 3000;
 const BIN_TIMER: usize = 5;
@@ -545,6 +546,7 @@ struct App {
     appbar: Option<AppBar>,
     taskbar_worker: Option<thread::JoinHandle<()>>,
     taskbar_retry: bool,
+    taskbar_attempts: u8,
     fullscreen: bool,
     roster: Roster,
     tracker: WindowTracker,
@@ -2947,16 +2949,17 @@ impl App {
             return Ok(());
         }
         let window = self.visual.0 as isize;
+        self.taskbar_attempts = self.taskbar_attempts.saturating_add(1);
         self.taskbar_worker = Some(thread::Builder::new().name("muelle-taskbar".into()).spawn(
             move || {
-                taskbar::take_over();
+                let hidden = taskbar::take_over();
                 // SAFETY: Only a message with scalar data is sent to our UI.
                 unsafe {
                     let _ = PostMessageW(
                         Some(HWND(window as *mut _)),
                         TASKBAR_TAKEN,
                         WPARAM(usize::from(rebuild)),
-                        LPARAM(0),
+                        LPARAM(isize::from(hidden)),
                     );
                 }
             },
@@ -2964,12 +2967,27 @@ impl App {
         Ok(())
     }
 
-    fn taskbar_taken(&mut self, rebuild: bool) -> Result<()> {
+    fn taskbar_taken(&mut self, rebuild: bool, hidden: bool) -> Result<()> {
         // The worker has finished its Explorer call and posted this reply.
         self.taskbar_worker = None;
         if std::mem::take(&mut self.taskbar_retry) {
             return self.request_taskbar(true);
         }
+        if !hidden {
+            // Explorer is still starting or recreated its taskbar during our
+            // request. Retry briefly without blocking the UI or polling forever.
+            if self.taskbar_attempts < TASKBAR_MAX_ATTEMPTS {
+                unsafe {
+                    SetTimer(Some(self.input), TASKBAR_TIMER, TASKBAR_DELAY_MS, None);
+                }
+            } else {
+                muelle_shell::log::line(
+                    "barra de Windows pendiente tras 50 intentos; se reintentará al reiniciarse Explorer o reanudar Windows",
+                );
+            }
+            return Ok(());
+        }
+        self.taskbar_attempts = 0;
         if rebuild {
             self.appbar = None;
             self.appbar = AppBar::register(self.visual, APPBAR_CALLBACK);
@@ -3824,8 +3842,14 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) ->
         APPBAR_CALLBACK => with_app("aviso de AppBar", |app| app.on_appbar_notice(w.0)),
         // Once the taskbar is set to auto-hide, the dock strip moves to the
         // screen edge, so reserve and reposition it again.
-        TASKBAR_TAKEN => with_app("reserva de espacio", |app| app.taskbar_taken(w.0 != 0)),
+        TASKBAR_TAKEN => with_app("reserva de espacio", |app| {
+            app.taskbar_taken(w.0 != 0, l.0 != 0)
+        }),
         WM_POWERBROADCAST if w.0 == PBT_APMRESUMEAUTOMATIC => {
+            with_app("reanudar reserva de espacio", |app| {
+                app.taskbar_attempts = 0;
+                Ok(())
+            });
             // SAFETY: `hwnd` is this live window on its owning UI thread.
             unsafe { SetTimer(Some(hwnd), TASKBAR_TIMER, TASKBAR_DELAY_MS, None) };
             // Timers do not count the time asleep: aim it again by the clock.
@@ -3836,6 +3860,10 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) ->
         }
         _ if CONFIG_CHANGED.get() == Some(&msg) => with_app("ajustes", App::reload_config),
         _ if TASKBAR_CREATED.get() == Some(&msg) => {
+            with_app("Explorer reiniciado", |app| {
+                app.taskbar_attempts = 0;
+                Ok(())
+            });
             // SAFETY: `hwnd` is this live window on its owning UI thread.
             unsafe { SetTimer(Some(hwnd), TASKBAR_TIMER, TASKBAR_DELAY_MS, None) };
         }
@@ -3995,6 +4023,7 @@ pub fn run() -> Result<()> {
             appbar: AppBar::register(visual, APPBAR_CALLBACK),
             taskbar_worker: None,
             taskbar_retry: false,
+            taskbar_attempts: 0,
             fullscreen: false,
             roster,
             tracker: WindowTracker::default(),
