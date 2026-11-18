@@ -8,6 +8,8 @@ copia la sección de la versión que se publica a la release de GitHub.
 
 ## [Unreleased]
 
+## [0.1.12]
+
 ### English
 
 - Unplugging the charger now plays a short mascot reaction above the dock,
