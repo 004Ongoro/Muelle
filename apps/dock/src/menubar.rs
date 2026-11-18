@@ -24,13 +24,17 @@ use muelle_shell::{
     system::{self, Battery},
     watch::RegistryWatch,
 };
-use std::sync::atomic::{AtomicBool, AtomicI32, AtomicIsize, Ordering};
+use std::{
+    sync::atomic::{AtomicBool, AtomicI32, AtomicIsize, Ordering},
+    time::{Duration, Instant},
+};
 use windows::{
+    Foundation::{TimeSpan, TypedEventHandler},
     UI::{
         Color,
         Composition::{
-            CompositionBrush, Compositor, ContainerVisual, Desktop::DesktopWindowTarget,
-            SpriteVisual, VisualCollection,
+            CompositionBatchTypes, CompositionBrush, CompositionScopedBatch, Compositor,
+            ContainerVisual, Desktop::DesktopWindowTarget, SpriteVisual, VisualCollection,
         },
     },
     Win32::{
@@ -43,16 +47,16 @@ use windows::{
         UI::Input::KeyboardAndMouse::{TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent},
         UI::WindowsAndMessaging::{
             CallNextHookEx, CreateWindowExW, DefWindowProcW, DestroyWindow, GetCursorPos, HHOOK,
-            HWND_TOPMOST, IDC_ARROW, IDC_HAND, LoadCursorW, MSLLHOOKSTRUCT, PBT_POWERSETTINGCHANGE,
-            PostMessageW, RegisterClassW, SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_SHOWWINDOW,
-            SetCursor, SetTimer, SetWindowPos, SetWindowsHookExW, UnhookWindowsHookEx, WH_MOUSE_LL,
-            WM_APP, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MOUSEMOVE, WM_NCHITTEST,
-            WM_RBUTTONDOWN, WM_SETCURSOR, WM_SETTINGCHANGE, WM_TIMECHANGE, WM_TIMER,
-            WM_XBUTTONDOWN, WNDCLASSW, WS_EX_NOACTIVATE, WS_EX_NOREDIRECTIONBITMAP,
-            WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+            HWND_TOPMOST, IDC_ARROW, IDC_HAND, KillTimer, LoadCursorW, MSLLHOOKSTRUCT,
+            PBT_POWERSETTINGCHANGE, PostMessageW, RegisterClassW, SWP_HIDEWINDOW, SWP_NOACTIVATE,
+            SWP_SHOWWINDOW, SetCursor, SetTimer, SetWindowPos, SetWindowsHookExW,
+            UnhookWindowsHookEx, WH_MOUSE_LL, WM_APP, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN,
+            WM_MOUSEMOVE, WM_NCHITTEST, WM_RBUTTONDOWN, WM_SETCURSOR, WM_SETTINGCHANGE,
+            WM_TIMECHANGE, WM_TIMER, WM_XBUTTONDOWN, WNDCLASSW, WS_EX_NOACTIVATE,
+            WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
         },
     },
-    core::{BOOL, Interface, w},
+    core::{BOOL, Interface, h, w},
 };
 use windows_numerics::{Vector2, Vector3};
 
@@ -78,6 +82,14 @@ const HIT_SLOP: f32 = 7.0;
 const MEDIA_CHANGED: u32 = WM_APP + 28;
 
 const CLOCK_TIMER: usize = 1;
+const POINTER_TIMER: usize = 2;
+const POINTER_CHECK_MS: u32 = 100;
+const HIDE_ANIMATION_TIMER: usize = 3;
+const REVEAL_MS: u32 = 180;
+const HIDE_MS: u32 = 130;
+// Recovery only; normal completion comes from the compositor, not this timer.
+const HIDE_FALLBACK_MS: u32 = HIDE_MS + 250;
+const HIDE_ANIMATION_DONE: u32 = WM_APP + 29;
 const ISLAND_SINGLE_WIDTH: f32 = 145.0;
 const ISLAND_EXPANDED_WIDTH: f32 = 440.0;
 const ISLAND_ROW_HEIGHT: f32 = 118.0;
@@ -219,9 +231,22 @@ impl IslandHit {
     }
 }
 
+struct ExitAnimation {
+    batch: CompositionScopedBatch,
+    completed: i64,
+}
+
+impl Drop for ExitAnimation {
+    fn drop(&mut self) {
+        let _ = self.batch.RemoveCompleted(self.completed);
+    }
+}
+
 pub struct MenuBar {
     hwnd: HWND,
-    target: DesktopWindowTarget,
+    _target: DesktopWindowTarget,
+    /// Stable parent: content refreshes must not restart reveal animations.
+    surface: ContainerVisual,
     appbar: Option<AppBar>,
     app_name: String,
     look: Option<Look>,
@@ -231,8 +256,10 @@ pub struct MenuBar {
     auto_hide: bool,
     /// With auto-hide on: the pointer is at the top edge, so the bar shows.
     revealed: bool,
-    /// Current visual tree and where the full bar goes on screen.
-    root: Option<ContainerVisual>,
+    hide_until: Option<Instant>,
+    animation_epoch: usize,
+    exit_animation: Option<ExitAnimation>,
+    /// Where the full bar goes on screen.
     bounds: RECT,
     status: Status,
     usage: Option<UsageMonitor>,
@@ -269,7 +296,10 @@ unsafe extern "system" fn bar_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -
             let y = (l.0 >> 16) as i16;
             app::menu_bar_pointer_moved(f32::from(x), f32::from(y));
         }
-        WM_MOUSELEAVE => app::menu_bar_hover(false),
+        WM_MOUSELEAVE => app::menu_bar_check_pointer(),
+        WM_TIMER if w.0 == POINTER_TIMER => app::menu_bar_check_pointer(),
+        WM_TIMER if w.0 == HIDE_ANIMATION_TIMER => app::menu_bar_finish_hide(None),
+        HIDE_ANIMATION_DONE => app::menu_bar_finish_hide(Some(w.0)),
         DISMISS_ISLAND => app::menu_bar_dismiss_island(),
         PRIVACY_CHANGED => app::menu_bar_privacy_changed(),
         MEDIA_CHANGED => app::menu_bar_media_changed(),
@@ -765,7 +795,7 @@ fn add_text(
 }
 
 impl MenuBar {
-    pub fn create(gfx: &Gfx, usage_enabled: bool) -> Result<Self> {
+    pub fn create(gfx: &Gfx, usage_enabled: bool, auto_hide: bool) -> Result<Self> {
         let class = w!("MuelleMenuBar");
         // SAFETY: Standard class registration and window creation on the UI
         // thread; the window is destroyed in `Drop`.
@@ -809,17 +839,25 @@ impl MenuBar {
                 .cast::<ICompositorDesktopInterop>()?
                 .CreateDesktopWindowTarget(hwnd, true)?
         };
+        // Our compositor owns the transition; do not combine it with DWM's
+        // native show/hide effect, which can present a cached opaque frame.
+        system::set_window_transitions(hwnd.0 as isize, false);
+        let surface = gfx.compositor.CreateContainerVisual()?;
+        target.SetRoot(&surface)?;
         let mut bar = Self {
             hwnd,
-            target,
+            _target: target,
+            surface,
             appbar: AppBar::register(hwnd, APPBAR_CALLBACK),
             app_name: String::new(),
             look: None,
             zones: Vec::new(),
             visible: true,
-            auto_hide: false,
+            auto_hide,
             revealed: false,
-            root: None,
+            hide_until: None,
+            animation_epoch: 0,
+            exit_animation: None,
             bounds: RECT::default(),
             status: Status {
                 network: Network::Offline,
@@ -862,6 +900,9 @@ impl MenuBar {
             return Ok(());
         }
         self.visible = visible;
+        if !visible && self.auto_hide {
+            self.revealed = false;
+        }
         self.place()
     }
 
@@ -871,6 +912,7 @@ impl MenuBar {
         }
         self.auto_hide = auto_hide;
         self.revealed = false;
+        self.hide_until = None;
         self.place()
     }
 
@@ -890,8 +932,27 @@ impl MenuBar {
         if !self.auto_hide || self.revealed == inside {
             return Ok(());
         }
+        let was_hiding = self.hide_until.is_some();
+        let animated = self.visible && system::animations_enabled();
+        self.animation_epoch = self.animation_epoch.wrapping_add(1);
+        self.exit_animation = None;
         self.revealed = inside;
+        self.hide_until = (!inside && animated)
+            .then(|| Instant::now() + Duration::from_millis(u64::from(HIDE_FALLBACK_MS)));
+        if !animated {
+            self.reset_surface()?;
+        } else if inside && !was_hiding {
+            self.surface
+                .SetOffset(Vector3::new(0.0, -self.reveal_lift(), 0.0))?;
+            self.surface.SetOpacity(0.0)?;
+        }
         self.place()?;
+        if animated && let Err(error) = self.animate_visibility(gfx, inside) {
+            muelle_shell::log::line(&format!("animación de barra superior: {error:#}"));
+            self.hide_until = None;
+            self.reset_surface()?;
+            self.place()?;
+        }
         if inside {
             let mut track = TRACKMOUSEEVENT {
                 cbSize: size_of::<TRACKMOUSEEVENT>() as u32,
@@ -903,6 +964,148 @@ impl MenuBar {
             unsafe { TrackMouseEvent(&mut track)? };
         }
         self.refresh(gfx)
+    }
+
+    fn reveal_lift(&self) -> f32 {
+        (self.bounds.bottom - self.bounds.top) as f32 * 0.3
+    }
+
+    fn animate_visibility(&mut self, gfx: &Gfx, shown: bool) -> Result<()> {
+        let c = &gfx.compositor;
+        let ease = if shown {
+            c.CreateCubicBezierEasingFunction(Vector2::new(0.2, 0.8), Vector2::new(0.2, 1.0))?
+        } else {
+            c.CreateCubicBezierEasingFunction(Vector2::new(0.4, 0.0), Vector2::new(1.0, 1.0))?
+        };
+        let duration = TimeSpan {
+            Duration: i64::from(if shown { REVEAL_MS } else { HIDE_MS }) * 10_000,
+        };
+        let slide = c.CreateScalarKeyFrameAnimation()?;
+        slide.SetDuration(duration)?;
+        slide.InsertExpressionKeyFrame(0.0, h!("this.StartingValue"))?;
+        slide.InsertKeyFrameWithEasingFunction(
+            1.0,
+            if shown { 0.0 } else { -self.reveal_lift() },
+            &ease,
+        )?;
+        let fade = c.CreateScalarKeyFrameAnimation()?;
+        fade.SetDuration(duration)?;
+        fade.InsertExpressionKeyFrame(0.0, h!("this.StartingValue"))?;
+        fade.InsertKeyFrameWithEasingFunction(1.0, if shown { 1.0 } else { 0.0 }, &ease)?;
+        let batch = (!shown)
+            .then(|| c.CreateScopedBatch(CompositionBatchTypes::Animation))
+            .transpose()?;
+        let started = (|| -> Result<()> {
+            self.surface.StartAnimation(h!("Offset.Y"), &slide)?;
+            self.surface.StartAnimation(h!("Opacity"), &fade)?;
+            Ok(())
+        })();
+        if let Some(batch) = batch {
+            let window = self.hwnd.0 as isize;
+            let epoch = self.animation_epoch;
+            let completed = batch.Completed(&TypedEventHandler::new(move |_, _| {
+                // SAFETY: Only scalar state is posted back to the UI thread.
+                // A cancelled transition's already queued reply is ignored.
+                unsafe {
+                    let _ = PostMessageW(
+                        Some(HWND(window as *mut _)),
+                        HIDE_ANIMATION_DONE,
+                        WPARAM(epoch),
+                        LPARAM(0),
+                    );
+                }
+                Ok(())
+            }));
+            // Register before ending the scope. End it even on failure so
+            // unrelated later animations cannot become part of this exit.
+            let ended = batch.End();
+            started?;
+            ended?;
+            let completed = completed?;
+            self.exit_animation = Some(ExitAnimation { batch, completed });
+        } else {
+            started?;
+        }
+        Ok(())
+    }
+
+    fn park_surface(&self) -> Result<()> {
+        self.surface.StopAnimation(h!("Offset.Y"))?;
+        self.surface.StopAnimation(h!("Opacity"))?;
+        self.surface
+            .SetOffset(Vector3::new(0.0, -self.reveal_lift(), 0.0))?;
+        self.surface.SetOpacity(0.0)?;
+        Ok(())
+    }
+
+    fn reset_surface(&self) -> Result<()> {
+        self.surface.StopAnimation(h!("Offset.Y"))?;
+        self.surface.StopAnimation(h!("Opacity"))?;
+        self.surface.SetOffset(Vector3::new(0.0, 0.0, 0.0))?;
+        self.surface.SetOpacity(1.0)?;
+        Ok(())
+    }
+
+    pub fn finish_hide(&mut self, gfx: &Gfx, completed_epoch: Option<usize>) -> Result<()> {
+        let mut point = POINT::default();
+        // SAFETY: Read-only cursor query before completing an exit transition.
+        unsafe { GetCursorPos(&mut point)? };
+        self.finish_hide_at(gfx, Instant::now(), point, completed_epoch)
+    }
+
+    fn finish_hide_at(
+        &mut self,
+        gfx: &Gfx,
+        now: Instant,
+        point: POINT,
+        completed_epoch: Option<usize>,
+    ) -> Result<()> {
+        // A queued timer from a cancelled transition cannot hide a reopened bar.
+        if completed_epoch.is_some_and(|epoch| epoch != self.animation_epoch) {
+            return Ok(());
+        }
+        let Some(deadline) = self.hide_until else {
+            return Ok(());
+        };
+        self.pointer_left_at(gfx, point)?;
+        if self.hide_until.is_none() {
+            return Ok(());
+        }
+        if completed_epoch.is_some() || now >= deadline {
+            self.hide_until = None;
+            self.exit_animation = None;
+        }
+        self.place()
+    }
+
+    /// A leave notification can already be queued when the hidden window is
+    /// shown. Check the pointer rather than hiding a newly revealed bar on it.
+    pub fn check_pointer(&mut self, gfx: &Gfx) -> Result<()> {
+        let mut point = POINT::default();
+        // SAFETY: Read-only cursor query in the same DPI context as `bounds`.
+        unsafe { GetCursorPos(&mut point)? };
+        self.pointer_left_at(gfx, point)
+    }
+
+    fn pointer_left_at(&mut self, gfx: &Gfx, point: POINT) -> Result<()> {
+        let x = (point.x - self.bounds.left) as f32;
+        let within_bar = point.x >= self.bounds.left
+            && point.x < self.bounds.right
+            && point.y >= self.bounds.top
+            && point.y < self.bounds.bottom;
+        // Include the gap between the island and its popup so crossing it
+        // does not close the popup before the pointer reaches its controls.
+        let within_panel = self.panel.is_some()
+            && x >= self.panel_span.left
+            && x < self.panel_span.right
+            && point.y >= self.bounds.bottom
+            && point.y < PANEL_BOTTOM.load(Ordering::Relaxed);
+        if (within_bar || within_panel) && self.hide_until.is_some() {
+            self.hover(gfx, true)?;
+        } else if !within_bar && !within_panel {
+            self.hover(gfx, false)?;
+        }
+        Ok(())
     }
 
     /// Leaving the island sideways still stays inside the full-width bar window.
@@ -933,30 +1136,28 @@ impl MenuBar {
             return Ok(());
         }
         let hidden = self.auto_hide && !self.revealed;
+        if !self.visible || !self.auto_hide {
+            self.hide_until = None;
+            self.exit_animation = None;
+        }
+        let on_screen = self.visible && (!hidden || self.hide_until.is_some());
+        if !on_screen {
+            // Keep the hidden tree transparent. Restoring opacity here races
+            // HWND hiding and flashes its last opaque frame on the next show.
+            self.park_surface()?;
+        } else if !self.auto_hide {
+            self.reset_surface()?;
+        }
         if let Some(appbar) = &mut self.appbar {
             // An auto-hiding bar leaves the whole screen to the windows.
             let strip = if self.auto_hide { 0 } else { bar_height };
             appbar.reserve(Edge::Top, bounds, strip);
         }
-        if let Some(root) = &self.root {
-            // Hidden: the content sits above the screen edge, and only the
-            // reveal strip of the window remains to catch the pointer.
-            let lift = if hidden {
-                -(self.visual_height as f32)
-            } else {
-                0.0
-            };
-            root.SetOffset(Vector3 {
-                X: 0.0,
-                Y: lift,
-                Z: 0.0,
-            })?;
-        }
         // Hidden, the bar keeps no window on screen, not even a thin strip:
         // a strip along the top edge took the clicks meant for the close
-        // button of maximized windows and for browser tabs. The edge hook
+        // button of maximized windows and for browser tabs. The edge watcher
         // watches the pointer instead.
-        let show = if self.visible && !hidden {
+        let show = if on_screen {
             SWP_SHOWWINDOW
         } else {
             SWP_HIDEWINDOW
@@ -972,6 +1173,24 @@ impl MenuBar {
                 self.visual_height,
                 SWP_NOACTIVATE | show,
             )?;
+            if on_screen && self.auto_hide {
+                // TrackMouseEvent may report a leave immediately after showing
+                // a window. Check real geometry while revealed, including if
+                // no further WM_MOUSEMOVE reaches this window.
+                SetTimer(Some(self.hwnd), POINTER_TIMER, POINTER_CHECK_MS, None);
+            } else {
+                let _ = KillTimer(Some(self.hwnd), POINTER_TIMER);
+            }
+            let _ = KillTimer(Some(self.hwnd), HIDE_ANIMATION_TIMER);
+            if let Some(deadline) = self.hide_until {
+                let wait = deadline.saturating_duration_since(Instant::now());
+                SetTimer(
+                    Some(self.hwnd),
+                    HIDE_ANIMATION_TIMER,
+                    (wait.as_millis() as u32).max(1),
+                    None,
+                );
+            }
         }
         edge_watch::set_menu_bar((self.visible && hidden).then_some(bounds));
         self.sync_outside_click_hook()
@@ -1373,8 +1592,13 @@ impl MenuBar {
         self.panel_span = Span::default();
         self.draw_island(gfx, look, &layers, width, height, left_end, right)?;
 
-        self.target.SetRoot(&root)?;
-        self.root = Some(root);
+        self.surface.SetSize(Vector2 {
+            X: width,
+            Y: visual_height,
+        })?;
+        let contents = self.surface.Children()?;
+        contents.RemoveAll()?;
+        contents.InsertAtTop(&root)?;
         self.visual_height = if self.panel_span.width() > 0.0 {
             visual_height
         } else {
@@ -2263,6 +2487,7 @@ fn draw_compact_player(
 
 impl Drop for MenuBar {
     fn drop(&mut self) {
+        self.exit_animation = None;
         self.media = None;
         ISLAND_HOOK_WINDOW.store(0, Ordering::Relaxed);
         edge_watch::set_menu_bar(None);
@@ -2284,6 +2509,181 @@ impl Drop for MenuBar {
 #[cfg(test)]
 mod island_tests {
     use super::*;
+
+    #[test]
+    #[ignore = "Requires Windows desktop composition"]
+    fn auto_hidden_bar_can_reveal_and_hide_repeatedly() -> Result<()> {
+        use windows::Win32::{
+            System::WinRT::{
+                CreateDispatcherQueueController, DQTAT_COM_STA, DQTYPE_THREAD_CURRENT,
+                DispatcherQueueOptions,
+            },
+            UI::WindowsAndMessaging::IsWindowVisible,
+        };
+        // SAFETY: The dispatcher and bar belong to this test thread.
+        let _queue = unsafe {
+            CreateDispatcherQueueController(DispatcherQueueOptions {
+                dwSize: size_of::<DispatcherQueueOptions>() as u32,
+                threadType: DQTYPE_THREAD_CURRENT,
+                apartmentType: DQTAT_COM_STA,
+            })?
+        };
+        let gfx = Gfx::new()?;
+        let mut bar = MenuBar::create(&gfx, false, true)?;
+        assert!(
+            !unsafe { IsWindowVisible(bar.hwnd) }.as_bool(),
+            "auto-hide must apply before the first frame"
+        );
+        bar.set_auto_hide(true)?;
+        for _ in 0..3 {
+            assert!(!unsafe { IsWindowVisible(bar.hwnd) }.as_bool());
+            assert_eq!(
+                bar.surface.Opacity()?,
+                0.0,
+                "hidden content must stay transparent"
+            );
+            let point = POINT {
+                x: (bar.bounds.left + bar.bounds.right) / 2,
+                y: bar.bounds.top,
+            };
+            bar.edge_rested(&gfx, point)?;
+            assert!(unsafe { IsWindowVisible(bar.hwnd) }.as_bool());
+            // A queued leave from before the reveal must not hide it while
+            // the pointer is still at the edge, including its first pixel.
+            bar.pointer_left_at(&gfx, point)?;
+            assert!(unsafe { IsWindowVisible(bar.hwnd) }.as_bool());
+            let surface = bar.surface.clone();
+            bar.set_app_name(&gfx, "Muelle regression test")?;
+            assert_eq!(
+                bar.surface, surface,
+                "redraws must preserve the animation parent"
+            );
+            let outside = POINT {
+                y: bar.bounds.bottom,
+                ..point
+            };
+            bar.pointer_left_at(&gfx, outside)?;
+            if bar.hide_until.is_some() {
+                // Returning during the exit cancels it. Its already queued
+                // completion must not close the bar after that reversal.
+                bar.pointer_left_at(&gfx, point)?;
+                let old_epoch = bar.animation_epoch;
+                bar.finish_hide_at(
+                    &gfx,
+                    Instant::now() + Duration::from_secs(1),
+                    outside,
+                    Some(old_epoch.wrapping_sub(1)),
+                )?;
+                assert!(unsafe { IsWindowVisible(bar.hwnd) }.as_bool());
+                bar.pointer_left_at(&gfx, outside)?;
+                // An old completion must also be ignored during a newer exit.
+                bar.finish_hide_at(
+                    &gfx,
+                    Instant::now() + Duration::from_secs(1),
+                    outside,
+                    Some(old_epoch),
+                )?;
+                assert!(unsafe { IsWindowVisible(bar.hwnd) }.as_bool());
+                let epoch = bar.animation_epoch;
+                bar.finish_hide_at(&gfx, Instant::now(), outside, None)?;
+                assert!(unsafe { IsWindowVisible(bar.hwnd) }.as_bool());
+                bar.finish_hide_at(&gfx, Instant::now(), outside, Some(epoch))?;
+            }
+        }
+        assert!(!unsafe { IsWindowVisible(bar.hwnd) }.as_bool());
+        bar.set_auto_hide(false)?;
+        assert!(unsafe { IsWindowVisible(bar.hwnd) }.as_bool());
+        bar.set_auto_hide(true)?;
+        assert!(!unsafe { IsWindowVisible(bar.hwnd) }.as_bool());
+        bar.edge_rested(
+            &gfx,
+            POINT {
+                x: bar.bounds.right / 2,
+                y: bar.bounds.top,
+            },
+        )?;
+        bar.set_visible(false)?;
+        assert!(!unsafe { IsWindowVisible(bar.hwnd) }.as_bool());
+        assert!(bar.hide_until.is_none());
+        bar.set_visible(true)?;
+        assert!(!unsafe { IsWindowVisible(bar.hwnd) }.as_bool());
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "Requires Windows desktop composition; runs visible transitions"]
+    fn compositor_completion_hides_only_the_current_exit() -> Result<()> {
+        use windows::Win32::{
+            System::WinRT::{
+                CreateDispatcherQueueController, DQTAT_COM_STA, DQTYPE_THREAD_CURRENT,
+                DispatcherQueueOptions,
+            },
+            UI::WindowsAndMessaging::{
+                DispatchMessageW, IsWindowVisible, MSG, PM_REMOVE, PeekMessageW,
+            },
+        };
+        // SAFETY: The dispatcher, queue, window and compositor are test-owned.
+        let _queue = unsafe {
+            CreateDispatcherQueueController(DispatcherQueueOptions {
+                dwSize: size_of::<DispatcherQueueOptions>() as u32,
+                threadType: DQTYPE_THREAD_CURRENT,
+                apartmentType: DQTAT_COM_STA,
+            })?
+        };
+        let gfx = Gfx::new()?;
+        let mut bar = MenuBar::create(&gfx, false, true)?;
+        bar.set_app_name(&gfx, "Muelle animation test")?;
+        bar.set_auto_hide(true)?;
+        let inside = POINT {
+            x: bar.bounds.left + 100,
+            y: bar.bounds.top,
+        };
+        let outside = POINT {
+            y: bar.bounds.bottom + 50,
+            ..inside
+        };
+        let pump = |bar: &mut MenuBar, duration: Duration, point: POINT| -> Result<usize> {
+            let until = Instant::now() + duration;
+            let mut completions = 0;
+            let mut msg = MSG::default();
+            while Instant::now() < until {
+                // Pump the dispatcher so real compositor completion events run.
+                // Pointer state is deterministic; no mouse input is injected.
+                while unsafe { PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE) }.as_bool() {
+                    if msg.hwnd == bar.hwnd && msg.message == HIDE_ANIMATION_DONE {
+                        completions += 1;
+                        bar.finish_hide_at(&gfx, Instant::now(), point, Some(msg.wParam.0))?;
+                    } else if msg.hwnd == bar.hwnd
+                        && msg.message == WM_TIMER
+                        && msg.wParam.0 == HIDE_ANIMATION_TIMER
+                    {
+                        bar.finish_hide_at(&gfx, Instant::now(), point, None)?;
+                    } else {
+                        unsafe { DispatchMessageW(&msg) };
+                    }
+                }
+                std::thread::sleep(Duration::from_millis(2));
+            }
+            Ok(completions)
+        };
+        pump(&mut bar, Duration::from_millis(300), outside)?;
+        for _ in 0..3 {
+            bar.hover(&gfx, true)?;
+            pump(&mut bar, Duration::from_millis(500), inside)?;
+            assert!(unsafe { IsWindowVisible(bar.hwnd) }.as_bool());
+            bar.hover(&gfx, false)?;
+            if system::animations_enabled() {
+                assert!(unsafe { IsWindowVisible(bar.hwnd) }.as_bool());
+            }
+            let completions = pump(&mut bar, Duration::from_millis(500), outside)?;
+            if system::animations_enabled() {
+                assert_eq!(completions, 1, "exit must complete through the compositor");
+            }
+            assert!(!unsafe { IsWindowVisible(bar.hwnd) }.as_bool());
+            assert_eq!(bar.surface.Opacity()?, 0.0);
+        }
+        Ok(())
+    }
 
     #[test]
     fn clicking_usage_replaces_music_and_clicking_again_closes_it() {

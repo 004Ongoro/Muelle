@@ -15,20 +15,6 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State, WebviewWindowBuilder};
 use tauri_plugin_updater::{Update, UpdaterExt};
 
-/// The dock owns the pinned and recent apps; this app never overwrites them
-/// with a stale copy.
-fn merged_with_disk(config: Config) -> Config {
-    match muelle_config::load(&muelle_config::default_path()) {
-        Ok(Some(disk)) => Config {
-            pinned: disk.pinned,
-            recent: disk.recent,
-            taskbar_pins: disk.taskbar_pins,
-            ..config
-        },
-        _ => config,
-    }
-}
-
 /// The dock is installed next to this app.
 fn dock_exe() -> io::Result<PathBuf> {
     Ok(env::current_exe()?.with_file_name("muelle.exe"))
@@ -49,12 +35,15 @@ fn default_config() -> Config {
 }
 
 #[tauri::command]
-fn set_config(config: Config) -> Result<Config, String> {
-    let config = merged_with_disk(config.sanitized());
-    muelle_config::save(&muelle_config::default_path(), &config)
-        .map_err(|error| error.to_string())?;
-    dock_link::notify_config_changed();
-    Ok(config)
+async fn set_config(patch: serde_json::Map<String, serde_json::Value>) -> Result<Config, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let config = muelle_config::update_preferences(&muelle_config::default_path(), patch)
+            .map_err(|error| error.to_string())?;
+        dock_link::notify_config_changed();
+        Ok(config)
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 /// Windows' own animation setting, which the genie follows: off, the

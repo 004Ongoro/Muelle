@@ -507,6 +507,8 @@ struct App {
     gfx: Gfx,
     target: DesktopWindowTarget,
     appbar: Option<AppBar>,
+    taskbar_worker: Option<thread::JoinHandle<()>>,
+    taskbar_retry: bool,
     fullscreen: bool,
     roster: Roster,
     tracker: WindowTracker,
@@ -577,6 +579,7 @@ struct App {
     hovered: Option<usize>,
     preview_candidate: Option<String>,
     preview: Option<MultiWindowView>,
+    menu_open: bool,
     /// The crab, while it is out (see `perform`).
     mascot: Option<mascot::Mascot>,
     /// Charging and energy saver at the last power change.
@@ -614,10 +617,14 @@ fn load_config() -> Config {
                 taskbar_pins: Some(pins),
                 ..Config::default()
             };
-            if let Err(error) = muelle_config::save(&path, &config) {
-                eprintln!("muelle: {error}");
+            match muelle_config::update(&path, |saved| Ok(saved.unwrap_or_else(|| config.clone())))
+            {
+                Ok(saved) => saved,
+                Err(error) => {
+                    eprintln!("muelle: {error}");
+                    config
+                }
             }
-            config
         }
         Err(error) => {
             // Do not overwrite it; the user may want to repair the file.
@@ -637,20 +644,23 @@ fn roster_from(config: &Config) -> Roster {
 }
 
 fn save_settings(roster: &Roster, config: &Config) {
-    let path = muelle_config::default_path();
-    if let Err(error) = muelle_config::load(&path) {
-        // Do not overwrite a corrupted file; report it and skip saving.
-        eprintln!("muelle: {error}; no se guardan los cambios del dock");
-        return;
-    }
-    let config = Config {
-        pinned: roster.pinned().to_vec(),
-        recent: roster.recent().to_vec(),
-        ..config.clone()
-    };
-    if let Err(error) = muelle_config::save(&path, &config) {
+    if let Err(error) = save_dock_config(roster, config, false) {
         eprintln!("muelle: {error}");
     }
+}
+
+fn save_dock_config(roster: &Roster, config: &Config, toggle_hide: bool) -> Result<Config> {
+    let saved = muelle_config::update(&muelle_config::default_path(), |saved| {
+        let mut saved = saved.unwrap_or_else(|| config.clone());
+        saved.pinned = roster.pinned().to_vec();
+        saved.recent = roster.recent().to_vec();
+        saved.taskbar_pins.clone_from(&config.taskbar_pins);
+        if toggle_hide {
+            saved.auto_hide = !saved.auto_hide;
+        }
+        Ok(saved)
+    })?;
+    Ok(saved)
 }
 
 fn shorten(text: &str, max: usize) -> String {
@@ -1091,7 +1101,9 @@ impl App {
         let slide = self.slide.value * stage.slide_distance;
         stage.scene.apply(&Frame {
             state: &state,
-            hovered: self.hovered.filter(|_| self.preview.is_none()),
+            hovered: self
+                .hovered
+                .filter(|_| self.preview.is_none() && !self.menu_open),
             lifts: &lifts,
             drag,
             slide,
@@ -1368,6 +1380,7 @@ impl App {
 
     fn preview_target(&self) -> Option<(&str, usize)> {
         if !self.hovering
+            || self.menu_open
             || self.press.is_some()
             || self.drag.is_some()
             || self.drag_over
@@ -1494,6 +1507,7 @@ impl App {
     /// A menu closed: it held the mouse, so the dock heard nothing of where
     /// the pointer went meanwhile. Settle the magnifier on where it is now.
     fn after_menu(&mut self) -> Result<()> {
+        self.menu_open = false;
         let mut point = POINT::default();
         // SAFETY: Read-only queries.
         let over = unsafe {
@@ -1501,14 +1515,14 @@ impl App {
                 && windows::Win32::UI::WindowsAndMessaging::WindowFromPoint(point) == self.input
         };
         if over {
-            self.track_leave()
+            self.on_mouse_move()
         } else {
             self.on_mouse_leave()
         }
     }
 
     fn on_mouse_leave(&mut self) -> Result<()> {
-        if !self.hovering || self.drag.is_some() {
+        if !self.hovering || self.drag.is_some() || self.drag_over || self.menu_open {
             return Ok(());
         }
         self.hovering = false;
@@ -1940,6 +1954,8 @@ impl App {
     fn hide_if_unused(&mut self) -> Result<()> {
         if !self.config.auto_hide
             || self.mascot.is_some()
+            || self.menu_open
+            || self.drag_over
             || self.hovering
             || self.drag.is_some()
             || self.switching
@@ -2423,6 +2439,9 @@ impl App {
     /// Right-click prepares the menu for the item under the cursor, or the dock
     /// menu when over empty space or a divider.
     fn on_right_click(&mut self) -> Result<Option<Outside>> {
+        if self.menu_open {
+            return Ok(None);
+        }
         self.close_preview();
         if self.pointer_at_click()?.is_none() {
             return Ok(None);
@@ -2477,10 +2496,6 @@ impl App {
             }
         };
 
-        // Hide the label while the menu is open, as in macOS.
-        self.hovered = None;
-        self.hovering = false;
-        self.render()?;
         Ok(Some(Outside::Menu(MenuRequest {
             gfx: self.gfx.clone(),
             target,
@@ -2724,8 +2739,7 @@ impl App {
     }
 
     fn toggle_hiding(&mut self) -> Result<()> {
-        self.config.auto_hide = !self.config.auto_hide;
-        save_settings(&self.roster, &self.config);
+        self.config.auto_hide = save_dock_config(&self.roster, &self.config, true)?.auto_hide;
         self.slide.target = if self.config.auto_hide { 1.0 } else { 0.0 };
         self.last_frame = Instant::now();
         self.apply_edge_settings();
@@ -2888,15 +2902,43 @@ impl App {
         Ok(restore.map(|hwnd| Outside::Activate(vec![hwnd])))
     }
 
-    /// Hides the taskbar and reserves its space again. After Explorer restarts,
-    /// both the taskbar and AppBar registrations are new.
-    fn retake_taskbar(&mut self) -> Result<()> {
-        taskbar::take_over();
-        self.appbar = None;
-        self.appbar = AppBar::register(self.visual, APPBAR_CALLBACK);
-        // The menu bar's reservation is gone as well: rebuild it.
-        self.menubar = None;
-        self.apply_menu_bar_setting();
+    /// Explorer can block on taking over the taskbar, especially after it
+    /// restarts. Coalesce notifications while the worker owns that request.
+    fn request_taskbar(&mut self, rebuild: bool) -> Result<()> {
+        if self.taskbar_worker.is_some() {
+            self.taskbar_retry |= rebuild;
+            return Ok(());
+        }
+        let window = self.visual.0 as isize;
+        self.taskbar_worker = Some(thread::Builder::new().name("muelle-taskbar".into()).spawn(
+            move || {
+                taskbar::take_over();
+                // SAFETY: Only a message with scalar data is sent to our UI.
+                unsafe {
+                    let _ = PostMessageW(
+                        Some(HWND(window as *mut _)),
+                        TASKBAR_TAKEN,
+                        WPARAM(usize::from(rebuild)),
+                        LPARAM(0),
+                    );
+                }
+            },
+        )?);
+        Ok(())
+    }
+
+    fn taskbar_taken(&mut self, rebuild: bool) -> Result<()> {
+        // The worker has finished its Explorer call and posted this reply.
+        self.taskbar_worker = None;
+        if std::mem::take(&mut self.taskbar_retry) {
+            return self.request_taskbar(true);
+        }
+        if rebuild {
+            self.appbar = None;
+            self.appbar = AppBar::register(self.visual, APPBAR_CALLBACK);
+            self.menubar = None;
+            self.apply_menu_bar_setting();
+        }
         self.stage = None;
         self.refresh()
     }
@@ -2908,9 +2950,13 @@ impl App {
         if !self.config.menu_bar {
             self.menubar = None;
         } else if self.menubar.is_none() {
-            self.menubar = MenuBar::create(&self.gfx, self.config.ai_usage)
-                .inspect_err(|error| eprintln!("muelle: barra superior: {error:#}"))
-                .ok();
+            self.menubar = MenuBar::create(
+                &self.gfx,
+                self.config.ai_usage,
+                self.config.menu_bar_auto_hide,
+            )
+            .inspect_err(|error| eprintln!("muelle: barra superior: {error:#}"))
+            .ok();
         }
         if let Some(bar) = &mut self.menubar {
             let applied = bar
@@ -3017,6 +3063,7 @@ impl App {
             .any(|key| unsafe { GetAsyncKeyState(i32::from(key.0)) < 0 });
         if !self.config.auto_hide
             || self.hovering
+            || self.menu_open
             || self.press.is_some()
             || self.drag_over
             || self.drag.is_some()
@@ -3357,9 +3404,16 @@ pub fn multi_window_view_dismiss() {
     });
 }
 
-pub fn menu_bar_hover(inside: bool) {
+pub fn menu_bar_check_pointer() {
     with_app("barra superior", |app| match &mut app.menubar {
-        Some(bar) => bar.hover(&app.gfx, inside),
+        Some(bar) => bar.check_pointer(&app.gfx),
+        None => Ok(()),
+    });
+}
+
+pub fn menu_bar_finish_hide(completed_epoch: Option<usize>) {
+    with_app("ocultar barra superior", |app| match &mut app.menubar {
+        Some(bar) => bar.finish_hide(&app.gfx, completed_epoch),
         None => Ok(()),
     });
 }
@@ -3511,6 +3565,10 @@ fn run_outside(outside: Outside) {
         }
         Outside::Menu(request) => {
             let owner = HWND(MAIN_WINDOW.load(Ordering::Relaxed) as *mut _);
+            with_app("abrir menú", |app| {
+                app.menu_open = true;
+                app.render()
+            });
             let chosen = menu::show(
                 &request.gfx,
                 owner,
@@ -3667,16 +3725,15 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) ->
                     Ok(())
                 }),
                 SYNC_TIMER => with_app("lectura de ventanas", App::sync),
-                _ => with_app("ocultar la barra de Windows", App::retake_taskbar),
+                _ => with_app("ocultar la barra de Windows", |app| {
+                    app.request_taskbar(true)
+                }),
             }
         }
         APPBAR_CALLBACK => with_app("aviso de AppBar", |app| app.on_appbar_notice(w.0)),
         // Once the taskbar is set to auto-hide, the dock strip moves to the
         // screen edge, so reserve and reposition it again.
-        TASKBAR_TAKEN => with_app("reserva de espacio", |app| {
-            app.stage = None;
-            app.refresh()
-        }),
+        TASKBAR_TAKEN => with_app("reserva de espacio", |app| app.taskbar_taken(w.0 != 0)),
         WM_POWERBROADCAST if w.0 == PBT_APMRESUMEAUTOMATIC => {
             // SAFETY: `hwnd` is this live window on its owning UI thread.
             unsafe { SetTimer(Some(hwnd), TASKBAR_TIMER, TASKBAR_DELAY_MS, None) };
@@ -3845,6 +3902,8 @@ pub fn run() -> Result<()> {
             gfx,
             target,
             appbar: AppBar::register(visual, APPBAR_CALLBACK),
+            taskbar_worker: None,
+            taskbar_retry: false,
             fullscreen: false,
             roster,
             tracker: WindowTracker::default(),
@@ -3893,6 +3952,7 @@ pub fn run() -> Result<()> {
             hovered: None,
             preview_candidate: None,
             preview: None,
+            menu_open: false,
             mascot: None,
             // Initial registration notifications establish the baseline after
             // the queue starts, without playing a startup charging/saver act.
@@ -3983,19 +4043,9 @@ pub fn run() -> Result<()> {
 
     // Hiding the taskbar is a synchronous Explorer call that takes 50–500 ms
     // depending on load. Run it off the UI thread after the dock is visible.
-    let visual_window = MAIN_WINDOW.load(Ordering::Relaxed);
     query_bin_in_background();
-    let taking_over = thread::spawn(move || {
-        taskbar::take_over();
-        // SAFETY: Only a message is sent; if the window no longer exists, the call has no effect.
-        unsafe {
-            let _ = PostMessageW(
-                Some(HWND(visual_window as *mut _)),
-                TASKBAR_TAKEN,
-                WPARAM(0),
-                LPARAM(0),
-            );
-        }
+    with_app("ocultar la barra de Windows", |app| {
+        app.request_taskbar(false)
     });
 
     muelle_shell::log::line(&format!(
@@ -4010,16 +4060,19 @@ pub fn run() -> Result<()> {
             let _ = UnhookWinEvent(HWINEVENTHOOK(hook.load(Ordering::Relaxed) as *mut _));
         }
     }
-    APP.with_borrow_mut(|app| {
-        if let Some(app) = app {
+    let taking_over = APP.with_borrow_mut(|app| {
+        app.as_mut().and_then(|app| {
             app.restore_transitions();
-        }
+            app.taskbar_worker.take()
+        })
     });
     APP.set(None);
     // SAFETY: Balances `OleInitialize` above, on the same thread.
     unsafe { OleUninitialize() };
     // Wait for taskbar takeover to finish before restoring it.
-    let _ = taking_over.join();
+    if let Some(worker) = taking_over {
+        let _ = worker.join();
+    }
     Ok(())
 }
 

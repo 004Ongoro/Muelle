@@ -13,6 +13,23 @@ copia la sección de la versión que se publica a la release de GitHub.
 - With auto-hide enabled, rest the pointer at a display's bottom edge to
   bring the Dock to that display (#9, #11).
 - Menu bar redraws no longer cancel a pending top-edge reveal (#10).
+- Screen-edge detection reads the cursor on a dedicated timer thread while
+  auto-hide is active, including when the cursor is already at the edge.
+- Auto-hidden menu bars verify the cursor position before closing on
+  mouse-leave notifications, with a pointer check only while the bar is revealed.
+- The menu bar reveals after a shorter edge dwell and slides/fades in and
+  out using the Windows compositor. Returning during its exit reverses the
+  transition; Windows' disabled animation setting is respected.
+- Show/hide transitions wait for compositor completion and keep hidden content
+  transparent, preventing cached-frame flashes. Auto-hide also applies before
+  the menu bar's first frame at startup.
+- Closing a dock context menu resets hover and resumes auto-hide when the
+  pointer is outside the dock. File drags keep the dock open.
+- Dock and Settings writes are serialized. Changing a preference preserves
+  recent pin changes and the dock's latest auto-hide setting. Closing
+  Settings waits for pending edits to be saved.
+- Taking over the Windows taskbar after resume or an Explorer restart runs
+  in the background, as it does at startup.
 
 ### Español
 
@@ -20,6 +37,24 @@ copia la sección de la versión que se publica a la release de GitHub.
   de una pantalla para mostrar el Dock allí (#9, #11).
 - Actualizar la barra superior ya no cancela su aparición al dejar el puntero
   en el borde (#10).
+- La detección del borde consulta el puntero desde un hilo con temporizador
+  mientras está activa la ocultación automática, incluso si ya está en el borde.
+- Los avisos de salida de la barra superior verifican la posición real del
+  puntero antes de cerrarla, con una comprobación solo mientras está desplegada.
+- La barra aparece con una espera menor en el borde y transiciones de
+  deslizamiento y opacidad mediante el compositor de Windows. Volver durante
+  la salida la invierte; respeta la desactivación de animaciones de Windows.
+- La salida espera a que termine realmente la animación del compositor y el
+  contenido permanece transparente al ocultarse, evitando destellos de fotogramas
+  anteriores. La auto-ocultación se aplica desde el primer fotograma al iniciar.
+- Al cerrar un menú contextual fuera del dock se restablece el puntero y
+  vuelve a funcionar la ocultación automática. Al arrastrar archivos, el
+  dock permanece abierto.
+- El dock y Ajustes guardan por turnos. Cambiar una preferencia conserva
+  los pines y el estado de ocultación más recientes. Ajustes guarda los
+  cambios pendientes antes de cerrarse.
+- Recuperar la barra de tareas tras reanudar Windows o reiniciar el
+  Explorador se ejecuta en segundo plano, igual que en el inicio.
 
 ## [0.1.12]
 
