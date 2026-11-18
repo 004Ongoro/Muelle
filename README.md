@@ -16,9 +16,9 @@
 
 Smooth magnification, live window previews, and an optional Genie-style minimize effect.
 
-| Auto-hiding Dock and Menu Bar | Genie Effect on Minimize |
+| Clawd Pet | Genie Effect on Minimize |
 | :---: | :---: |
-| ![GIF showing the Dock and Menu Bar automatically hiding and reappearing](https://github.com/user-attachments/assets/7127c478-aada-49e4-9813-7b578fef0d63) | ![GIF showing a window minimizing into the Dock with the Genie effect](https://github.com/user-attachments/assets/878503a8-7286-445d-826b-41c18da013bc) |
+| ![GIF showing mascot the Dock and Menu Bar](https://github.com/user-attachments/assets/580b235e-6141-493a-a333-8f2b96f3acca) | ![GIF showing a window minimizing into the Dock with the Genie effect](https://github.com/user-attachments/assets/878503a8-7286-445d-826b-41c18da013bc) |
 | **Usage preview** | **Usage detail** |
 | ![GIF showing the Dock and Menu Bar automatically hiding and reappearing](https://github.com/user-attachments/assets/60a8f7c0-20fc-429b-977f-d5b4b7d97d88) | ![GIF showing a window minimizing into the Dock with the Genie effect](https://github.com/user-attachments/assets/fbf21cf6-c1c0-4173-9d68-ae883f0d2a45) |
 
