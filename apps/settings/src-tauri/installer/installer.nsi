@@ -73,6 +73,7 @@ ${StrLoc}
 
 Var PassiveMode
 Var UpdateMode
+Var MuelleFirstInstall
 Var NoShortcutMode
 Var WixMode
 Var OldMainBinaryName
@@ -556,6 +557,14 @@ Function .onInit
     !insertmacro MULTIUSER_INIT
   !endif
 
+  ; Read the existing registration before the install section replaces it.
+  StrCpy $MuelleFirstInstall 0
+  ReadRegStr $R0 SHCTX "${UNINSTKEY}" "UninstallString"
+  ${If} $R0 == ""
+  ${AndIfNot} ${FileExists} "$INSTDIR\muelle.exe"
+    StrCpy $MuelleFirstInstall 1
+  ${EndIf}
+
   ; Abort downgrades if they are disabled, in the modes that skip the reinstall page choice:
   ; silent, passive and update
   !if "${ALLOWDOWNGRADES}" == "false"
@@ -790,7 +799,15 @@ Function .onInstSuccess
     ${IfNot} ${Errors}
       ${GetOptions} $CMDLINE "/ARGS" $R0
       nsis_tauri_utils::RunAsUser "$INSTDIR\${MAINBINARYNAME}.exe" "$R0"
+      Return
     ${EndIf}
+  ${EndIf}
+  ; A first interactive install introduces Settings. Silent installs and
+  ; upgrades keep the existing launch behavior.
+  ${If} $MuelleFirstInstall = 1
+  ${AndIf} $UpdateMode <> 1
+  ${AndIfNot} ${Silent}
+    Call RunMainBinary
   ${EndIf}
 FunctionEnd
 
