@@ -8,6 +8,18 @@ copia la sección de la versión que se publica a la release de GitHub.
 
 ## [Unreleased]
 
+### English
+
+- Unplugging the charger now plays a short mascot reaction above the dock,
+  including when unplugging also enables energy saver. It replaces an ongoing
+  charging reaction and temporarily reveals an auto-hidden dock.
+
+### Español
+
+- Al desconectar el cargador, la mascota también aparece sobre el dock,
+  incluso si se activa el ahorro de energía a la vez. Sustituye la reacción
+  de carga si todavía está en curso y muestra temporalmente el dock oculto.
+
 ## [0.1.11]
 
 ### English

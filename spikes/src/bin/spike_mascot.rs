@@ -1,6 +1,6 @@
 //! Plays one of the crab's acts (the real `mascot.rs` and `gfx.rs`) on the
 //! screen and saves frames of it, to review the choreography. Usage:
-//! `spike_mascot <fresh|nervous|exhausted|charging|sleepy> <out folder>`.
+//! `spike_mascot <fresh|nervous|exhausted|charging|unplugged|sleepy> <out folder>`.
 
 #![allow(dead_code, clippy::unwrap_used, clippy::expect_used)]
 
@@ -32,6 +32,7 @@ fn main() {
         Some("nervous") => mascot::Act::Nervous,
         Some("exhausted") => mascot::Act::Exhausted,
         Some("charging") => mascot::Act::Charging,
+        Some("unplugged") => mascot::Act::Unplugged,
         Some("sleepy") => mascot::Act::Sleepy,
         _ => mascot::Act::Fresh,
     };
@@ -74,7 +75,7 @@ fn main() {
             return;
         }
         let (place, area) = match act {
-            mascot::Act::Charging | mascot::Act::Sleepy => (
+            mascot::Act::Charging | mascot::Act::Unplugged | mascot::Act::Sleepy => (
                 mascot::Place::Along {
                     left: 560,
                     right: 1360,

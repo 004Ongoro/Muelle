@@ -457,7 +457,11 @@ fn power_act(
     charging_allowed: bool,
 ) -> Option<mascot::Act> {
     let before = before?;
-    if now.1 && !before.1 {
+    // Unplugging can also enable energy saver. Keep the charger reaction
+    // instead of replacing it with the less specific saver-only moment.
+    if now.0 == Some(false) && before.0 == Some(true) {
+        Some(mascot::Act::Unplugged)
+    } else if now.1 && !before.1 {
         Some(mascot::Act::Sleepy)
     } else if now.0 == Some(true) && before.0 == Some(false) && charging_allowed {
         Some(mascot::Act::Charging)
@@ -1882,7 +1886,7 @@ impl App {
         }
     }
 
-    /// The charger plugged in, or energy saver turned on: the crab walks
+    /// The charger plugged in or out, or energy saver turned on: the crab walks
     /// along the dock. Only on the change itself, never at startup.
     fn power_moment(&mut self) {
         let now = (
@@ -1894,11 +1898,21 @@ impl App {
             .charging_shown
             .is_none_or(|shown| shown.elapsed() >= CHARGING_AGAIN);
         let act = power_act(before, now, charging_allowed);
-        if let Some(act) = act
-            && self.can_perform()
-            && let Some(place) = self.dock_edge()
-        {
-            self.perform(act, place);
+        if let Some(act) = act {
+            if matches!(act, mascot::Act::Charging | mascot::Act::Unplugged)
+                && self.config.mascot
+                && !self.fullscreen
+                && animations_enabled()
+            {
+                // A disconnect must still show if it happens during the
+                // charging reaction; keep only one scene and cleanup timer.
+                self.stop_mascot();
+            }
+            if self.can_perform()
+                && let Some(place) = self.dock_edge()
+            {
+                self.perform(act, place);
+            }
         }
     }
 
@@ -3915,8 +3929,31 @@ mod mascot_power_tests {
         );
         assert_eq!(
             power_act(Some((Some(true), true)), (Some(false), false), true),
-            None
+            Some(Act::Unplugged)
         );
+    }
+
+    #[test]
+    fn unplugging_is_not_suppressed_by_charging_cooldown_or_automatic_saver() {
+        assert_eq!(
+            power_act(Some((Some(true), false)), (Some(false), true), false),
+            Some(Act::Unplugged)
+        );
+        assert_eq!(
+            power_act(Some((Some(true), false)), (Some(false), false), false),
+            Some(Act::Unplugged)
+        );
+    }
+
+    #[test]
+    fn missing_or_repeated_power_readings_do_not_announce_a_disconnect() {
+        for (before, now) in [
+            (None, Some(false)),
+            (Some(true), None),
+            (Some(false), Some(false)),
+        ] {
+            assert_eq!(power_act(Some((before, false)), (now, false), true), None);
+        }
     }
 }
 

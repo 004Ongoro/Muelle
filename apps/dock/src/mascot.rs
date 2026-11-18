@@ -1,5 +1,5 @@
 //! The crab: a pixel-art mascot that comes out only for moments worth it
-//! (an AI plan resetting or running out, the charger plugged in, energy
+//! (an AI plan resetting or running out, the charger plugged in or out, energy
 //! saver starting) and plays a short act, then leaves.
 //!
 //! Cost: nothing while it is away. An act creates a small click-through
@@ -287,6 +287,8 @@ pub enum Act {
     Exhausted,
     /// The charger was plugged in.
     Charging,
+    /// The charger was unplugged: back on battery.
+    Unplugged,
     /// Energy saver started.
     Sleepy,
 }
@@ -373,6 +375,15 @@ impl Script {
                     emote: Some((Emote::Heart, 2.05, 3.0)),
                 }
             }
+            Act::Unplugged => Self {
+                seconds: 3.2,
+                path: vec![(0.0, centre)],
+                hops: vec![(0.4, 2.0)],
+                shake: None,
+                faces: vec![(0.0, Face::Neutral), (0.8, Face::Sad), (2.0, Face::Neutral)],
+                walking: Vec::new(),
+                emote: Some((Emote::Drop, 0.85, 2.2)),
+            },
             // Shuffles in slowly from the right, stops and falls asleep.
             Act::Sleepy => {
                 let rest = width * 0.62 - crab / 2.0;
@@ -912,6 +923,7 @@ mod tests {
             Act::Nervous,
             Act::Exhausted,
             Act::Charging,
+            Act::Unplugged,
             Act::Sleepy,
         ] {
             let script = Script::new(act, 800.0, 44.0);
