@@ -8,6 +8,19 @@ copia la sección de la versión que se publica a la release de GitHub.
 
 ## [Unreleased]
 
+### English
+
+- With auto-hide enabled, rest the pointer at a display's bottom edge to
+  bring the Dock to that display (#9, #11).
+- Menu bar redraws no longer cancel a pending top-edge reveal (#10).
+
+### Español
+
+- Con la ocultación automática activada, deja el puntero en el borde inferior
+  de una pantalla para mostrar el Dock allí (#9, #11).
+- Actualizar la barra superior ya no cancela su aparición al dejar el puntero
+  en el borde (#10).
+
 ## [0.1.12]
 
 ### English

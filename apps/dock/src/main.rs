@@ -14,6 +14,7 @@
 mod app;
 mod assets;
 mod drop;
+mod edge_watch;
 mod flight;
 mod gfx;
 mod guard;

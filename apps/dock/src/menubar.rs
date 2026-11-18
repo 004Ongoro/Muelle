@@ -8,8 +8,8 @@
 //! Cost while idle: one timer that fires once a minute, on the minute, to
 //! redraw the clock. Everything else is event-driven.
 //!
-//! With auto-hide on, the bar reserves no space and stays off screen; a thin
-//! strip along the top edge reveals it while the pointer is there.
+//! With auto-hide on, the bar reserves no space and stays off screen. Resting
+//! the pointer briefly at the top edge reveals it.
 //!
 //! Status items, right to left as on a Mac: clock, control center, search,
 //! network, volume, battery, then Task View and Widgets. Search, Task View and
@@ -43,13 +43,13 @@ use windows::{
         UI::Input::KeyboardAndMouse::{TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent},
         UI::WindowsAndMessaging::{
             CallNextHookEx, CreateWindowExW, DefWindowProcW, DestroyWindow, GetCursorPos, HHOOK,
-            HWND_TOPMOST, IDC_ARROW, IDC_HAND, KillTimer, LoadCursorW, MSLLHOOKSTRUCT,
-            PBT_POWERSETTINGCHANGE, PostMessageW, RegisterClassW, SWP_HIDEWINDOW, SWP_NOACTIVATE,
-            SWP_SHOWWINDOW, SetCursor, SetTimer, SetWindowPos, SetWindowsHookExW,
-            UnhookWindowsHookEx, WH_MOUSE_LL, WM_APP, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN,
-            WM_MOUSEMOVE, WM_NCHITTEST, WM_RBUTTONDOWN, WM_SETCURSOR, WM_SETTINGCHANGE,
-            WM_TIMECHANGE, WM_TIMER, WM_XBUTTONDOWN, WNDCLASSW, WS_EX_NOACTIVATE,
-            WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+            HWND_TOPMOST, IDC_ARROW, IDC_HAND, LoadCursorW, MSLLHOOKSTRUCT, PBT_POWERSETTINGCHANGE,
+            PostMessageW, RegisterClassW, SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_SHOWWINDOW,
+            SetCursor, SetTimer, SetWindowPos, SetWindowsHookExW, UnhookWindowsHookEx, WH_MOUSE_LL,
+            WM_APP, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MOUSEMOVE, WM_NCHITTEST,
+            WM_RBUTTONDOWN, WM_SETCURSOR, WM_SETTINGCHANGE, WM_TIMECHANGE, WM_TIMER,
+            WM_XBUTTONDOWN, WNDCLASSW, WS_EX_NOACTIVATE, WS_EX_NOREDIRECTIONBITMAP,
+            WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
         },
     },
     core::{BOOL, Interface, w},
@@ -57,7 +57,7 @@ use windows::{
 use windows_numerics::{Vector2, Vector3};
 
 use crate::{
-    app,
+    app, edge_watch,
     gfx::{Gfx, Ink, LabelBrush},
     mascot,
     media::{self, Control as MediaControl, Track},
@@ -75,14 +75,6 @@ const ITEM_GAP: f32 = 16.0;
 /// Extra clickable room around an item.
 const HIT_SLOP: f32 = 7.0;
 
-/// How long the pointer must rest on the top edge before a hidden bar shows.
-/// Just passing through, on the way to a window's close button or a browser
-/// tab, does not reveal it.
-const REVEAL_DWELL_MS: u32 = 250;
-const REVEAL_TIMER: usize = 2;
-/// Posted by the edge hook when the pointer reaches or leaves the top edge.
-const EDGE_ENTER: u32 = WM_APP + 26;
-const EDGE_LEAVE: u32 = WM_APP + 27;
 const MEDIA_CHANGED: u32 = WM_APP + 28;
 
 const CLOCK_TIMER: usize = 1;
@@ -118,15 +110,6 @@ static BAR_BOTTOM: AtomicI32 = AtomicI32::new(0);
 static PANEL_BOTTOM: AtomicI32 = AtomicI32::new(0);
 /// The hook exists only while the island is expanded.
 static ISLAND_HOOK_WINDOW: AtomicIsize = AtomicIsize::new(0);
-/// The hidden bar's window, for the edge hook; 0 while no hook is installed.
-static EDGE_HOOK_WINDOW: AtomicIsize = AtomicIsize::new(0);
-/// The row of the top edge and its span, in screen pixels.
-static EDGE_TOP: AtomicI32 = AtomicI32::new(0);
-static EDGE_LEFT: AtomicI32 = AtomicI32::new(0);
-static EDGE_RIGHT: AtomicI32 = AtomicI32::new(0);
-/// The pointer is on the edge and `EDGE_ENTER` was posted.
-static EDGE_ARMED: AtomicBool = AtomicBool::new(false);
-
 /// Segoe Fluent Icons code points.
 mod glyph {
     pub const WIFI: [char; 4] = ['\u{E872}', '\u{E873}', '\u{E874}', '\u{E701}'];
@@ -264,8 +247,6 @@ pub struct MenuBar {
     panel_span: Span,
     island_hits: Vec<IslandHit>,
     outside_click_hook: Option<HHOOK>,
-    /// Watches the top edge while the bar auto-hides.
-    edge_watch: Option<EdgeWatch>,
     /// Held for their callbacks; dropping them unsubscribes.
     _network: Option<NetworkWatch>,
     /// Hears when apps start or stop using the microphone or camera.
@@ -321,19 +302,6 @@ unsafe extern "system" fn bar_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -
         // network or volume changed, or a Windows setting (taskbar buttons).
         // Nothing the bar shows depends on the work area.
         WM_SETTINGCHANGE if w.0 == SPI_SETWORKAREA => {}
-        EDGE_ENTER => {
-            // SAFETY: A timer on our own window; setting it again restarts it.
-            unsafe {
-                SetTimer(Some(hwnd), REVEAL_TIMER, REVEAL_DWELL_MS, None);
-            }
-        }
-        EDGE_LEAVE => {
-            // SAFETY: Our own timer.
-            unsafe {
-                let _ = KillTimer(Some(hwnd), REVEAL_TIMER);
-            }
-        }
-        WM_TIMER if w.0 == REVEAL_TIMER => app::menu_bar_edge_rested(),
         // Some of these are sent while the dock is busy reserving space, and
         // updating then was dropped. From the message loop the dock is never
         // busy, and a burst of them makes a single update.
@@ -361,110 +329,6 @@ unsafe extern "system" fn bar_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -
         _ => return unsafe { DefWindowProcW(hwnd, msg, w, l) },
     }
     LRESULT(0)
-}
-
-/// The thread that runs `edge_proc`. A low-level mouse hook runs on the
-/// thread that installed it, and every pointer movement in the system waits
-/// for it: on the dock's thread, a busy moment (loading icons, a Genie
-/// flight) would make the whole mouse stutter, and Windows silently removes
-/// hooks that answer late. This thread does nothing else.
-struct EdgeWatch {
-    thread: u32,
-    join: Option<std::thread::JoinHandle<()>>,
-}
-
-impl EdgeWatch {
-    fn start() -> Result<Self> {
-        use windows::Win32::{
-            System::Threading::{
-                GetCurrentThread, GetCurrentThreadId, SetThreadPriority, THREAD_PRIORITY_HIGHEST,
-            },
-            UI::WindowsAndMessaging::{GetMessageW, MSG, PM_NOREMOVE, PeekMessageW},
-        };
-        let (sender, receiver) = std::sync::mpsc::channel();
-        let join = std::thread::Builder::new()
-            .name("muelle-edge".into())
-            .spawn(move || {
-                // SAFETY: The hook procedure lives for the whole process; the
-                // hook is removed before the thread ends.
-                unsafe {
-                    let mut msg = MSG::default();
-                    // Creates the message queue before anyone posts WM_QUIT.
-                    let _ = PeekMessageW(&mut msg, None, 0, 0, PM_NOREMOVE);
-                    // Input waits for this thread: never let busy apps delay it.
-                    let _ = SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
-                    let hook = GetModuleHandleW(None).and_then(|module| {
-                        SetWindowsHookExW(WH_MOUSE_LL, Some(edge_proc), Some(module.into()), 0)
-                    });
-                    let started = hook
-                        .as_ref()
-                        .map(|_| GetCurrentThreadId())
-                        .map_err(Clone::clone);
-                    let _ = sender.send(started);
-                    let Ok(hook) = hook else {
-                        return;
-                    };
-                    // Hooks are called from inside GetMessage; nothing else arrives.
-                    while GetMessageW(&mut msg, None, 0, 0).0 > 0 {}
-                    let _ = UnhookWindowsHookEx(hook);
-                }
-            })?;
-        match receiver.recv() {
-            Ok(Ok(thread)) => Ok(Self {
-                thread,
-                join: Some(join),
-            }),
-            Ok(Err(error)) => {
-                let _ = join.join();
-                Err(error.into())
-            }
-            Err(_) => Err(anyhow::anyhow!("edge thread ended")),
-        }
-    }
-}
-
-impl Drop for EdgeWatch {
-    fn drop(&mut self) {
-        use windows::Win32::UI::WindowsAndMessaging::{PostThreadMessageW, WM_QUIT};
-        // SAFETY: Posting to a thread this struct started and still owns.
-        unsafe {
-            let _ = PostThreadMessageW(self.thread, WM_QUIT, WPARAM(0), LPARAM(0));
-        }
-        if let Some(join) = self.join.take() {
-            let _ = join.join();
-        }
-    }
-}
-
-/// Low-level mouse hook on the `EdgeWatch` thread: while the bar is hidden,
-/// posts when the pointer reaches the top edge and when it leaves it, once
-/// each. It never consumes input.
-unsafe extern "system" fn edge_proc(code: i32, w: WPARAM, l: LPARAM) -> LRESULT {
-    if code >= 0 && w.0 as u32 == WM_MOUSEMOVE {
-        // SAFETY: Windows provides an MSLLHOOKSTRUCT for mouse hook actions.
-        let point = unsafe { (*(l.0 as *const MSLLHOOKSTRUCT)).pt };
-        // The exact row: with a monitor above, the pointer only passes through.
-        let on_edge = point.y == EDGE_TOP.load(Ordering::Relaxed)
-            && point.x >= EDGE_LEFT.load(Ordering::Relaxed)
-            && point.x < EDGE_RIGHT.load(Ordering::Relaxed);
-        let message = match (on_edge, EDGE_ARMED.load(Ordering::Relaxed)) {
-            (true, false) => Some(EDGE_ENTER),
-            (false, true) => Some(EDGE_LEAVE),
-            _ => None,
-        };
-        let window = EDGE_HOOK_WINDOW.load(Ordering::Relaxed);
-        if let Some(message) = message
-            && window != 0
-        {
-            EDGE_ARMED.store(on_edge, Ordering::Relaxed);
-            // SAFETY: The window remains live until the hook is removed.
-            unsafe {
-                let _ = PostMessageW(Some(HWND(window as *mut _)), message, WPARAM(0), LPARAM(0));
-            }
-        }
-    }
-    // SAFETY: Never consume input; the window under the pointer must get it.
-    unsafe { CallNextHookEx(None, code, w, l) }
 }
 
 unsafe extern "system" fn outside_click_proc(code: i32, w: WPARAM, l: LPARAM) -> LRESULT {
@@ -973,7 +837,6 @@ impl MenuBar {
             panel_span: Span::default(),
             island_hits: Vec::new(),
             outside_click_hook: None,
-            edge_watch: None,
             _network: NetworkWatch::new(hwnd.0 as isize, STATUS_CHANGED),
             privacy_watch: status::watch_privacy(hwnd.0 as isize, PRIVACY_CHANGED),
             _saver_watch: muelle_shell::power::SaverWatch::new(hwnd.0 as isize),
@@ -1110,68 +973,20 @@ impl MenuBar {
                 SWP_NOACTIVATE | show,
             )?;
         }
-        EDGE_TOP.store(bounds.top, Ordering::Relaxed);
-        EDGE_LEFT.store(bounds.left, Ordering::Relaxed);
-        EDGE_RIGHT.store(bounds.right, Ordering::Relaxed);
-        self.sync_edge_hook()?;
+        edge_watch::set_menu_bar((self.visible && hidden).then_some(bounds));
         self.sync_outside_click_hook()
     }
 
-    /// The edge hook runs only while the bar auto-hides and is not covered
-    /// by a full-screen app, and reports only while the bar is hidden.
-    fn sync_edge_hook(&mut self) -> Result<()> {
-        let watching = self.auto_hide && self.visible;
-        if !watching {
-            self.edge_watch = None;
-        } else if self.edge_watch.is_none() {
-            self.edge_watch = Some(EdgeWatch::start()?);
-        }
-        let hidden = watching && !self.revealed;
-        EDGE_ARMED.store(false, Ordering::Relaxed);
-        EDGE_HOOK_WINDOW.store(
-            if hidden { self.hwnd.0 as isize } else { 0 },
-            Ordering::Relaxed,
-        );
-        if !hidden {
-            // SAFETY: Our own timer.
-            unsafe {
-                let _ = KillTimer(Some(self.hwnd), REVEAL_TIMER);
+    /// The edge watcher has verified the pointer's dwell on this bar.
+    pub fn edge_rested(&mut self, gfx: &Gfx, point: POINT) -> Result<()> {
+        if self.visible && self.auto_hide && !self.revealed {
+            if muelle_shell::tracker::caption_button_at(point, self.bounds) {
+                edge_watch::retry_on_move(edge_watch::Target::MenuBar);
+            } else {
+                self.hover(gfx, true)?;
             }
         }
         Ok(())
-    }
-
-    /// The pointer has rested on the top edge: reveal the bar, unless it is
-    /// over a window's minimize, maximize or close button, which the bar
-    /// would cover. Then keep checking while the pointer stays on the edge.
-    pub fn edge_rested(&mut self, gfx: &Gfx) -> Result<()> {
-        let mut point = POINT::default();
-        // SAFETY: A valid output for the pointer position.
-        let on_edge = unsafe { GetCursorPos(&mut point) }.is_ok()
-            && point.y == EDGE_TOP.load(Ordering::Relaxed)
-            && EDGE_ARMED.load(Ordering::Relaxed);
-        if !on_edge {
-            // SAFETY: Our own timer.
-            unsafe {
-                let _ = KillTimer(Some(self.hwnd), REVEAL_TIMER);
-            }
-            return Ok(());
-        }
-        let screen = RECT {
-            left: EDGE_LEFT.load(Ordering::Relaxed),
-            top: EDGE_TOP.load(Ordering::Relaxed),
-            right: EDGE_RIGHT.load(Ordering::Relaxed),
-            bottom: i32::MAX,
-        };
-        if muelle_shell::tracker::caption_button_at(point, screen) {
-            return Ok(());
-        }
-        // SAFETY: Our own timer.
-        unsafe {
-            let _ = KillTimer(Some(self.hwnd), REVEAL_TIMER);
-        }
-        EDGE_ARMED.store(false, Ordering::Relaxed);
-        self.hover(gfx, true)
     }
 
     fn sync_outside_click_hook(&mut self) -> Result<()> {
@@ -2450,8 +2265,7 @@ impl Drop for MenuBar {
     fn drop(&mut self) {
         self.media = None;
         ISLAND_HOOK_WINDOW.store(0, Ordering::Relaxed);
-        EDGE_HOOK_WINDOW.store(0, Ordering::Relaxed);
-        self.edge_watch = None;
+        edge_watch::set_menu_bar(None);
         if let Some(hook) = self.outside_click_hook.take() {
             // SAFETY: Do not leave a callback pointing at a destroyed window.
             unsafe {

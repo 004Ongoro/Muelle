@@ -38,8 +38,8 @@ use muelle_shell::{
     recycle_bin::{self, BinWatch},
     status,
     system::{
-        animations_enabled, downloads_folder, primary_monitor, set_window_transitions,
-        transparency_enabled, uses_light_theme,
+        Monitor, animations_enabled, downloads_folder, monitor_at, monitor_rects, primary_monitor,
+        set_window_transitions, transparency_enabled, uses_light_theme,
     },
     taskbar,
     tracker::{self, TrackedWindow, WindowTracker, normalize_id},
@@ -64,7 +64,8 @@ use windows::{
             Input::KeyboardAndMouse::{
                 GetAsyncKeyState, GetKeyState, ReleaseCapture, SetCapture, TME_LEAVE,
                 TRACKMOUSEEVENT, TrackMouseEvent, VIRTUAL_KEY, VK_CONTROL, VK_DOWN, VK_END,
-                VK_HOME, VK_LEFT, VK_LWIN, VK_MENU, VK_RIGHT, VK_RWIN, VK_SHIFT, VK_TAB, VK_UP,
+                VK_HOME, VK_LBUTTON, VK_LEFT, VK_LWIN, VK_MBUTTON, VK_MENU, VK_RBUTTON, VK_RIGHT,
+                VK_RWIN, VK_SHIFT, VK_TAB, VK_UP,
             },
             WindowsAndMessaging::{
                 CreateWindowExW, DefWindowProcW, DispatchMessageW, EVENT_OBJECT_CLOAKED,
@@ -89,6 +90,7 @@ use windows::{
 use crate::{
     assets::{Visuals, fallback_name},
     drop::DropTarget,
+    edge_watch::{self, EdgeWatch, Reveal, Target as EdgeTarget},
     flight::{Flight, Snapshot},
     gfx::{Gfx, LabelBrush},
     mascot,
@@ -197,6 +199,7 @@ const PREVIEW_TIMER: usize = 13;
 /// While the crab is out (a few seconds): is its act over, is the pointer on it.
 const MASCOT_TIMER: usize = 14;
 const MASCOT_POLL_MS: u32 = 50;
+const EDGE_TIMER: usize = 15;
 /// The charger act at most this often, however many times it is plugged.
 const CHARGING_AGAIN: std::time::Duration = std::time::Duration::from_secs(10 * 60);
 const PREVIEW_DWELL_MS: u32 = 420;
@@ -560,6 +563,9 @@ struct App {
     /// What the windows minimized with the genie looked like, oldest first.
     snapshots: Vec<(isize, Snapshot)>,
     menubar: Option<MenuBar>,
+    edge_watch: Option<EdgeWatch>,
+    /// Screen point identifying the last display chosen by a bottom-edge dwell.
+    dock_display: Option<POINT>,
     /// Display names already looked up, by app id.
     names: HashMap<String, String>,
     /// Windows whose system transitions are turned off (see `calm_windows`).
@@ -839,7 +845,9 @@ impl App {
         if let Some(bar) = &mut self.menubar {
             bar.refresh(&self.gfx)?;
         }
-        let monitor = primary_monitor().context("no se pudo consultar el monitor principal")?;
+        let monitor = self
+            .dock_monitor()
+            .context("no se pudo consultar el monitor del dock")?;
         let key = StageKey {
             screen: monitor.screen,
             scale: monitor.scale,
@@ -861,25 +869,34 @@ impl App {
 
         let scale = monitor.scale;
         let max_scale = key.max_scale;
-        let metrics = Metrics {
+        let mut metrics = Metrics {
             icon: key.icon_size as f32,
             ..Metrics::DEFAULT
         }
         .scaled(scale);
         let theme = Theme::for_system(key.light, key.glass);
         let px = |logical: f32| (logical * scale).round();
+        let screen = monitor.screen;
+        let screen_width = (screen.right - screen.left) as f32;
+        let kinds: Vec<ItemKind> = key.entries.iter().map(|entry| entry.kind).collect();
+        let mut dock = layout(&kinds, &metrics);
+        let available = (screen_width - 2.0 * px(FLOAT_MARGIN)).max(1.0);
+        if dock.width > available {
+            // Keep the roster reachable on a smaller display without
+            // changing the user's saved icon size.
+            metrics = metrics.scaled(available / dock.width);
+            dock = layout(&kinds, &metrics);
+        }
+        dock.width = dock.width.round();
+        dock.height = dock.height.round();
 
         self.entries = key.entries.clone();
         self.prepare_assets(
-            (metrics.icon * max_scale).round() as u32,
+            (metrics.icon * max_scale).round().max(1.0) as u32,
             scale,
             theme.light,
         );
 
-        let kinds: Vec<ItemKind> = self.entries.iter().map(|entry| entry.kind).collect();
-        let mut dock = layout(&kinds, &metrics);
-        dock.width = dock.width.round();
-        dock.height = dock.height.round();
         let magnifier = Magnifier {
             range: RANGE_IN_ICONS * (metrics.icon + metrics.gap),
             max_scale,
@@ -890,8 +907,6 @@ impl App {
 
         // Position relative to the screen, not the work area; the work area
         // already excludes the strip reserved by the dock.
-        let screen = monitor.screen;
-        let screen_width = (screen.right - screen.left) as f32;
         let dock_x = screen.left as f32 + ((screen_width - dock.width) / 2.0).round();
         let dock_y = screen.bottom as f32 - px(FLOAT_MARGIN) - dock.height;
         // A hidden dock leaves the whole screen to maximized windows.
@@ -905,7 +920,9 @@ impl App {
             left: (dock_x - left) as i32,
             top: (dock_y - top) as i32,
             right: (dock_right + right) as i32,
-            bottom: (dock_bottom + bottom) as i32,
+            // A display below this one must not receive the sliding dock
+            // or its mouse input while the animation crosses the edge.
+            bottom: ((dock_bottom + bottom) as i32).min(screen.bottom),
         };
 
         let room = px(SHADOW_ROOM);
@@ -980,7 +997,14 @@ impl App {
         // Last: reserving space is a synchronous call to Explorer (40-60 ms
         // measured), and the dock is already on screen meanwhile.
         if let Some(appbar) = &mut self.appbar {
-            appbar.reserve(Edge::Bottom, screen, strip);
+            // Auto-hide reserves zero height. Moving the dock must never
+            // change the destination monitor's work area.
+            let reservation = if self.config.auto_hide {
+                primary_monitor().map_or(screen, |primary| primary.screen)
+            } else {
+                screen
+            };
+            appbar.reserve(Edge::Bottom, reservation, strip);
         }
         Ok(())
     }
@@ -995,7 +1019,7 @@ impl App {
         // dock (for example, after launching an app with a dock click).
         let input_zone = if self.hovering || self.drag.is_some() {
             &stage.hover_zone
-        } else if self.config.auto_hide {
+        } else if self.config.auto_hide && self.slide.target == 1.0 {
             &stage.edge_zone
         } else {
             &stage.rest_zone
@@ -1231,7 +1255,7 @@ impl App {
         let Some(position) = self.snapshots.iter().position(|(owner, _)| *owner == hwnd) else {
             return false;
         };
-        let Some(screen) = primary_monitor().map(|monitor| monitor.screen) else {
+        let Some(screen) = self.stage.as_ref().map(|stage| stage.key.screen) else {
             return false;
         };
         let flight = self.snapshots.get(position).and_then(|(_, snapshot)| {
@@ -1281,7 +1305,7 @@ impl App {
         if !self.config.genie || !animations_enabled() || !self.flights.is_empty() {
             return;
         }
-        let Some(screen) = primary_monitor().map(|monitor| monitor.screen) else {
+        let Some(screen) = self.stage.as_ref().map(|stage| stage.key.screen) else {
             return;
         };
         for &hwnd in windows {
@@ -1440,17 +1464,14 @@ impl App {
             right: stage.dock_origin.x + (rect.x + rect.width).round() as i32,
             bottom: stage.dock_origin.y + (rect.y + rect.height).round() as i32,
         };
-        let Some(monitor) = primary_monitor() else {
-            return Ok(());
-        };
         let windows = self.windows_of(&candidate);
         self.preview = Some(MultiWindowView::show(
             &self.gfx,
             candidate,
             windows,
             anchor,
-            monitor.screen,
-            monitor.scale,
+            stage.key.screen,
+            stage.scale,
             Theme::for_system(stage.key.light, stage.key.glass),
         )?);
         // The view owns its animation and dismissal timer while it is open.
@@ -2707,7 +2728,9 @@ impl App {
         save_settings(&self.roster, &self.config);
         self.slide.target = if self.config.auto_hide { 1.0 } else { 0.0 };
         self.last_frame = Instant::now();
-        self.refresh()
+        self.apply_edge_settings();
+        self.refresh()?;
+        self.update_fullscreen()
     }
 
     fn set_bin_full(&mut self, full: bool) -> Result<()> {
@@ -2893,11 +2916,150 @@ impl App {
             let applied = bar
                 .set_auto_hide(self.config.menu_bar_auto_hide)
                 .and_then(|()| bar.set_usage_enabled(&self.gfx, self.config.ai_usage))
-                .and_then(|()| bar.set_visible(!self.fullscreen));
+                .and_then(|()| {
+                    let covered = primary_monitor()
+                        .is_some_and(|monitor| tracker::foreground_is_fullscreen(monitor.screen));
+                    bar.set_visible(!covered)
+                });
             if let Err(error) = applied {
                 eprintln!("muelle: barra superior: {error:#}");
             }
         }
+        self.apply_edge_settings();
+    }
+
+    fn dock_monitor(&self) -> Option<Monitor> {
+        self.dock_display
+            .filter(|_| self.config.auto_hide)
+            .and_then(monitor_at)
+            .or_else(primary_monitor)
+    }
+
+    fn apply_edge_settings(&mut self) {
+        if !self.config.auto_hide {
+            self.dock_display = None;
+        }
+        let mut screens = if self.config.auto_hide {
+            monitor_rects()
+        } else {
+            Vec::new()
+        };
+        let watch_dock = screens.len() > 1;
+        if !watch_dock {
+            // One display already has the dock's own reveal strip.
+            screens.clear();
+        }
+        edge_watch::set_dock_monitors(screens);
+        let enabled = watch_dock || (self.menubar.is_some() && self.config.menu_bar_auto_hide);
+        if enabled && self.edge_watch.is_none() {
+            self.edge_watch = EdgeWatch::start(self.visual)
+                .inspect_err(|error| {
+                    muelle_shell::log::line(&format!("bordes de pantalla: {error:#}"))
+                })
+                .ok();
+        } else if !enabled && self.edge_watch.take().is_some() {
+            // SAFETY: This timer belongs to our UI thread.
+            unsafe {
+                let _ = KillTimer(Some(self.visual), EDGE_TIMER);
+            }
+        }
+    }
+
+    fn edge_changed(&mut self) -> Result<()> {
+        let (target, wait) = edge_watch::pending();
+        let on_dock_edge = matches!(target, Some(EdgeTarget::Dock(screen))
+            if self.stage.as_ref().is_some_and(|stage| stage.key.screen == screen));
+        self.arm_edge_timer(wait);
+        if !on_dock_edge && self.config.auto_hide && !self.hovering && self.slide.target == 0.0 {
+            // SAFETY: Existing hide timer on the dock input window.
+            unsafe {
+                SetTimer(Some(self.input), HIDE_TIMER, HIDE_DELAY_MS, None);
+            }
+        }
+        Ok(())
+    }
+
+    fn arm_edge_timer(&self, wait: Option<std::time::Duration>) {
+        // SAFETY: One-shot timer on the window receiving edge notifications.
+        unsafe {
+            let _ = KillTimer(Some(self.visual), EDGE_TIMER);
+            if let Some(wait) = wait {
+                SetTimer(Some(self.visual), EDGE_TIMER, millis(wait).max(1), None);
+            }
+        }
+    }
+
+    fn edge_rested(&mut self) -> Result<()> {
+        self.arm_edge_timer(None);
+        if self.edge_watch.is_none() {
+            return Ok(());
+        }
+        let mut point = POINT::default();
+        // SAFETY: Valid output for this call.
+        unsafe { GetCursorPos(&mut point)? };
+        match edge_watch::poll(point) {
+            Reveal::Wait(wait) => self.arm_edge_timer(Some(wait)),
+            Reveal::Ready(EdgeTarget::MenuBar) => {
+                if let Some(bar) = &mut self.menubar {
+                    bar.edge_rested(&self.gfx, point)?;
+                }
+            }
+            Reveal::Ready(EdgeTarget::Dock(screen)) => self.reveal_dock(point, screen)?,
+            Reveal::Idle => self.edge_changed()?,
+        }
+        Ok(())
+    }
+
+    fn reveal_dock(&mut self, point: POINT, screen: RECT) -> Result<()> {
+        // SAFETY: Read-only mouse button state.
+        let mouse_down = [VK_LBUTTON, VK_RBUTTON, VK_MBUTTON]
+            .into_iter()
+            .any(|key| unsafe { GetAsyncKeyState(i32::from(key.0)) < 0 });
+        if !self.config.auto_hide
+            || self.hovering
+            || self.press.is_some()
+            || self.drag_over
+            || self.drag.is_some()
+            || self.switching
+            || !self.flights.is_empty()
+            || mouse_down
+            || monitor_at(point).is_none_or(|monitor| monitor.screen != screen)
+            || tracker::foreground_is_fullscreen(screen)
+        {
+            return Ok(());
+        }
+        let switched = self
+            .stage
+            .as_ref()
+            .is_none_or(|stage| stage.key.screen != screen);
+        if switched {
+            self.close_preview();
+            self.stop_mascot();
+            self.dock_display = Some(POINT {
+                x: screen.left + (screen.right - screen.left) / 2,
+                y: screen.top + (screen.bottom - screen.top) / 2,
+            });
+            self.amount = Spring::at(0.0, HOVER_OMEGA);
+            self.slide = Spring::at(1.0, SLIDE_OMEGA);
+            self.fullscreen = false;
+            self.refresh()?;
+        }
+        if self
+            .stage
+            .as_ref()
+            .is_some_and(|stage| point.x >= stage.edge_zone.left && point.x < stage.edge_zone.right)
+        {
+            return self.on_mouse_move();
+        }
+        self.slide.target = 0.0;
+        self.last_frame = Instant::now();
+        // SAFETY: Leaving the edge or entering the dock re-arms the hide
+        // delay. Cancel any delay left over from the previous monitor.
+        unsafe {
+            let _ = KillTimer(Some(self.input), HIDE_TIMER);
+        }
+        self.place_windows()?;
+        self.render()
     }
 
     /// Shows the name of the app in front, as the macOS menu bar does.
@@ -2949,14 +3111,22 @@ impl App {
         let Some(monitor) = primary_monitor() else {
             return Ok(());
         };
-        let fullscreen = tracker::foreground_is_fullscreen(monitor.screen);
+        let bar_fullscreen = tracker::foreground_is_fullscreen(monitor.screen);
+        let fullscreen = self.dock_monitor().map_or(bar_fullscreen, |dock| {
+            if dock.screen == monitor.screen {
+                bar_fullscreen
+            } else {
+                tracker::foreground_is_fullscreen(dock.screen)
+            }
+        });
+        if let Some(bar) = &mut self.menubar {
+            bar.set_visible(!bar_fullscreen)?;
+        }
         // Windows sometimes omits the shell event when a full-screen app
         // closes or switches desktops. Poll only while our UI is hidden.
         // SAFETY: `self.input` is a live window on this UI thread.
         unsafe {
-            if fullscreen {
-                self.stop_mascot();
-                self.close_preview();
+            if fullscreen || (bar_fullscreen && self.menubar.is_some()) {
                 SetTimer(
                     Some(self.input),
                     FULLSCREEN_TIMER,
@@ -2971,12 +3141,11 @@ impl App {
                 if fullscreen { "se oculta" } else { "vuelve" },
                 tracker::foreground_class()
             ));
-            if let Some(bar) = &mut self.menubar {
-                bar.set_visible(!fullscreen)?;
-            }
             let previous = self.fullscreen;
             self.fullscreen = fullscreen;
             if fullscreen {
+                self.stop_mascot();
+                self.close_preview();
                 self.hovering = false;
                 self.amount = Spring::at(0.0, HOVER_OMEGA);
                 self.press = None;
@@ -2987,7 +3156,7 @@ impl App {
                 return Err(error);
             }
         }
-        if !fullscreen {
+        if !fullscreen && (!bar_fullscreen || self.menubar.is_none()) {
             // SAFETY: This UI thread owns the timer.
             unsafe {
                 let _ = KillTimer(Some(self.input), FULLSCREEN_TIMER);
@@ -3185,14 +3354,6 @@ pub fn multi_window_view_dismiss() {
     with_app("cerrar vistas", |app| {
         app.close_preview();
         Ok(())
-    });
-}
-
-/// The pointer rested on the top edge with the menu bar hidden.
-pub fn menu_bar_edge_rested() {
-    with_app("barra superior", |app| match &mut app.menubar {
-        Some(bar) => bar.edge_rested(&app.gfx),
-        None => Ok(()),
     });
 }
 
@@ -3472,6 +3633,8 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) ->
             with_app_then("arrastre sobre una app", App::spring_open);
         }
         WM_TIMER if w.0 == MASCOT_TIMER => with_app("cangrejo", App::mascot_tick),
+        edge_watch::CHANGED => with_app("borde de pantalla", App::edge_changed),
+        WM_TIMER if w.0 == EDGE_TIMER => with_app("mostrar al llegar al borde", App::edge_rested),
         WM_TIMER if w.0 == PREVIEW_TIMER => with_app("selector de ventanas", App::preview_tick),
         WM_TIMER if w.0 == HIDE_TIMER => {
             // SAFETY: Same as above.
@@ -3497,7 +3660,9 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) ->
             }
             match w.0 {
                 REFRESH_TIMER => with_app("recomposición del dock", |app| {
+                    app.apply_edge_settings();
                     app.refresh()?;
+                    app.update_fullscreen()?;
                     app.power_moment();
                     Ok(())
                 }),
@@ -3718,6 +3883,8 @@ pub fn run() -> Result<()> {
             flights: Vec::new(),
             snapshots: Vec::new(),
             menubar: None,
+            edge_watch: None,
+            dock_display: None,
             names: HashMap::new(),
             calmed: Vec::new(),
             started: false,
