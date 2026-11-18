@@ -10,6 +10,12 @@ copia la sección de la versión que se publica a la release de GitHub.
 
 ### English
 
+### Español
+
+## [0.1.14]
+
+### English
+
 - Clicking an app whose minimized window is still reported as foreground now
   restores it on the first click, including with one app open and minimized
   previews disabled (#12). File drag-hover uses the same native-state check.
