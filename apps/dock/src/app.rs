@@ -370,6 +370,37 @@ struct MenuRequest {
     dark: bool,
 }
 
+/// Preview positions follow discovery order, independently of activation's
+/// z-order. Only open tracked windows are retained; a reopened window is new.
+#[derive(Default)]
+struct PreviewOrder(Vec<isize>);
+
+impl PreviewOrder {
+    fn update(&mut self, windows: &[TrackedWindow]) {
+        self.0
+            .retain(|hwnd| windows.iter().any(|window| window.hwnd == *hwnd));
+        // EnumWindows returns topmost first. Append a newly discovered batch
+        // back-to-front so its frontmost (usually newest) window goes last.
+        for window in windows.iter().rev() {
+            if !self.0.contains(&window.hwnd) {
+                self.0.push(window.hwnd);
+            }
+        }
+    }
+
+    fn windows_of(&self, windows: &[TrackedWindow], app: &str) -> Vec<isize> {
+        self.0
+            .iter()
+            .copied()
+            .filter(|hwnd| {
+                windows
+                    .iter()
+                    .any(|window| window.hwnd == *hwnd && window.app_id == app)
+            })
+            .collect()
+    }
+}
+
 enum MenuTarget {
     Entry {
         id: String,
@@ -518,6 +549,7 @@ struct App {
     roster: Roster,
     tracker: WindowTracker,
     windows: Vec<TrackedWindow>,
+    preview_order: PreviewOrder,
     /// Where each window was last seen on screen while not maximized, for
     /// the genie of snapped windows (see `tracker::rect_before_minimize`).
     last_rects: HashMap<isize, RECT>,
@@ -1482,7 +1514,7 @@ impl App {
             right: stage.dock_origin.x + (rect.x + rect.width).round() as i32,
             bottom: stage.dock_origin.y + (rect.y + rect.height).round() as i32,
         };
-        let windows = self.windows_of(&candidate);
+        let windows = self.preview_order.windows_of(&self.windows, &candidate);
         self.preview = Some(MultiWindowView::show(
             &self.gfx,
             candidate,
@@ -2788,7 +2820,7 @@ impl App {
 
     /// Refreshes open windows and recomposes the dock if anything changed.
     fn sync(&mut self) -> Result<()> {
-        self.windows = self.tracker.list();
+        self.read_windows();
         if self
             .preview
             .as_ref()
@@ -3229,8 +3261,13 @@ impl App {
         // The app roster can stay identical while its windows change z-order.
         // Refresh their order so the next dock activation selects the actual
         // most recently used window rather than a stale group leader.
-        self.windows = self.tracker.list();
+        self.read_windows();
         self.update_fullscreen()
+    }
+
+    fn read_windows(&mut self) {
+        self.windows = self.tracker.list();
+        self.preview_order.update(&self.windows);
     }
 
     fn on_appbar_notice(&mut self, notice: usize) -> Result<()> {
@@ -3962,6 +3999,7 @@ pub fn run() -> Result<()> {
             roster,
             tracker: WindowTracker::default(),
             windows: Vec::new(),
+            preview_order: PreviewOrder::default(),
             last_rects: HashMap::new(),
             entries: Vec::new(),
             icons: Visuals::new(visual, ASSETS_READY)?,
@@ -4249,5 +4287,75 @@ mod switcher_tests {
         assert_eq!(selection_after_closing(2, &[true, true, false]), Some(1));
         // Everything closed.
         assert_eq!(selection_after_closing(0, &[false, false]), None);
+    }
+}
+
+#[cfg(test)]
+mod preview_order_tests {
+    use super::{PreviewOrder, TrackedWindow};
+
+    fn window(hwnd: isize, app: &str, minimized: bool) -> TrackedWindow {
+        TrackedWindow {
+            hwnd,
+            app_id: app.into(),
+            minimized,
+        }
+    }
+
+    #[test]
+    fn activation_and_minimizing_do_not_move_preview_cards() {
+        let mut order = PreviewOrder::default();
+        order.update(&[
+            window(3, "browser", false),
+            window(2, "browser", false),
+            window(1, "browser", false),
+        ]);
+        let current = [
+            window(1, "browser", false),
+            window(3, "browser", true),
+            window(2, "browser", false),
+        ];
+        order.update(&current);
+        assert_eq!(order.windows_of(&current, "browser"), vec![1, 2, 3]);
+        assert_eq!(
+            current[0].hwnd, 1,
+            "activation order must remain independent"
+        );
+    }
+
+    #[test]
+    fn newly_opened_windows_append_and_closed_windows_leave_no_stale_positions() {
+        let mut order = PreviewOrder::default();
+        order.update(&[window(2, "browser", false), window(1, "browser", false)]);
+        let current = [window(3, "browser", false), window(1, "browser", false)];
+        order.update(&current);
+        assert_eq!(order.windows_of(&current, "browser"), vec![1, 3]);
+        let current = [
+            window(2, "browser", false),
+            window(3, "browser", false),
+            window(1, "browser", false),
+        ];
+        order.update(&current);
+        assert_eq!(order.windows_of(&current, "browser"), vec![1, 3, 2]);
+    }
+
+    #[test]
+    fn app_groups_keep_their_order_when_other_apps_change() {
+        let mut order = PreviewOrder::default();
+        order.update(&[
+            window(3, "editor", false),
+            window(2, "browser", false),
+            window(1, "browser", false),
+        ]);
+        let current = [
+            window(4, "editor", false),
+            window(2, "browser", false),
+            window(1, "browser", false),
+        ];
+        order.update(&current);
+        assert_eq!(order.windows_of(&current, "browser"), vec![1, 2]);
+        assert_eq!(order.windows_of(&current, "editor"), vec![4]);
+        order.update(&[]);
+        assert!(order.0.is_empty());
     }
 }

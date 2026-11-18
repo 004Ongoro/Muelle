@@ -8,6 +8,18 @@ copia la sección de la versión que se publica a la release de GitHub.
 
 ## [Unreleased]
 
+### English
+
+- Dock window previews keep their positions when switching or minimizing
+  windows. Newly discovered windows append; closed windows are removed. Normal
+  icon activation continues to use the most recently used window.
+
+### Español
+
+- Las previsualizaciones del dock conservan su posición al cambiar de ventana
+  o minimizarla. Las ventanas nuevas se añaden al final y las cerradas se retiran.
+  El clic normal del icono sigue recuperando la ventana usada más recientemente.
+
 ## [0.1.13]
 
 ### English
