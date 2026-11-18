@@ -349,6 +349,11 @@ enum Outside {
         copy: bool,
     },
     Menu(MenuRequest),
+    InputMenu {
+        gfx: Gfx,
+        anchor: POINT,
+        dark: bool,
+    },
     QuitDock,
     OpenSettings,
     OpenAsAdmin(String),
@@ -3325,22 +3330,20 @@ fn with_app_value<T: Default>(what: &str, action: impl FnOnce(&mut App) -> Resul
 }
 
 pub fn menu_bar_clicked(x: f32, y: f32) {
-    with_app("barra superior", |app| {
+    with_app_then("barra superior", |app| {
         if let Some(bar) = &mut app.menubar {
+            if let Some(anchor) = bar.input_switcher_anchor(x, y) {
+                bar.dismiss_island(&app.gfx)?;
+                return Ok(Some(Outside::InputMenu {
+                    gfx: app.gfx.clone(),
+                    anchor,
+                    dark: !uses_light_theme(),
+                }));
+            }
             bar.click(&app.gfx, x, y)?;
         }
-        Ok(())
+        Ok(None)
     });
-}
-
-pub fn menu_bar_has_action(point: POINT) -> bool {
-    APP.with(|cell| {
-        cell.try_borrow().ok().is_some_and(|app| {
-            app.as_ref()
-                .and_then(|app| app.menubar.as_ref())
-                .is_some_and(|bar| bar.has_island_action(point))
-        })
-    })
 }
 
 pub fn menu_bar_media_changed() {
@@ -3405,9 +3408,15 @@ pub fn multi_window_view_dismiss() {
 }
 
 pub fn menu_bar_check_pointer() {
-    with_app("barra superior", |app| match &mut app.menubar {
-        Some(bar) => bar.check_pointer(&app.gfx),
-        None => Ok(()),
+    with_app("barra superior", |app| {
+        if app.menu_open {
+            Ok(())
+        } else {
+            match &mut app.menubar {
+                Some(bar) => bar.check_pointer(&app.gfx),
+                None => Ok(()),
+            }
+        }
     });
 }
 
@@ -3562,6 +3571,51 @@ fn run_outside(outside: Outside) {
                 }),
                 _ => eprintln!("muelle: no se encontró muelle-settings.exe junto al dock"),
             }
+        }
+        Outside::InputMenu { gfx, anchor, dark } => {
+            use muelle_shell::keyboard;
+            let context = keyboard::Context::current();
+            let layouts = keyboard::layouts(strings::text().keyboard);
+            const SETTINGS: u32 = u32::MAX;
+            let mut items: Vec<MenuItem> = layouts
+                .iter()
+                .enumerate()
+                .map(|(index, layout)| MenuItem::Action {
+                    command: index as u32 + 1,
+                    label: layout.name.replace('&', "&&"),
+                    checked: context.is_some_and(|context| context.layout == layout.handle),
+                    enabled: context.is_some(),
+                })
+                .collect();
+            if !items.is_empty() {
+                items.push(MenuItem::Separator);
+            }
+            items.push(MenuItem::action(
+                SETTINGS,
+                strings::text().keyboard_settings,
+            ));
+            let owner = main_window();
+            with_app("abrir selector de teclado", |app| {
+                app.menu_open = true;
+                Ok(())
+            });
+            let chosen = menu::show_below(&gfx, owner, &items, anchor, dark);
+            with_app("cerrar selector de teclado", App::after_menu);
+            if chosen == Some(SETTINGS) {
+                submit(ShellAction::Open {
+                    id: "ms-settings:regionlanguage".into(),
+                });
+            } else if let (Some(context), Some(layout)) = (
+                context,
+                chosen
+                    .and_then(|command| command.checked_sub(1))
+                    .and_then(|index| layouts.get(index as usize)),
+            ) && let Err(error) = context.request(layout.handle)
+            {
+                muelle_shell::log::line(&format!("cambiar teclado: {error}"));
+                shell_work::notify_not_started();
+            }
+            menu_bar_refresh();
         }
         Outside::Menu(request) => {
             let owner = HWND(MAIN_WINDOW.load(Ordering::Relaxed) as *mut _);

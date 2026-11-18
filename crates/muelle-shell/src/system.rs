@@ -64,11 +64,7 @@ pub fn energy_saver_on() -> bool {
 #[must_use]
 pub fn input_language() -> Option<String> {
     use windows::Win32::{
-        Globalization::LCIDToLocaleName,
-        UI::{
-            Input::KeyboardAndMouse::{GetKeyboardLayout, GetKeyboardLayoutList},
-            WindowsAndMessaging::{GetForegroundWindow, GetWindowThreadProcessId},
-        },
+        Globalization::LCIDToLocaleName, UI::Input::KeyboardAndMouse::GetKeyboardLayoutList,
     };
     // SAFETY: Read-only queries; `name` is a valid buffer for the locale name.
     unsafe {
@@ -76,8 +72,7 @@ pub fn input_language() -> Option<String> {
             return None;
         }
         // Each thread has its own layout: the one that matters is in front.
-        let thread = GetWindowThreadProcessId(GetForegroundWindow(), None);
-        let language = (GetKeyboardLayout(thread).0 as usize & 0xFFFF) as u32;
+        let language = (crate::keyboard::Context::current()?.layout as usize & 0xFFFF) as u32;
         let mut name = [0u16; 85];
         let len = usize::try_from(LCIDToLocaleName(language, Some(&mut name), 0)).ok()?;
         let tag = String::from_utf16_lossy(name.get(..len.checked_sub(1)?)?);

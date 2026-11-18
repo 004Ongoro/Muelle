@@ -1,5 +1,5 @@
 //! User-facing dock text in Spanish and English. The language follows the
-//! Windows display language; Settings will be able to override it (phase 7).
+//! Windows display language unless the user overrides it in Settings.
 //! `&` marks the menu access key.
 
 use std::sync::atomic::{AtomicU8, Ordering};
@@ -37,9 +37,13 @@ pub struct Strings {
     pub usage_used: &'static str,
     pub media_title: &'static str,
     pub shell_operation_failed: &'static str,
+    pub keyboard_settings: &'static str,
+    pub keyboard: &'static str,
 }
 
 const ES: Strings = Strings {
+    keyboard_settings: "Ajustes de idioma y teclado…",
+    keyboard: "Teclado",
     shell_operation_failed: "No se pudo iniciar la operación. Inténtalo de nuevo en un momento.",
     open: "&Abrir",
     new_window: "&Nueva ventana",
@@ -72,6 +76,8 @@ const ES: Strings = Strings {
 };
 
 const EN: Strings = Strings {
+    keyboard_settings: "Language and keyboard settings…",
+    keyboard: "Keyboard",
     shell_operation_failed: "The operation could not start. Please try again in a moment.",
     open: "&Open",
     new_window: "&New Window",
@@ -115,13 +121,21 @@ pub fn set_language(language: Language) {
     LANGUAGE.store(if spanish { 1 } else { 2 }, Ordering::Relaxed);
 }
 
-pub fn text() -> &'static Strings {
-    match LANGUAGE.load(Ordering::Relaxed) {
-        0 => {
-            set_language(Language::Auto);
-            text()
-        }
-        1 => &ES,
-        _ => &EN,
+fn chosen_language() -> u8 {
+    let language = LANGUAGE.load(Ordering::Relaxed);
+    if language == 0 {
+        set_language(Language::Auto);
+        LANGUAGE.load(Ordering::Relaxed)
+    } else {
+        language
     }
+}
+
+pub fn text() -> &'static Strings {
+    if chosen_language() == 1 { &ES } else { &EN }
+}
+
+/// The resolved language is part of the menu bar's rendered-content key.
+pub fn is_spanish() -> bool {
+    chosen_language() == 1
 }

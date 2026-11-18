@@ -8,7 +8,18 @@ copia la sección de la versión que se publica a la release de GitHub.
 
 ## [Unreleased]
 
+## [0.1.13]
+
 ### English
+
+- The menu bar's keyboard indicator opens a themed layout menu with the
+  current keyboard marked and a link to Windows language settings. Changes
+  are requested for the original typing window instead of simulating Win+Space.
+- Changing Muelle's language refreshes menu bar text even when its data has
+  not changed. Menu bar controls retain the standard arrow cursor.
+- Menus return focus after a selection without overriding another app the
+  user switched to while dismissing them. Auto-hide keeps the menu bar open
+  while its keyboard selector is in use.
 
 - With auto-hide enabled, rest the pointer at a display's bottom edge to
   bring the Dock to that display (#9, #11).
@@ -32,6 +43,15 @@ copia la sección de la versión que se publica a la release de GitHub.
   in the background, as it does at startup.
 
 ### Español
+
+- El indicador de teclado de la barra abre un menú con el estilo de Muelle,
+  marca el teclado activo y permite abrir los ajustes de idioma de Windows.
+  El cambio se solicita a la ventana donde se escribía, sin simular Win+Espacio.
+- Cambiar el idioma de Muelle actualiza los textos de la barra aunque no
+  cambien sus datos. Los controles de la barra mantienen el cursor de flecha.
+- Los menús devuelven el foco tras una selección sin imponerse a otra app
+  elegida al cerrarlos. La barra permanece visible mientras se usa su
+  selector de teclado, incluso con ocultación automática.
 
 - Con la ocultación automática activada, deja el puntero en el borde inferior
   de una pantalla para mostrar el Dock allí (#9, #11).

@@ -47,7 +47,7 @@ use windows::{
         UI::Input::KeyboardAndMouse::{TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent},
         UI::WindowsAndMessaging::{
             CallNextHookEx, CreateWindowExW, DefWindowProcW, DestroyWindow, GetCursorPos, HHOOK,
-            HWND_TOPMOST, IDC_ARROW, IDC_HAND, KillTimer, LoadCursorW, MSLLHOOKSTRUCT,
+            HWND_TOPMOST, IDC_ARROW, KillTimer, LoadCursorW, MSLLHOOKSTRUCT,
             PBT_POWERSETTINGCHANGE, PostMessageW, RegisterClassW, SWP_HIDEWINDOW, SWP_NOACTIVATE,
             SWP_SHOWWINDOW, SetCursor, SetTimer, SetWindowPos, SetWindowsHookExW,
             UnhookWindowsHookEx, WH_MOUSE_LL, WM_APP, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN,
@@ -165,6 +165,7 @@ struct Status {
 /// What the bar was last drawn for.
 #[derive(Clone, PartialEq)]
 struct Look {
+    spanish: bool,
     screen: RECT,
     scale: f32,
     light: bool,
@@ -304,14 +305,10 @@ unsafe extern "system" fn bar_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -
         PRIVACY_CHANGED => app::menu_bar_privacy_changed(),
         MEDIA_CHANGED => app::menu_bar_media_changed(),
         WM_SETCURSOR => {
-            let mut point = POINT::default();
-            // SAFETY: The point is a valid output for the current pointer location.
-            if unsafe { GetCursorPos(&mut point) }.is_ok() && app::menu_bar_has_action(point) {
-                // SAFETY: The stock hand cursor is owned by Windows.
-                if let Ok(hand) = unsafe { LoadCursorW(None, IDC_HAND) } {
-                    unsafe { SetCursor(Some(hand)) };
-                    return LRESULT(1);
-                }
+            // SAFETY: Keep the standard arrow throughout the bar and popups.
+            if let Ok(arrow) = unsafe { LoadCursorW(None, IDC_ARROW) } {
+                unsafe { SetCursor(Some(arrow)) };
+                return LRESULT(1);
             }
             return unsafe { DefWindowProcW(hwnd, msg, w, l) };
         }
@@ -1329,7 +1326,7 @@ impl MenuBar {
             Some(Action::TaskView) => launcher::open_task_view(),
             Some(Action::Widgets) => launcher::open_widgets(),
             Some(Action::HiddenIcons) => launcher::toggle_hidden_icons(anchor),
-            Some(Action::InputLanguage) => launcher::open_input_switcher(),
+            Some(Action::InputLanguage) => {} // Opened outside the app borrow.
             // Windows' own pages list which apps use each device.
             Some(Action::Microphone) => {
                 let _ = launcher::open("ms-settings:privacy-microphone");
@@ -1342,10 +1339,19 @@ impl MenuBar {
         Ok(())
     }
 
-    pub fn has_island_action(&self, point: POINT) -> bool {
-        let x = (point.x - self.bounds.left) as f32;
-        let y = (point.y - self.bounds.top) as f32;
-        self.island_hits.iter().any(|hit| hit.at(x, y))
+    pub fn input_switcher_anchor(&self, x: f32, y: f32) -> Option<POINT> {
+        if y < 0.0 || y >= (self.bounds.bottom - self.bounds.top) as f32 {
+            return None;
+        }
+        self.zones
+            .iter()
+            .find(|(left, right, action)| {
+                x >= *left && x < *right && matches!(action, Action::InputLanguage)
+            })
+            .map(|(left, right, _)| POINT {
+                x: self.bounds.left + ((left + right) * 0.5) as i32,
+                y: self.bounds.bottom + 6,
+            })
     }
 
     /// Redraws the bar if anything it shows has changed.
@@ -1371,6 +1377,7 @@ impl MenuBar {
             usage.refresh(false);
         }
         let look = Look {
+            spanish: strings::is_spanish(),
             screen: monitor.screen,
             scale: monitor.scale,
             light: system::uses_light_theme(),
@@ -2509,6 +2516,48 @@ impl Drop for MenuBar {
 #[cfg(test)]
 mod island_tests {
     use super::*;
+
+    #[test]
+    #[ignore = "Requires Windows desktop composition"]
+    fn changing_ui_language_redraws_unchanged_menu_bar_content() -> Result<()> {
+        use muelle_config::Language;
+        use windows::Win32::System::WinRT::{
+            CreateDispatcherQueueController, DQTAT_COM_STA, DQTYPE_THREAD_CURRENT,
+            DispatcherQueueOptions,
+        };
+        struct RestoreLanguage(Language);
+        impl Drop for RestoreLanguage {
+            fn drop(&mut self) {
+                strings::set_language(self.0);
+            }
+        }
+        let _restore = RestoreLanguage(if strings::is_spanish() {
+            Language::Es
+        } else {
+            Language::En
+        });
+        let _queue = unsafe {
+            CreateDispatcherQueueController(DispatcherQueueOptions {
+                dwSize: size_of::<DispatcherQueueOptions>() as u32,
+                threadType: DQTYPE_THREAD_CURRENT,
+                apartmentType: DQTAT_COM_STA,
+            })?
+        };
+        let gfx = Gfx::new()?;
+        strings::set_language(Language::Es);
+        let mut bar = MenuBar::create(&gfx, false, true)?;
+        assert!(bar.look.as_ref().is_some_and(|look| look.spanish));
+        let previous = bar.surface.Children()?.First()?.Current()?;
+        strings::set_language(Language::En);
+        bar.refresh(&gfx)?;
+        assert_ne!(
+            previous,
+            bar.surface.Children()?.First()?.Current()?,
+            "translation-only changes must rebuild the content"
+        );
+        assert!(bar.look.as_ref().is_some_and(|look| !look.spanish));
+        Ok(())
+    }
 
     #[test]
     #[ignore = "Requires Windows desktop composition"]
