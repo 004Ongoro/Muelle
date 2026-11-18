@@ -10,6 +10,10 @@ copia la sección de la versión que se publica a la release de GitHub.
 
 ### English
 
+- Clicking an app whose minimized window is still reported as foreground now
+  restores it on the first click, including with one app open and minimized
+  previews disabled (#12). File drag-hover uses the same native-state check.
+
 - Automatic startup retries up to three times after a failed launch. Existing
   enabled tasks receive the recovery policy without enabling disabled tasks or
   changing the installation they launch. Settings checks the real registration.
@@ -21,6 +25,11 @@ copia la sección de la versión que se publica a la release de GitHub.
   icon activation continues to use the most recently used window.
 
 ### Español
+
+- Pulsar el icono de una app minimizada que Windows aún indica como activa
+  ahora la restaura al primer clic, incluso con una sola app abierta y las
+  miniaturas de minimizadas desactivadas (#12). El arrastre sobre un icono
+  utiliza la misma comprobación del estado real de la ventana.
 
 - El inicio automático reintenta hasta tres veces si falla el arranque. Las
   tareas activadas reciben esta recuperación sin reactivar tareas deshabilitadas

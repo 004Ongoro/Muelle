@@ -491,6 +491,20 @@ fn selection_after_closing(index: usize, alive: &[bool]) -> Option<usize> {
     Some((index - closed_before).min(left - 1))
 }
 
+fn group_is_foreground(windows: &[isize], foreground: isize) -> bool {
+    if !windows.contains(&foreground) {
+        return false;
+    }
+    // The last app can still be reported as foreground after minimizing.
+    // Decide from its current native state, not the tracker snapshot or the
+    // foreground handle alone, or the next click only minimizes it again.
+    let hwnd = HWND(foreground as *mut _);
+    unsafe {
+        windows::Win32::UI::WindowsAndMessaging::IsWindowVisible(hwnd).as_bool()
+            && !windows::Win32::UI::WindowsAndMessaging::IsIconic(hwnd).as_bool()
+    }
+}
+
 fn power_act(
     before: Option<(Option<bool>, bool)>,
     now: (Option<bool>, bool),
@@ -2296,7 +2310,7 @@ impl App {
             Some(entry) if entry.role == Role::Window => window_of(&id).into_iter().collect(),
             _ => self.windows_of(&id),
         };
-        if windows.is_empty() || windows.contains(&tracker::foreground_window()) {
+        if windows.is_empty() || group_is_foreground(&windows, tracker::foreground_window()) {
             return Ok(None);
         }
         Ok(self.activating(windows))
@@ -2448,7 +2462,7 @@ impl App {
                 self.start_bounce(id.clone(), None);
                 Some(Outside::Open(id))
             }
-            Role::App if windows.contains(&tracker::foreground_window()) => {
+            Role::App if group_is_foreground(&windows, tracker::foreground_window()) => {
                 Some(Outside::Minimize(windows))
             }
             Role::App => self.activating(windows),
@@ -4316,6 +4330,101 @@ mod switcher_tests {
         assert_eq!(selection_after_closing(2, &[true, true, false]), Some(1));
         // Everything closed.
         assert_eq!(selection_after_closing(0, &[false, false]), None);
+    }
+}
+
+#[cfg(test)]
+mod activation_tests {
+    use super::group_is_foreground;
+    use windows::{
+        Win32::{
+            Foundation::HWND,
+            UI::WindowsAndMessaging::{
+                CreateWindowExW, DestroyWindow, IsIconic, IsWindowVisible, SW_HIDE,
+                SW_SHOWMINNOACTIVE, SW_SHOWNOACTIVATE, ShowWindow, WS_EX_TOOLWINDOW,
+                WS_OVERLAPPEDWINDOW,
+            },
+        },
+        core::w,
+    };
+
+    struct Window(HWND);
+    impl Window {
+        fn new() -> windows::core::Result<Self> {
+            // An off-screen test-owned tool window, never the user's apps.
+            unsafe {
+                CreateWindowExW(
+                    WS_EX_TOOLWINDOW,
+                    w!("STATIC"),
+                    w!("Muelle activation test"),
+                    WS_OVERLAPPEDWINDOW,
+                    -32000,
+                    -32000,
+                    160,
+                    120,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+                .map(Self)
+            }
+        }
+        fn raw(&self) -> isize {
+            self.0.0 as isize
+        }
+    }
+    impl Drop for Window {
+        fn drop(&mut self) {
+            unsafe {
+                let _ = DestroyWindow(self.0);
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "Requires Windows window management; modifies test-owned windows only"]
+    fn a_minimized_foreground_window_must_restore_on_the_first_dock_click()
+    -> windows::core::Result<()> {
+        let target = Window::new()?;
+        unsafe {
+            let _ = ShowWindow(target.0, SW_SHOWMINNOACTIVE);
+        }
+        assert!(unsafe { IsIconic(target.0) }.as_bool());
+        // Minimized windows retain WS_VISIBLE. Checking visibility or a
+        // potentially stale tracker snapshot alone cannot settle this case.
+        assert!(unsafe { IsWindowVisible(target.0) }.as_bool());
+        assert!(
+            !group_is_foreground(&[target.raw()], target.raw()),
+            "a minimized foreground handle must not select Minimize again"
+        );
+        let peer = Window::new()?;
+        unsafe {
+            let _ = ShowWindow(peer.0, SW_SHOWNOACTIVATE);
+        }
+        assert!(!group_is_foreground(
+            &[target.raw(), peer.raw()],
+            target.raw()
+        ));
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "Requires Windows window management; modifies test-owned windows only"]
+    fn only_a_visible_restored_foreground_member_selects_minimize() -> windows::core::Result<()> {
+        let target = Window::new()?;
+        let other = Window::new()?;
+        unsafe {
+            let _ = ShowWindow(target.0, SW_SHOWNOACTIVATE);
+        }
+        assert!(group_is_foreground(&[target.raw()], target.raw()));
+        assert!(!group_is_foreground(&[target.raw()], other.raw()));
+        assert!(!group_is_foreground(&[], target.raw()));
+        unsafe {
+            let _ = ShowWindow(target.0, SW_HIDE);
+        }
+        assert!(!group_is_foreground(&[target.raw()], target.raw()));
+        Ok(())
     }
 }
 
